@@ -40,9 +40,9 @@ pub struct AppState {
     clock_ticks: Mutex<Option<u64>>,
     #[cfg(debug_assertions)]
     strip: Mutex<Option<Arc<Strip>>>,
-    /// Keeps the virtual MIDI input alive for the app's lifetime.
+    /// Keeps the debug MIDI connections alive for the app's lifetime.
     #[cfg(debug_assertions)]
-    midi: Mutex<Option<midir::MidiInputConnection<()>>>,
+    midi: Mutex<Vec<midir::MidiInputConnection<()>>>,
 }
 
 impl Default for AppState {
@@ -53,7 +53,7 @@ impl Default for AppState {
             #[cfg(debug_assertions)]
             strip: Mutex::new(None),
             #[cfg(debug_assertions)]
-            midi: Mutex::new(None),
+            midi: Mutex::new(Vec::new()),
         }
     }
 }
@@ -74,8 +74,8 @@ impl AppState {
     }
 
     #[cfg(debug_assertions)]
-    pub fn set_midi(&self, conn: midir::MidiInputConnection<()>) {
-        *lock(&self.midi) = Some(conn);
+    pub fn set_midi(&self, conns: Vec<midir::MidiInputConnection<()>>) {
+        *lock(&self.midi) = conns;
     }
 
     fn status(&self) -> Status {

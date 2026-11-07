@@ -46,15 +46,15 @@ pub fn run() -> tauri::Result<()> {
         .run(tauri::generate_context!())
 }
 
-/// Debug only: the virtual MIDI input that proves `CoreMIDI` works in the sandbox.
+/// Debug only: MIDI inputs (virtual + existing sources) that prove `CoreMIDI` works in the sandbox.
 #[cfg(debug_assertions)]
 fn start_midi_probe(app: &tauri::AppHandle) {
     let handle = app.clone();
     match midi_probe::start("Deeboo Lighting In", move |n| {
         commands::publish_clock_ticks(&handle, n);
     }) {
-        Ok(conn) => {
-            app.state::<commands::AppState>().set_midi(conn);
+        Ok(conns) => {
+            app.state::<commands::AppState>().set_midi(conns);
             commands::publish_clock_ticks(app, 0);
         }
         Err(e) => log::warn!("MIDI probe not started: {e}"),
