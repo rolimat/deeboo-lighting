@@ -35,7 +35,7 @@ pub trait Transport {
     fn send(&self, req: &HttpRequest) -> Result<String, CloudError>;
 }
 
-/// HTTPS only, 10 s total timeout, no redirects, 1 MiB response limit, bundled web PKI roots.
+/// HTTPS only, 10 s total timeout, no redirects, 1 MiB response limit, the OS trust store (platform verifier).
 pub struct UreqTransport {
     agent: ureq::Agent,
 }
@@ -45,6 +45,14 @@ impl UreqTransport {
     pub fn new() -> Self {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .https_only(true)
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                    .unversioned_rustls_crypto_provider(std::sync::Arc::new(
+                        rustls::crypto::ring::default_provider(),
+                    ))
+                    .build(),
+            )
             .timeout_global(Some(TIMEOUT))
             .max_redirects(0)
             .http_status_as_error(false)

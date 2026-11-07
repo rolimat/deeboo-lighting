@@ -229,7 +229,7 @@ fn devices_handler(req: &HttpRequest) -> Result<String, CloudError> {
                 r#"[{"id":"d1","name":"Strip","category":"dd","product_name":"JSK","online":true,"local_key":"LK1","extra":1}]"#,
             ))
         } else {
-            assert_eq!(plain, r#"{"homeId":"222"}"#);
+            assert_eq!(plain.as_str(), r#"{"homeId":"222"}"#);
             Ok(reply(
                 req,
                 r#"[{"id":"d2","name":"Bulb","category":"dj","product_name":"B","online":false,"local_key":"LK2"}]"#,
@@ -383,4 +383,27 @@ fn ureq_transport_refuses_plain_http_without_connecting() {
     };
     assert!(UreqTransport::new().send(&req).is_err());
     assert!(l.accept().is_err(), "transport must not connect over http");
+}
+
+#[test]
+fn device_list_parses_key_into_secret() {
+    let devs: Vec<CloudDevice> = serde_json::from_str(
+        r#"[{"id":"d","name":"n","category":"dd","product_name":"p","online":true,"local_key":"LK-PLAIN"}]"#,
+    )
+    .unwrap();
+    assert!(!format!("{devs:?}").contains("LK-PLAIN"));
+    assert_eq!(devs[0].local_key.expose_secret(), "LK-PLAIN");
+}
+
+#[test]
+#[ignore = "live network smoke test"]
+fn live_tls_smoke() {
+    let req = HttpRequest {
+        method: Method::Get,
+        url: "https://apigw.iotbing.com/".into(),
+        headers: vec![],
+        body: None,
+    };
+    let r = UreqTransport::new().send(&req);
+    assert!(!matches!(r, Err(CloudError::Network)), "{r:?}");
 }

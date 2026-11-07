@@ -16,8 +16,10 @@ allow = [
   "GPL-3.0",
   "GPL-3.0-only",
   "CC0-1.0",
-  "CDLA-Permissive-2.0", # webpki-roots (Mozilla CA bundle data), via ureq/rustls
 ]
+
+# Only the non-macOS build pulls this (rustls-platform-verifier fallback roots); macOS uses the system store.
+exceptions = [{ allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" }]
 
 [bans]
 wildcards = "deny"

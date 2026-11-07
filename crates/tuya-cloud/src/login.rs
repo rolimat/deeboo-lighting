@@ -1,7 +1,8 @@
 //! Smart Life QR "device sharing" login: scan, read the device list, revoke.
 //!
 //! No token refresh: a session lives for seconds here and is always revoked via [`run_and_revoke`].
-//! Decrypted plaintext (`String`/`Value`) is not zeroised; only the wrapped secrets are.
+//! Decrypted plaintext is held in `Zeroizing` and the device list is parsed straight into
+//! `SecretString` fields, so no long-lived plain copy of a key is made.
 
 use crate::CloudError;
 use crate::crypto;
@@ -10,6 +11,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
+use zeroize::Zeroizing;
 
 pub const CLIENT_ID: &str = "HA_3y9q4ak7g4ephrvke";
 pub const SCHEMA: &str = "haauthorize";
@@ -265,12 +267,16 @@ fn signed_call(
     method: Method,
     path: &str,
     payload: Option<&Value>,
-) -> Result<Value, CloudError> {
+) -> Result<Zeroizing<String>, CloudError> {
     let rid = uuid_v4()?;
     let hash_key = crypto::hash_key(&rid, s.refresh_token.expose_secret());
     let secret = crypto::secret(&rid, &hash_key);
     let enc = match payload {
-        Some(p) => crypto::encrypt_request(&p.to_string(), &secret, &crypto::random_nonce()?)?,
+        Some(p) => crypto::encrypt_request(
+            &Zeroizing::new(p.to_string()),
+            &secret,
+            &crypto::random_nonce()?,
+        )?,
         None => String::new(),
     };
     let (query_enc, body_enc) = match method {
@@ -323,9 +329,8 @@ fn signed_call(
         return Err(CloudError::Api { code: api_code(&v) });
     }
     match &v["result"] {
-        Value::String(enc) => parse_json(&crypto::decrypt_response(enc, &secret)?),
-        Value::Null => Ok(Value::Null),
-        other => Ok(other.clone()),
+        Value::String(enc) => crypto::decrypt_response(enc, &secret),
+        _ => Ok(Zeroizing::new("null".to_owned())),
     }
 }
 
@@ -334,7 +339,13 @@ fn signed_call(
 /// # Errors
 /// Transport, `Api`, `Crypto`, or `Decode` (including a device without its required fields).
 pub fn list_devices(t: &dyn Transport, s: &Session) -> Result<Vec<CloudDevice>, CloudError> {
-    let homes = signed_call(t, s, Method::Get, "/v1.0/m/life/users/homes", None)?;
+    let homes = parse_json(&signed_call(
+        t,
+        s,
+        Method::Get,
+        "/v1.0/m/life/users/homes",
+        None,
+    )?)?;
     let mut out = Vec::new();
     for home in homes.as_array().ok_or(CloudError::Decode)? {
         let home_id = match &home["ownerId"] {
@@ -349,8 +360,7 @@ pub fn list_devices(t: &dyn Transport, s: &Session) -> Result<Vec<CloudDevice>, 
             "/v1.0/m/life/ha/home/devices",
             Some(&json!({ "homeId": home_id })),
         )?;
-        let devs: Vec<CloudDevice> =
-            serde_json::from_value(devs).map_err(|_| CloudError::Decode)?;
+        let devs: Vec<CloudDevice> = serde_json::from_str(&devs).map_err(|_| CloudError::Decode)?;
         out.extend(devs);
     }
     Ok(out)

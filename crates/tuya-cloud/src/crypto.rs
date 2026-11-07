@@ -9,6 +9,7 @@ use hmac::{Hmac, Mac};
 use md5::{Digest, Md5};
 use sha2::Sha256;
 use std::fmt::Write as _;
+use zeroize::Zeroizing;
 
 const ALPHABET: &[u8; 48] = b"ABCDEFGHJKMNPQRSTWXYZabcdefhijkmnprstwxyz2345678";
 
@@ -53,7 +54,7 @@ pub(crate) fn encrypt_request(
     Ok(format!("{}{}", STANDARD.encode(nonce), STANDARD.encode(ct)))
 }
 
-pub(crate) fn decrypt_response(b64: &str, secret: &str) -> Result<String, CloudError> {
+pub(crate) fn decrypt_response(b64: &str, secret: &str) -> Result<Zeroizing<String>, CloudError> {
     let raw = STANDARD.decode(b64).map_err(|_| CloudError::Crypto)?;
     if raw.len() < 12 + 16 {
         return Err(CloudError::Crypto);
@@ -63,7 +64,10 @@ pub(crate) fn decrypt_response(b64: &str, secret: &str) -> Result<String, CloudE
     let plain = cipher
         .decrypt(Nonce::from_slice(nonce), ct)
         .map_err(|_| CloudError::Crypto)?;
-    String::from_utf8(plain).map_err(|_| CloudError::Crypto)
+    // Wrap the bytes first so they are wiped even when UTF-8 validation fails.
+    let plain = Zeroizing::new(plain);
+    let text = std::str::from_utf8(&plain).map_err(|_| CloudError::Crypto)?;
+    Ok(Zeroizing::new(text.to_owned()))
 }
 
 pub(crate) fn sign(
@@ -148,7 +152,8 @@ mod tests {
                 "YWJjZGVmZ2hpamtsdPrv6yQCIco1f1Q4RtDuL/9NgFVbz0gHtrTb",
                 "6c9a8ee911bde0c5"
             )
-            .unwrap(),
+            .unwrap()
+            .as_str(),
             r#"{"ok":true}"#
         );
     }
