@@ -42,15 +42,16 @@ pub(crate) fn secret(request_id: &str, hash_key: &str) -> String {
     s
 }
 
-pub(crate) fn encrypt_request(plain: &str, secret: &str, nonce: &[u8; 12]) -> String {
-    // A wrong-sized secret yields an empty string, which the server rejects; never panics.
-    let Ok(cipher) = Aes128Gcm::new_from_slice(secret.as_bytes()) else {
-        return String::new();
-    };
-    let Ok(ct) = cipher.encrypt(Nonce::from_slice(nonce), plain.as_bytes()) else {
-        return String::new();
-    };
-    format!("{}{}", STANDARD.encode(nonce), STANDARD.encode(ct))
+pub(crate) fn encrypt_request(
+    plain: &str,
+    secret: &str,
+    nonce: &[u8; 12],
+) -> Result<String, CloudError> {
+    let cipher = Aes128Gcm::new_from_slice(secret.as_bytes()).map_err(|_| CloudError::Crypto)?;
+    let ct = cipher
+        .encrypt(Nonce::from_slice(nonce), plain.as_bytes())
+        .map_err(|_| CloudError::Crypto)?;
+    Ok(format!("{}{}", STANDARD.encode(nonce), STANDARD.encode(ct)))
 }
 
 pub(crate) fn decrypt_response(b64: &str, secret: &str) -> Result<String, CloudError> {
@@ -83,14 +84,12 @@ pub(crate) fn sign(
     hmac_hex(hash_key.as_bytes(), msg.as_bytes())
 }
 
-pub(crate) fn random_nonce() -> [u8; 12] {
-    let mut out = [b'A'; 12]; // only visible if the OS RNG fails
+pub(crate) fn random_nonce() -> Result<[u8; 12], CloudError> {
+    let mut out = [0u8; 12];
     let mut filled = 0;
     while filled < out.len() {
         let mut buf = [0u8; 16];
-        if getrandom::fill(&mut buf).is_err() {
-            break;
-        }
+        getrandom::fill(&mut buf).map_err(|_| CloudError::Crypto)?;
         // Rejection sampling: 240 = 5 * 48, so bytes below it map to the alphabet without bias.
         for b in buf.into_iter().filter(|b| *b < 240) {
             if filled < out.len() {
@@ -99,7 +98,7 @@ pub(crate) fn random_nonce() -> [u8; 12] {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -121,7 +120,7 @@ mod tests {
     #[test]
     fn encrypt_matches_sdk() {
         assert_eq!(
-            encrypt_request(r#"{"homeId":"123"}"#, "6c9a8ee911bde0c5", b"abcdefghijkl"),
+            encrypt_request(r#"{"homeId":"123"}"#, "6c9a8ee911bde0c5", b"abcdefghijkl").unwrap(),
             "YWJjZGVmZ2hpamtsdPro72tdHNxiIAvW1NwrNH1ZjyYUJJfER/wjAIlyOyQ="
         );
     }
@@ -177,8 +176,15 @@ mod tests {
         );
     }
     #[test]
+    fn encrypt_rejects_wrong_size_secret() {
+        assert_eq!(
+            encrypt_request("x", "short", b"abcdefghijkl"),
+            Err(CloudError::Crypto)
+        );
+    }
+    #[test]
     fn nonce_uses_sdk_alphabet() {
-        let n = random_nonce();
+        let n = random_nonce().unwrap();
         assert!(n.iter().all(|c| ALPHABET.contains(c)));
     }
 }
