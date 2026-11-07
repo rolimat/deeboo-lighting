@@ -21,7 +21,8 @@ ask (spec §12.2): never relax the sandbox on your own.
 
 | Item | Check | Result | Notes |
 | ---- | ----- | ------ | ----- |
-| (a) | MIDI clock reaches the app: it listens to Deeboo MIDI Sync's output (`Deeboo Clock Sync Out`) and creates the virtual input `Deeboo Lighting In`; `MIDI clock · N ticks` rises | Pass | 4 728 ticks counted while MIDI Sync played |
+| (a1) | MIDI clock from a source: the app listens to Deeboo MIDI Sync's output (`Deeboo Clock Sync Out`); `MIDI clock · N ticks` rises | Pass | 4 728 ticks counted while MIDI Sync played |
+| (a2) | MIDI clock to the virtual destination: another process lists `Deeboo Lighting In` and sends to it (MIDI Sync stopped) | Pass | Counter 0 → exactly 480 after sending 480 clocks with a midir test sender |
 | (b) | Discovery finds the strip (popover shows it connected) | Pass | First run timed out until the user allowed Local Network for the app; then connected in 29 s and 3 s |
 | (c) | `Test strip` paints | Pass | Odd red → even white → segment 1 off → all blue |
 | (d) | Microphone prompt appears; `Mic level` shows `Mic · X dBFS` with sound | Pass | Prompt shown; −19.6 dBFS with music |
