@@ -1,0 +1,49 @@
+:root {
+  --bg: #1c1d24;
+  --card: #262833;
+  --border: #33364a;
+  --text: #eee;
+  --dim: #8a8da0;
+  --green: #2fb36b;
+  --green-dark: #1f6b43;
+  --red: #e5484d;
+  --radius-card: 12px;
+  --radius-panel: 16px;
+}
+
+html,
+body {
+  margin: 0;
+  background: transparent;
+  color: var(--text);
+  font:
+    13px -apple-system,
+    system-ui,
+    sans-serif;
+  user-select: none;
+}
+
+#app {
+  width: 340px;
+  box-sizing: border-box;
+  padding: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+}
+
+.header {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.card {
+  padding: 10px 12px;
+  background: var(--card);
+  border-radius: var(--radius-card);
+}
+
+.strip-status {
+  color: var(--dim);
+}

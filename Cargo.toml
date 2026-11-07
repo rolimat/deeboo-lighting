@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/light-core", "crates/tuya-cloud", "tools/tuya-login"]
+members = ["src-tauri", "crates/light-core", "crates/tuya-cloud", "tools/tuya-login"]
 
 [workspace.package]
 edition = "2024"

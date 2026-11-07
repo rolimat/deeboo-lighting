@@ -1,3 +1,7 @@
+# The app ships on macOS only; the Linux gtk/webkit stack (Docker builds) is not distributed.
+[graph]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+
 [advisories]
 version = 2
 

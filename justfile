@@ -32,7 +32,7 @@ lint:
     hadolint docker/Dockerfile
     scripts/check-agent-docs.sh
     gitleaks git --no-banner --redact
-    if [ -f ui/package.json ]; then npm --prefix ui run lint && npm --prefix ui run typecheck; fi
+    if [ -f ui/package.json ]; then npm --prefix ui run lint && npm --prefix ui run typecheck && npm --prefix ui audit --audit-level=high; fi
 
 test:
     #!/usr/bin/env bash

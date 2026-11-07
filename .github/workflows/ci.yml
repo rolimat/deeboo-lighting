@@ -9,6 +9,30 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      macos: ${{ steps.filter.outputs.macos }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          base: ${{ github.ref }}
+          filters: |
+            macos:
+              - 'src-tauri/**'
+              - 'tools/**'
+              - 'ui/**'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/**'
+              - '.github/actions/**'
+
   linux:
     runs-on: ubuntu-latest
     concurrency:
@@ -29,3 +53,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - run: docker compose run --rm dev just precommit
+
+  macos:
+    needs: changes
+    if: github.event_name == 'pull_request' || needs.changes.outputs.macos == 'true'
+    runs-on: macos-latest
+    concurrency:
+      group: ci-macos-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/macos-build
+      - run: brew install just
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deeboo-dmg
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error

@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "popover",
+  "description": "Minimal permissions for the popover window",
+  "windows": ["popover"],
+  "permissions": [
+    "allow-get-status",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-set-size"
+  ]
+}
