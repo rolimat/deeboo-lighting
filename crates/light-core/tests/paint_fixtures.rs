@@ -145,3 +145,11 @@ proptest! {
         prop_assert_eq!(decode_segment_count(&encode(n, &PaintCommand::Bucket(RED)).unwrap()), Ok(n));
     }
 }
+
+#[test]
+fn decode_rejects_zero_count() {
+    assert_eq!(
+        decode_segment_count(&[0, 1, 0, 0]),
+        Err(PaintError::BadHeader)
+    );
+}

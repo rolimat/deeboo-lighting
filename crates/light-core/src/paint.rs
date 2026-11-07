@@ -97,7 +97,7 @@ pub fn encode(segment_count: u8, cmd: &PaintCommand) -> Result<Vec<u8>, PaintErr
 /// Returns [`PaintError::TooShort`] or [`PaintError::BadHeader`] for malformed payloads.
 pub fn decode_segment_count(payload: &[u8]) -> Result<u8, PaintError> {
     match payload {
-        [0x00, 0x01 | 0x02, _, count, ..] => Ok(*count),
+        [0x00, 0x01 | 0x02, _, count @ 1..=255, ..] => Ok(*count),
         [_, _, _, _, ..] => Err(PaintError::BadHeader),
         _ => Err(PaintError::TooShort),
     }
