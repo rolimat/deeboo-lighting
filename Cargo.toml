@@ -6,6 +6,7 @@ members = ["crates/light-core"]
 edition = "2024"
 license = "GPL-3.0-only"
 version = "0.1.0"
+publish = false
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
