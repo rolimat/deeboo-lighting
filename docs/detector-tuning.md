@@ -102,5 +102,6 @@ What B1 still cannot do:
 
 - The kick-vs-bass limit remains: bass-only breaks where the kick band drops less than 8 dB are not seen, and a
   16-second break after a slow kick fade in song 1 is missed.
-- Short build-ups that collapse after 2 to 4 s inside a long break are not caught.
+- It can show a short Build-up inside a long break that collapses back to Calm after 2 to 4 s (a riser or crash
+  that does not lead to the drop).
 - Fitted on the session plus three reviewed songs, all at 122 to 128 BPM.
