@@ -42,6 +42,13 @@ test:
     cargo test --locked --workspace
     if [ -f ui/package.json ]; then npm --prefix ui test -- --run; fi
 
+# Performance budget (spec 13.1): 10 min of audio analysed in < 3 s, release build.
+perf-core:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} perf-core
+    cargo test --locked --release -p light-core --test perf -- --ignored --nocapture
+
 # Builds ui/dist: tauri::generate_context! needs it before cargo compiles src-tauri.
 ui-dist: ui-deps
     npm --prefix ui run build
