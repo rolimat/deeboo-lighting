@@ -1,0 +1,3 @@
+ignored:
+  # Debian package versions rotate with every security update; the base image is pinned instead.
+  - DL3008

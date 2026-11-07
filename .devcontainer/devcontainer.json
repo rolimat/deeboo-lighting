@@ -1,0 +1,7 @@
+{
+  "name": "Deeboo Lighting",
+  "dockerComposeFile": ["../compose.yaml"],
+  "service": "dev",
+  "workspaceFolder": "/work",
+  "shutdownAction": "stopCompose"
+}
