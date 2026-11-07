@@ -48,7 +48,7 @@ Rust
 - [ ] Property tests (`proptest`) for every parser: DP 61, MIDI, config, cloud responses.
 macOS
 - [ ] Hardened Runtime + App Sandbox with minimal entitlements (network client, network server for UDP discovery,
-      audio input). Check early that the virtual MIDI port and launch-at-login work in the sandbox; if not, stop and ask.
+      audio input). Check early that the virtual MIDI port works in the sandbox; if not, stop and ask.
 - [ ] No auto-updater. Info.plist has `NSMicrophoneUsageDescription` and `NSLocalNetworkUsageDescription`.
 Supply chain and repo
 - [ ] `cargo-deny` passes (advisories, licences, crates.io only, bans); `npm audit --audit-level=high` in CI;

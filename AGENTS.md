@@ -22,8 +22,8 @@ just ship        # push and wait for the CI run of this exact commit
 - `crates/light-core/`: pure, deterministic, no I/O, simulated time. Clock to beat/bar/phrase, moment state
   machine, model (sequences, palettes, sets), generator, scene diff to commands, scheduler with spacing/drops,
   DP 61 encoding, moment classifier from per-beat audio features.
-- `src-tauri/` (arrives in a later plan): midir, audio capture, rustuya, cloud login, credentials, persistence, tray, IPC.
-- `ui/` (later): popover + editor window. `tools/detect-probe/` (later): offline detector on a recording.
+- `src-tauri/`: midir, audio capture, rustuya, cloud login, credentials, persistence, tray, IPC.
+- `ui/`: popover + editor window. `tools/tuya-login/`: dev CLI for the Smart Life QR login. `tools/detect-probe/` (later): offline detector on a recording.
 - Everything except real MIDI, audio, the strip and the DMG runs in Docker.
 
 # Golden rules
