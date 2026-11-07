@@ -61,7 +61,8 @@ La app debe ser **genérica**: el clock puede venir de cualquier sitio.
 
 **Fase 2 (acordado, fuera de la v1):**
 - introducir la key a mano, como plan B si el login por QR deja de funcionar;
-- exportar e importar sets.
+- exportar e importar sets;
+- **sincronización por Ableton Link** además de MIDI clock (pedido por el usuario el 2026-11-07).
 
 ## 4. Anti-objetivos (sería un fracaso aunque "funcione")
 
