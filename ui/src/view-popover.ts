@@ -1,4 +1,4 @@
-import type { Status } from "./api";
+import { api, type Status } from "./api";
 import { el } from "./dom";
 
 function stripText(strip: Status["strip"]): string {
@@ -18,11 +18,21 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
   const strip = el("div", "strip-status", stripText({ kind: "notConfigured" }));
   const card = el("div", "card");
   card.append(strip);
+  let testButton: HTMLButtonElement | null = null;
   root.replaceChildren(el("h1", "header", "Deeboo Lighting"), card);
   return {
     update(status) {
       const text = stripText(status.strip);
       if (strip.textContent !== text) strip.textContent = text;
+      const wantTest = status.debug && status.strip.kind === "connected";
+      if (wantTest && !testButton) {
+        testButton = el("button", "test-strip", "Test strip");
+        testButton.addEventListener("click", () => void api.devPaintTest());
+        card.append(testButton);
+      } else if (!wantTest && testButton) {
+        testButton.remove();
+        testButton = null;
+      }
     },
   };
 }

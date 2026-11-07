@@ -1,0 +1,6 @@
+{
+  "identifier": "popover-dev",
+  "description": "Debug builds only: the popover's Test strip button",
+  "windows": ["popover"],
+  "permissions": ["allow-dev-paint-test"]
+}
