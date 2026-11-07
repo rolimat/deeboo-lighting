@@ -56,6 +56,7 @@ precommit:
     #!/usr/bin/env bash
     set -euo pipefail
     [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} precommit
+    gitleaks git --pre-commit --staged --no-banner --redact
     just fmt-check
     just lint
     just test

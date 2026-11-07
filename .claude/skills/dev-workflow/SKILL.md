@@ -17,7 +17,7 @@ Spec §10: [docs/superpowers/specs/2026-11-06-deeboo-lighting-design.md](../../.
 | `just fmt` / `fmt-check` | `cargo fmt`; UI Prettier when `ui/package.json` exists |
 | `just lint` | clippy `-D warnings`, `cargo deny`, hadolint, gitleaks, `scripts/check-agent-docs.sh`, UI eslint + typecheck |
 | `just test` | `cargo test --workspace`; Vitest when `ui/package.json` exists |
-| `just precommit` (`check`) | fmt-check + lint + test |
+| `just precommit` (`check`) | gitleaks on staged changes, then fmt-check + lint + test |
 | `just ui-dist` / `ui-deps` | build `ui/dist` (needed by `tauri::generate_context!`) / install `ui/node_modules` when empty |
 | `just dev` | macOS only: `npm --prefix ui run tauri dev` |
 | `just ship` | push and wait for the CI run of this exact commit |
