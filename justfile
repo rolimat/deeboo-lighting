@@ -27,7 +27,7 @@ lint:
     set -euo pipefail
     [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} lint
     if [ -f ui/package.json ]; then just ui-dist; fi
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --locked --workspace --all-targets -- -D warnings
     cargo deny check
     hadolint docker/Dockerfile
     scripts/check-agent-docs.sh
@@ -39,7 +39,7 @@ test:
     set -euo pipefail
     [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} test
     if [ -f ui/package.json ]; then just ui-dist; fi
-    cargo test --workspace
+    cargo test --locked --workspace
     if [ -f ui/package.json ]; then npm --prefix ui test -- --run; fi
 
 # Builds ui/dist: tauri::generate_context! needs it before cargo compiles src-tauri.
