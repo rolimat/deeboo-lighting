@@ -16,3 +16,27 @@ fn process_does_not_allocate() {
         .collect();
     assert_no_alloc(|| analyzer.process(&buf, &mut |_| {}));
 }
+
+#[test]
+fn on_beat_does_not_allocate() {
+    use light_core::detect::bands::HopFrame;
+    use light_core::detect::moment::{DetectorParams, MomentDetector};
+    let mut d = MomentDetector::new(DetectorParams::default(), 0.0058);
+    let frame = |i: u32| {
+        let v = 0.01 + f32::from((i % 7) as u8) * 0.01;
+        HopFrame {
+            kick: v,
+            sub: v,
+            high: v * 0.5,
+            onset: 0.0,
+        }
+    };
+    assert_no_alloc(|| {
+        for beat in 0..200 {
+            for h in 0..90 {
+                d.push(frame(beat + h));
+            }
+            let _ = d.on_beat();
+        }
+    });
+}

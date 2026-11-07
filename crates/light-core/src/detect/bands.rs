@@ -49,11 +49,13 @@ impl BandAnalyzer {
 
     #[allow(clippy::cast_precision_loss)]
     pub fn process(&mut self, mono: &[f32], out: &mut impl FnMut(HopFrame)) {
-        for &x in mono {
+        for &sample in mono {
+            // A driver glitch (NaN/inf) must not poison the filter state forever.
+            let clean = if sample.is_finite() { sample } else { 0.0 };
             let (k, s, h) = (
-                self.kick.process(x),
-                self.sub.process(x),
-                self.high.process(x),
+                self.kick.process(clean),
+                self.sub.process(clean),
+                self.high.process(clean),
             );
             self.acc[0] += k * k;
             self.acc[1] += s * s;
@@ -129,5 +131,30 @@ mod tests {
         let loud = frames.iter().map(|f| f.kick).fold(0.0, f32::max);
         let hi = frames.iter().map(|f| f.high).fold(0.0, f32::max);
         assert!(loud > 10.0 * hi, "kick {loud} high {hi}");
+    }
+
+    #[test]
+    fn non_finite_samples_do_not_poison_filters() {
+        let fs = 48_000_u32;
+        let clean: Vec<f32> = (0..2 * fs)
+            .map(|i| {
+                let t = i as f32 / fs as f32;
+                0.5 * (std::f32::consts::TAU * 60.0 * t).sin()
+                    + 0.1 * (std::f32::consts::TAU * 6_000.0 * t).sin()
+            })
+            .collect();
+        let mut dirty = clean.clone();
+        dirty[20_000] = f32::NAN;
+        dirty[20_001] = f32::INFINITY;
+        dirty[20_002] = f32::NEG_INFINITY;
+        let (a, b) = (run(&[4096], &clean, fs), run(&[4096], &dirty, fs));
+        for (i, (c, d)) in a.iter().zip(&b).enumerate().skip(220) {
+            // Onset is a difference of logs, so it gets an absolute tolerance.
+            for (x, y) in [(c.kick, d.kick), (c.sub, d.sub), (c.high, d.high)] {
+                assert!(y.is_finite(), "hop {i}");
+                assert!((x - y).abs() <= 1e-3 * x.abs(), "hop {i}: {c:?} vs {d:?}");
+            }
+            assert!((c.onset - d.onset).abs() <= 1e-3, "hop {i}: {c:?} vs {d:?}");
+        }
     }
 }
