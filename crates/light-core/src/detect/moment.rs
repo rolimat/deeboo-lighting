@@ -90,18 +90,22 @@ pub struct BeatFeatures {
 struct Ring {
     buf: Vec<f32>,
     head: usize,
+    /// Explicit: `Vec::with_capacity` may reserve more than asked.
+    cap: usize,
 }
 
 impl Ring {
     fn new(cap: usize) -> Ring {
+        let cap = cap.max(1);
         Ring {
-            buf: Vec::with_capacity(cap.max(1)),
+            buf: Vec::with_capacity(cap),
             head: 0,
+            cap,
         }
     }
 
     fn push(&mut self, v: f32) {
-        if self.buf.len() < self.buf.capacity() {
+        if self.buf.len() < self.cap {
             self.buf.push(v);
         } else {
             self.buf[self.head] = v;
@@ -324,6 +328,17 @@ fn min_of(w: &[f32]) -> f32 {
 )] // test signal generation
 mod tests {
     use super::*;
+
+    #[test]
+    fn ring_keeps_at_most_its_capacity() {
+        let mut r = Ring::new(4);
+        for i in 0..10_u8 {
+            r.push(f32::from(i));
+        }
+        assert_eq!(r.buf.len(), 4);
+        let mut scratch = Vec::with_capacity(4);
+        assert!((r.median(&mut scratch) - 7.5).abs() < 1e-6);
+    }
     use crate::detect::bands::BandAnalyzer;
 
     const FS: u32 = 48_000;
