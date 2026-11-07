@@ -16,6 +16,7 @@ allow = [
   "GPL-3.0",
   "GPL-3.0-only",
   "CC0-1.0",
+  "CDLA-Permissive-2.0", # webpki-roots (Mozilla CA bundle data), via ureq/rustls
 ]
 
 [bans]

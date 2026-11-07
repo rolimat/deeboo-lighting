@@ -1,6 +1,14 @@
-//! Smart Life cloud client pieces (QR login, device list). Only the crypto helpers exist so far.
+//! Smart Life cloud client pieces (QR login, device list). Transport-agnostic: callers pass a `Transport`.
 
 mod crypto;
+mod login;
+mod transport;
+
+pub use login::*;
+pub use transport::*;
+
+#[cfg(test)]
+mod login_tests;
 
 /// Errors of the cloud flow. Messages are fixed: they never carry input data, keys or tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,5 +1,4 @@
 //! Port of the signing/crypto helpers of `tuya-device-sharing-sdk` 0.2.15 (MIT), `customerapi.py`.
-#![cfg_attr(not(test), allow(dead_code))] // used by login (Task 6)
 
 use crate::CloudError;
 use aes_gcm::aead::{Aead, KeyInit};
