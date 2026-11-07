@@ -19,6 +19,8 @@ use crate::commands::{AppState, StripStatus, publish_strip_status};
 use crate::lan::is_allowed_lan_ip;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// Measured: the strip announces itself every ~5 s, but wifi drops some (gaps of 15 s seen).
+const DISCOVERY_WINDOW: Duration = Duration::from_secs(30);
 /// Measured: messages closer than this get lost or reordered (tuya-protocol skill).
 const MESSAGE_GAP: Duration = Duration::from_millis(125);
 const STEP: Duration = Duration::from_secs(1);
@@ -103,7 +105,7 @@ impl Strip {
             log::debug!("discovery init failed: {e}");
             StripError::NotFound
         })?;
-        let info = disco.find(&cfg.id, TIMEOUT).await.map_err(|e| {
+        let info = disco.find(&cfg.id, DISCOVERY_WINDOW).await.map_err(|e| {
             log::debug!("discovery failed: {e}");
             StripError::NotFound
         })?;
