@@ -1,0 +1,27 @@
+[package]
+name = "tuya-cloud"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
+getrandom = "0.3"
+hmac = "0.12"
+md-5 = "0.10"
+sha2 = "0.10"
+secrecy = { version = "0.10", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+# ring is the single crypto provider (rustls then selects it itself); no aws-lc, no bundled roots.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+zeroize = "1"
+
+[dev-dependencies]
+proptest = "1"

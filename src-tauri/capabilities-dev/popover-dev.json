@@ -1,0 +1,9 @@
+{
+  "identifier": "popover-dev",
+  "description": "Debug builds only: the popover's dev tools",
+  "windows": ["popover"],
+  "permissions": [
+    "allow-dev-paint-test",
+    "allow-dev-mic-level"
+  ]
+}

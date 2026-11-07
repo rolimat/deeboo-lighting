@@ -1,0 +1,4 @@
+pre-commit:
+  commands:
+    precommit:
+      run: just precommit

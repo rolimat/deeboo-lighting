@@ -1,0 +1,18 @@
+services:
+  dev:
+    image: deeboo-lighting-dev
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    working_dir: /work
+    volumes:
+      - .:/work
+      - cargo-registry:/usr/local/cargo/registry
+      - target:/work/target
+      - ui-node-modules:/work/ui/node_modules
+    command: sleep infinity
+
+volumes:
+  cargo-registry:
+  target:
+  ui-node-modules:

@@ -1,0 +1,8 @@
+.git
+target
+ui/node_modules
+ui/dist
+.superpowers
+.code-review-graph
+.dev
+recordings

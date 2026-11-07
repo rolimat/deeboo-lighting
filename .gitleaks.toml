@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Home Assistant's public Tuya app key, used as a test vector from the SDK"
+regexTarget = "match"
+regexes = ['''HA_3y9q4ak7g4ephrvke''']

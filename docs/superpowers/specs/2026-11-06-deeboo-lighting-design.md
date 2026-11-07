@@ -58,10 +58,12 @@ La app debe ser **genérica**: el clock puede venir de cualquier sitio.
 - Firma de código y notarización de Apple.
 - **Recolocar la frase** con el audio (por ejemplo, en el drop) o con un botón "Mark 1". El usuario eligió que la
   posición de frase salga **solo** del arranque del clock (§6.1).
+- **Abrir al iniciar sesión** (launch at login). El usuario lo descartó (2026-11-07): la app se abre a mano.
 
 **Fase 2 (acordado, fuera de la v1):**
 - introducir la key a mano, como plan B si el login por QR deja de funcionar;
-- exportar e importar sets.
+- exportar e importar sets;
+- **sincronización por Ableton Link** además de MIDI clock (pedido por el usuario el 2026-11-07).
 
 ## 4. Anti-objetivos (sería un fracaso aunque "funcione")
 
@@ -352,8 +354,7 @@ Mismo estilo visual que Deeboo MIDI Sync: los mismos tokens de color y tarjetas.
   - audio input;
   - strip;
   - detection sensitivity;
-  - **phrase length (4 / 8 / 16 bars)**;
-  - launch at login.
+  - **phrase length (4 / 8 / 16 bars)**.
 
 ### 7.3 Ventana del editor
 
@@ -383,7 +384,9 @@ Secciones *(mi decisión en la agrupación)*:
 ## 8. Stack técnico (el mismo que Deeboo MIDI Sync)
 
 - **Tauri 2** (Rust, workspace edition 2024, `clippy::pedantic`, toolchain fijada en `rust-toolchain.toml`).
-- **UI:** TypeScript + Vite sin framework, CSS propio con variables, mismos tokens que MIDI Sync. Vitest.
+- **UI:** TypeScript + Vite + Vitest. **Decisión del usuario (2026-11-07): Tailwind CSS y React o una librería JS
+  eficiente** para la interfaz, empezando por el editor (Plan 5). La elección concreta (por ejemplo Preact o SolidJS,
+  por su peso y rendimiento) se cierra al escribir el plan que la introduzca. Mismos tokens de color que MIDI Sync.
 - **MIDI:** `midir`.
 - **Tuya local:** `rustuya` (feature `tokio`). Tauri ya usa Tokio.
 - **Login nube:** cliente HTTP + AES-GCM + HMAC-SHA256 + MD5 portados del SDK MIT. Generación del QR en local.
@@ -456,6 +459,15 @@ El repositorio remoto se crea igual que el de MIDI Sync *(constructor: confirmar
 3. El usuario las escucha y corrige (añade, quita o mueve), sin tener que etiquetar desde cero.
 4. El resultado corregido queda como **fichero de etiquetas** junto a la grabación. Es el criterio de aprobado o
    suspenso del detector: transiciones acertadas y retraso de cada una en beats.
+5. **Validación con canciones sueltas** (usuario, 2026-11-07). Con el detector ya afinado, el usuario pasa de 2 a 5
+   canciones sueltas (sin mezclar). `detect-probe` muestra la **línea de tiempo completa** de cada canción: cada cambio
+   de momento con su tiempo, su compás y su duración.
+   - **Simula la escucha en tiempo real:** el audio entra en bloques del tamaño de los de una tarjeta de sonido, en orden
+     con los beats, y cada cambio aparece cuando la app lo decidiría en vivo, sin mirar audio futuro. El tempo sale del
+     audio (o lo da el usuario), igual que en vivo lo da el MIDI clock.
+   - Con `--realtime` va a velocidad real y suena la canción, para verlo y oírlo a la vez.
+   - El usuario revisa a mano que encaja. Si algo falla, se ajusta y se repite con todas las canciones y con la sesión
+     etiquetada, sin empeorarla, hasta que el usuario aprueba todas.
 - La grabación y sus etiquetas **no se suben al repo** (derechos de la música). Viven en una carpeta local ignorada por
   git, y los tests de CI usan señales sintéticas.
 - **Límite conocido:** un MP3 es la señal limpia del master. El micro de la habitación, que *(mi decisión)* es el
@@ -553,7 +565,7 @@ Fuera de alcance: malware que ya corre con el usuario en el Mac y acceso físico
   - **Hardened Runtime + App Sandbox** con los permisos mínimos: cliente de red, servidor de red (escucha del discovery
     UDP) y entrada de audio;
   - sin auto-updater.
-  - **Verificar pronto** que el puerto MIDI virtual y "abrir al iniciar sesión" funcionan dentro del sandbox. Si algo no
+  - **Verificar pronto** que el puerto MIDI virtual, el discovery y el micrófono funcionan dentro del sandbox. Si algo no
     funciona, se para y se consulta al usuario antes de relajar nada.
 
 **Cadena de suministro y repo**
