@@ -34,10 +34,10 @@ A *deficit* is a beat's level minus its reference.
 | Calm to Rhythm, drop: a band jumps and stays | `jump_db` 10, `back_db` 4, `near_db` 8, `rhythm_after_full` 2 | A drop slams in: the kick rises 10 dB or more within 4 beats and then stays at full level. Fills never do both. |
 | ... highs-only return needs a whole bar | `hats_after_full` 4 | Hats back for 4 beats is a groove; a fill in a break lasts 2 or 3. |
 | ... slow return | `slow_return_beats` 32, `near_db` 8 | A groove that fades in, or a quieter track, never jumps. Eight bars near the references is a groove. |
-| Calm to Build-up: three rising bars | `buildup_rise_db` 4 | Risers climb for several bars; a fill rises for one. |
+| Calm to Build-up: three rising bars (A2; replaced by B1, see below) | `buildup_rise_db` 4 (removed) | Risers climb for several bars; a fill rises for one. |
 | Rhythm to Build-up: kick ducked, highs up, 2 beats | `groove_buildup_kick_db` 6, `groove_buildup_high_db` 8 | Build-ups that start inside the groove: kick pulls back while the hats open. |
 | Build-up to Calm: highs fall back without a drop | `collapse_db` 8 | The riser was abandoned. |
-| Build-up to Rhythm: same drop rule, exempt from `min_state_beats` | `buildup_max_beats` off (`u32::MAX`) | A drop must be immediate; timeouts cost more than they saved. |
+| Build-up to Rhythm: same drop rule, exempt from `min_state_beats` | `buildup_max_beats` off (removed in B1) | A drop must be immediate; timeouts cost more than they saved. |
 | No change within 4 beats of the last one | `min_state_beats` 4 | Avoids flicker. |
 
 Plan 3 maps a sensitivity setting onto `calm_kick_db` and `calm_high_db`; the rest are fixed.
@@ -62,3 +62,45 @@ are short fills or risers inside a break that the three-bar rule does not accept
   next track can sit more than `near_db` below the old reference and stay in Calm until a jump reaches it.
   The slow return (8 bars) is the safety valve; re-seeding the references there is future work.
 - Fitted on one session of one genre at about 125 BPM.
+
+## Single-song validation (rule set B1)
+
+2026-11-07. Five more songs ran through the probe (BPM from the file tags: 125, 122, 124, 125, 128); the user
+reviewed the A2 timelines of three of them by ear and corrected what they heard. The two others (songs 4 and 5) ran
+but were not reviewed. The corrections became rule set B1 in the replica, then were ported to Rust and checked
+transition by transition against the replica (all six recordings: same transitions, same count, within 0.6 s).
+
+| change | parameters | musical reason |
+|---|---|---|
+| Highs-only quiet needs a weak kick | `calm_kick_db` 16, `calm_high_db` 12, `back_db` 4 | A drop without hats is still a groove while the kick pumps; a break where the bass fills the kick band still has a weaker kick band. |
+| Sub reference; a return needs the bass back | `sub_back_db` 10 | A drop brings the bass back; a filtered or half-time kick inside a break without bass is not the groove. |
+| Teaser: after a return, kick deficit mean of 4 beats back to Calm | `teaser_beats` 16, `teaser_kick_db` 6 | A one-bar kick tease inside a break is not the drop. The start of the track in Rhythm is not a return. |
+| Build-up from Calm: riser | `riser_bars` 4, `riser_db` 7, `riser_level_db` 6 | Bar means of the highs rise monotonically (0.5 dB tolerance) and bring the highs back towards the groove level. A riser far below the groove is not tension. |
+| Build-up from Calm: approach | `approach_calm_beats` 32, `approach_above_db` 2, `approach_rise_db` 2, `approach_bars` 8 | Late in a break the highs are already above the groove level and still climbing: subtle tension towards the drop. |
+| Collapse needs 4 beats, then a refractory | `collapse_beats` 4, `refractory_beats` 16 | The one- or two-beat silence before a drop is not a collapse; a failed riser does not flap. |
+
+The 3-rising-bars rule (`buildup_rise_db`) and `buildup_max_beats` are gone.
+
+The probe now scores a Build-up label as a hit when a Build-up is detected from 8 s before it until the next label
+(the drop), and a Build-up that leads into Rhythm is never a false alarm. A Build-up is tension towards the drop:
+what matters is that it is seen before the drop, not that it starts within a few seconds of the label.
+Calm and Rhythm scoring is unchanged.
+
+| | A2 (old +-4 s Build-up metric) | B1 (new Build-up metric) |
+|---|---|---|
+| Session Calm (+-6 s) | 8 of 9 | 7 of 9 |
+| Session Rhythm (+-4 s) | 9 of 9 | 9 of 9 |
+| Session Build-up | 2 of 8 | 8 of 8 |
+| Session false alarms | 6 | 9 |
+| Songs 1 to 3 Build-up | 0 of 3 | 3 of 3 |
+
+Trade-off: the session's Calm at 24:44 moves from +2.9 s (hit) to +6.3 s (miss by 0.3 s), a price of the stricter
+quiet rule; 15:51 stays 7.0 s early as in A2. The new Build-up metric is not comparable to the old one, so the
+Build-up row also reflects the metric.
+
+What B1 still cannot do:
+
+- The kick-vs-bass limit remains: bass-only breaks where the kick band drops less than 8 dB are not seen, and a
+  16-second break after a slow kick fade in song 1 is missed.
+- Short build-ups that collapse after 2 to 4 s inside a long break are not caught.
+- Fitted on the session plus three reviewed songs, all at 122 to 128 BPM.

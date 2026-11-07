@@ -34,21 +34,41 @@ pub struct DetectorParams {
     pub hats_after_full: u32,
     /// Near beats in a row -> Rhythm without a jump (fade-in, quieter track).
     pub slow_return_beats: u32,
-    /// Build-up: each of 3 consecutive 4-beat highs means at least this far above the previous.
-    pub buildup_rise_db: f32,
-    /// A Build-up this long without a drop falls back to Calm (`u32::MAX` = never).
-    pub buildup_max_beats: u32,
     /// Rhythm -> Build-up: kick at least this far below its reference...
     pub groove_buildup_kick_db: f32,
     /// ...and highs at least this far above theirs, for 2 beats.
     pub groove_buildup_high_db: f32,
-    /// Build-up -> Calm when the 4-beat highs mean falls this far below its value at entry.
+    /// Build-up -> Calm when the 4-beat highs mean stays this far below its value at entry.
     pub collapse_db: f32,
     /// Quiet also when the 4-beat means of kick and highs are both this far below references.
     pub thin_kick_db: f32,
     pub thin_high_db: f32,
     /// No change within this many beats of the last one (except Build-up -> Rhythm).
     pub min_state_beats: u32,
+    /// A full or near beat also needs the sub band within this of its reference: a drop brings the
+    /// bass back, a filtered kick inside a break without bass is not the groove.
+    pub sub_back_db: f32,
+    /// A return to Rhythm that falls back to Calm within this many beats (a one-bar tease)...
+    pub teaser_beats: u32,
+    /// ...when the 4-beat mean kick deficit reaches this.
+    pub teaser_kick_db: f32,
+    /// Riser: the last `riser_bars` bar means (4 beats) of highs rise monotonically...
+    pub riser_bars: usize,
+    /// ...by at least this from first to last...
+    pub riser_db: f32,
+    /// ...and the last is at most this far below the highs reference.
+    pub riser_level_db: f32,
+    /// Approach: after this many beats of Calm, the 4-beat highs mean is at least `approach_above_db`
+    /// over the highs reference and `approach_rise_db` over its value `4 * approach_bars` beats ago.
+    pub approach_calm_beats: u32,
+    pub approach_above_db: f32,
+    pub approach_rise_db: f32,
+    pub approach_bars: usize,
+    /// Build-up -> Calm needs this many beats in a row below the collapse level (a one- or two-beat
+    /// silence before a drop is not a collapse)...
+    pub collapse_beats: u32,
+    /// ...and after a collapse there is no Calm -> Build-up for this many beats.
+    pub refractory_beats: u32,
 }
 
 impl Default for DetectorParams {
@@ -65,14 +85,24 @@ impl Default for DetectorParams {
             rhythm_after_full: 2,
             hats_after_full: 4,
             slow_return_beats: 32,
-            buildup_rise_db: 4.0,
-            buildup_max_beats: u32::MAX,
             groove_buildup_kick_db: 6.0,
             groove_buildup_high_db: 8.0,
             collapse_db: 8.0,
             thin_kick_db: 5.0,
             thin_high_db: 8.0,
             min_state_beats: 4,
+            sub_back_db: 10.0,
+            teaser_beats: 16,
+            teaser_kick_db: 6.0,
+            riser_bars: 4,
+            riser_db: 7.0,
+            riser_level_db: 6.0,
+            approach_calm_beats: 32,
+            approach_above_db: 2.0,
+            approach_rise_db: 2.0,
+            approach_bars: 8,
+            collapse_beats: 4,
+            refractory_beats: 16,
         }
     }
 }
@@ -83,6 +113,7 @@ pub struct BeatFeatures {
     pub sub_db: f32,
     pub high_db: f32,
     pub kick_ref_db: f32,
+    pub sub_ref_db: f32,
     pub high_ref_db: f32,
 }
 
@@ -113,6 +144,19 @@ impl Ring {
         }
     }
 
+    fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    fn is_full(&self) -> bool {
+        self.buf.len() == self.cap
+    }
+
+    /// `i`-th stored value, oldest first.
+    fn get(&self, i: usize) -> f32 {
+        self.buf[(self.head + i) % self.buf.len()]
+    }
+
     /// Median of the stored values; `scratch` has the same capacity as the ring.
     fn median(&self, scratch: &mut Vec<f32>) -> f32 {
         scratch.clear();
@@ -130,6 +174,8 @@ fn db(x: f32) -> f32 {
 }
 
 const REF_MIN_BEATS: usize = 8;
+/// A riser bar may sit this far under the highest bar before it.
+const MONO_TOL: f32 = 0.5;
 
 /// Pushes `v` into a shifting window (oldest first).
 fn shift<const N: usize>(w: &mut [f32; N], v: f32) {
@@ -144,7 +190,16 @@ pub struct MomentDetector {
     sum: [f32; 3],
     hops: u32,
     kick_hist: Ring,
+    sub_hist: Ring,
     high_hist: Ring,
+    /// 4-beat highs means (`4 * approach_bars + 1`) and bar means of highs (`riser_bars`).
+    high4_hist: Ring,
+    bars: Ring,
+    bar_sum: f32,
+    bar_beats: u32,
+    since_return: u32,
+    since_collapse: u32,
+    collapse_run: u32,
     scratch: Vec<f32>,
     /// Raw kick dB of the last 4 beats and highs dB of the last 16, deficits (vs refs) of the last 4;
     /// oldest first, valid only for the last `beats` entries.
@@ -176,7 +231,16 @@ impl MomentDetector {
             sum: [0.0; 3],
             hops: 0,
             kick_hist: Ring::new(cap),
+            sub_hist: Ring::new(cap),
             high_hist: Ring::new(cap),
+            high4_hist: Ring::new(4 * params.approach_bars.max(1) + 1),
+            bars: Ring::new(params.riser_bars),
+            bar_sum: 0.0,
+            bar_beats: 0,
+            // The start of the track in Rhythm is not a return.
+            since_return: u32::MAX,
+            since_collapse: u32::MAX,
+            collapse_run: 0,
             scratch: Vec::with_capacity(cap),
             kick_prev: [0.0; 4],
             high_prev: [0.0; 16],
@@ -210,6 +274,75 @@ impl MomentDetector {
         *self = MomentDetector::new(self.p, 0.0);
     }
 
+    /// Adds this beat to the current bar of highs; when a bar completes, tells whether the last
+    /// `riser_bars` bar means form a riser.
+    #[allow(clippy::cast_precision_loss)]
+    fn riser(&mut self, high_db: f32, high_ref_db: f32) -> bool {
+        self.bar_sum += high_db;
+        self.bar_beats += 1;
+        if self.bar_beats < 4 {
+            return false;
+        }
+        self.bars.push(self.bar_sum / 4.0);
+        self.bar_sum = 0.0;
+        self.bar_beats = 0;
+        if !self.bars.is_full() {
+            return false;
+        }
+        let (first, last) = (self.bars.get(0), self.bars.get(self.bars.len() - 1));
+        let mut top = first;
+        let mut mono = true;
+        for i in 1..self.bars.len() {
+            mono &= self.bars.get(i) >= top - MONO_TOL;
+            top = top.max(self.bars.get(i));
+        }
+        mono && last - first >= self.p.riser_db && last >= high_ref_db - self.p.riser_level_db
+    }
+
+    /// The state after this beat. `evidence`: a riser or an approach (used only from Calm).
+    fn next_moment(&mut self, evidence: bool, high4: f32) -> Moment {
+        let p = self.p;
+        self.in_state = self.in_state.saturating_add(1);
+        self.since_return = self.since_return.saturating_add(1);
+        self.since_collapse = self.since_collapse.saturating_add(1);
+        let may = self.in_state >= p.min_state_beats;
+        let drop = (self.jump_kick && self.full_run >= p.rhythm_after_full)
+            || (self.jump_high && self.full_run >= p.hats_after_full)
+            || self.near_run >= p.slow_return_beats;
+        match self.moment {
+            Moment::Rhythm => {
+                // A one-bar tease: the return does not hold.
+                let teaser = self.since_return <= p.teaser_beats
+                    && self.beats >= 4
+                    && self.kick_def.iter().sum::<f32>() / 4.0 <= -p.teaser_kick_db;
+                if may && (self.quiet_run >= p.calm_after_quiet || teaser) {
+                    Moment::Calm
+                } else if may && self.groove_run >= 2 {
+                    Moment::BuildUp
+                } else {
+                    Moment::Rhythm
+                }
+            }
+            Moment::Calm if may && drop => Moment::Rhythm,
+            Moment::Calm if may && evidence && self.since_collapse >= p.refractory_beats => {
+                Moment::BuildUp
+            }
+            Moment::Calm => Moment::Calm,
+            // The drop is exempt from `min_state_beats`.
+            Moment::BuildUp if drop => Moment::Rhythm,
+            Moment::BuildUp => {
+                let low = high4 < self.entry_high - p.collapse_db;
+                self.collapse_run = if low { self.collapse_run + 1 } else { 0 };
+                if may && self.collapse_run >= p.collapse_beats {
+                    self.since_collapse = 0;
+                    Moment::Calm
+                } else {
+                    Moment::BuildUp
+                }
+            }
+        }
+    }
+
     /// Closes the beat that started at the previous call.
     #[allow(clippy::cast_precision_loss, clippy::similar_names)] // hop counts are tiny
     pub fn on_beat(&mut self) -> (Moment, Option<BeatFeatures>) {
@@ -221,20 +354,27 @@ impl MomentDetector {
         self.sum = [0.0; 3];
         self.hops = 0;
 
-        let (kick_ref_db, high_ref_db) = if self.kick_hist.buf.len() < REF_MIN_BEATS {
-            (kick_db, high_db)
+        let (kick_ref_db, sub_ref_db, high_ref_db) = if self.kick_hist.buf.len() < REF_MIN_BEATS {
+            (kick_db, sub_db, high_db)
         } else {
             (
                 self.kick_hist.median(&mut self.scratch),
+                self.sub_hist.median(&mut self.scratch),
                 self.high_hist.median(&mut self.scratch),
             )
         };
         let p = self.p;
-        let (kd, hd) = (kick_db - kick_ref_db, high_db - high_ref_db);
+        let (kd, sd, hd) = (
+            kick_db - kick_ref_db,
+            sub_db - sub_ref_db,
+            high_db - high_ref_db,
+        );
         let n = self.beats; // beats before this one
         let mean = |s: &[f32]| s.iter().sum::<f32>() / s.len() as f32;
 
-        let mut quiet = kd < -p.calm_kick_db || hd < -p.calm_high_db;
+        // Quiet: kick gone, or highs gone while the kick is not full (a drop without hats is still a
+        // groove while the kick pumps; a break where bass fills the kick band has a weaker kick band).
+        let mut quiet = kd < -p.calm_kick_db || (hd < -p.calm_high_db && kd < -p.back_db);
         if n >= 4 {
             let k4 = (self.kick_def[1..].iter().sum::<f32>() + kd) / 4.0;
             let h4 = (self.high_def[1..].iter().sum::<f32>() + hd) / 4.0;
@@ -242,7 +382,7 @@ impl MomentDetector {
         }
         self.quiet_run = if quiet { self.quiet_run + 1 } else { 0 };
 
-        let full = kd >= -p.back_db && hd >= -p.near_db;
+        let full = kd >= -p.back_db && hd >= -p.near_db && sd >= -p.sub_back_db;
         let rise_kick = n >= 4 && kick_db - min_of(&self.kick_prev) >= p.jump_db;
         let rise_high = n >= 4 && high_db - min_of(&self.high_prev[12..]) >= p.jump_db;
         if full {
@@ -260,44 +400,40 @@ impl MomentDetector {
         self.beats = n.saturating_add(1);
         let near = self.beats >= 4
             && mean(&self.kick_def) >= -p.near_db
-            && mean(&self.high_def) >= -p.near_db;
+            && mean(&self.high_def) >= -p.near_db
+            && sd >= -p.sub_back_db;
         self.near_run = if near { self.near_run + 1 } else { 0 };
 
         shift(&mut self.kick_prev, kick_db);
         shift(&mut self.high_prev, high_db);
-        let up = self.beats >= 16 && {
-            let m = |i: usize| mean(&self.high_prev[i..i + 4]);
-            (0..3).all(|i| m(4 * i + 4) - m(4 * i) >= p.buildup_rise_db)
-        };
-        let groove_up = kd <= -p.groove_buildup_kick_db && hd >= p.groove_buildup_high_db;
-        self.groove_run = if groove_up { self.groove_run + 1 } else { 0 };
         let valid = self.beats.min(4);
         let high4 = mean(&self.high_prev[16 - valid..]);
+        self.high4_hist.push(high4);
 
-        self.in_state = self.in_state.saturating_add(1);
-        let may = self.in_state >= p.min_state_beats;
-        let drop = (self.jump_kick && self.full_run >= p.rhythm_after_full)
-            || (self.jump_high && self.full_run >= p.hats_after_full)
-            || self.near_run >= p.slow_return_beats;
-        let next = match self.moment {
-            Moment::Rhythm if may && self.quiet_run >= p.calm_after_quiet => Moment::Calm,
-            Moment::Rhythm if may && self.groove_run >= 2 => Moment::BuildUp,
-            Moment::Calm if may && drop => Moment::Rhythm,
-            Moment::Calm if may && up => Moment::BuildUp,
-            // The drop is exempt from `min_state_beats`.
-            Moment::BuildUp if drop => Moment::Rhythm,
-            Moment::BuildUp if may && high4 < self.entry_high - p.collapse_db => Moment::Calm,
-            Moment::BuildUp if self.in_state >= p.buildup_max_beats => Moment::Calm,
-            m => m,
-        };
+        // Build-up evidence (used only from Calm). Bars are 4-beat blocks from the first beat.
+        let riser = self.riser(high_db, high_ref_db);
+        let approach = self.moment == Moment::Calm
+            && self.in_state >= p.approach_calm_beats
+            && self.high4_hist.is_full()
+            && high4 >= high_ref_db + p.approach_above_db
+            && high4 - self.high4_hist.get(0) >= p.approach_rise_db;
+        let groove_up = kd <= -p.groove_buildup_kick_db && hd >= p.groove_buildup_high_db;
+        self.groove_run = if groove_up { self.groove_run + 1 } else { 0 };
+
+        let next = self.next_moment(riser || approach, high4);
 
         if self.moment == Moment::Rhythm && kd >= -p.learn_db && hd >= -p.learn_db {
             self.kick_hist.push(kick_db);
+            self.sub_hist.push(sub_db);
             self.high_hist.push(high_db);
         }
         if next != self.moment {
             if next == Moment::BuildUp {
                 self.entry_high = high4;
+                self.collapse_run = 0;
+            }
+            if next == Moment::Rhythm {
+                self.since_return = 0;
             }
             self.moment = next;
             self.in_state = 0;
@@ -310,6 +446,7 @@ impl MomentDetector {
                 sub_db,
                 high_db,
                 kick_ref_db,
+                sub_ref_db,
                 high_ref_db,
             }),
         )
@@ -362,6 +499,18 @@ mod tests {
         sub: impl Fn(usize) -> bool,
         high_db: impl Fn(usize) -> f32,
     ) -> Vec<f32> {
+        synth_hz(lens, kick, 80.0, sub, high_db)
+    }
+
+    /// Like `synth_gain` with the kick's pitch: at 115 Hz the kick still sits in the kick band
+    /// but the sub band (below 60 Hz) barely sees it, so a bass note is the only sub energy.
+    fn synth_hz(
+        lens: &[usize],
+        kick: impl Fn(usize) -> f32,
+        kick_hz: f32,
+        sub: impl Fn(usize) -> bool,
+        high_db: impl Fn(usize) -> f32,
+    ) -> Vec<f32> {
         let (fs, tau) = (FS as f32, std::f32::consts::TAU);
         let (mut seed, mut g, mut out) = (1_u32, 0_usize, Vec::new());
         for (k, &len) in lens.iter().enumerate() {
@@ -373,7 +522,7 @@ mod tests {
                 let noise = f32::from((seed >> 16) as u16) / 32_768.0 - 1.0;
                 let mut x = 0.3 * hats * (0.1 + 0.9 * (-th / 0.04).exp()) * noise;
                 if kick(k) > 0.0 {
-                    x += kick(k) * 0.8 * (0.1 + 0.9 * (-t / 0.1).exp()) * (tau * 80.0 * t).sin();
+                    x += kick(k) * 0.8 * (0.1 + 0.9 * (-t / 0.1).exp()) * (tau * kick_hz * t).sin();
                 }
                 if sub(k) {
                     x += 0.05 * (tau * 25.0 * g as f32 / fs).sin();
@@ -409,9 +558,16 @@ mod tests {
 
     fn all_finite(o: &Out) -> bool {
         o.iter().filter_map(|r| r.1).all(|f| {
-            [f.kick_db, f.sub_db, f.high_db, f.kick_ref_db, f.high_ref_db]
-                .iter()
-                .all(|v| v.is_finite())
+            [
+                f.kick_db,
+                f.sub_db,
+                f.high_db,
+                f.kick_ref_db,
+                f.sub_ref_db,
+                f.high_ref_db,
+            ]
+            .iter()
+            .all(|v| v.is_finite())
         })
     }
 
@@ -421,20 +577,27 @@ mod tests {
     }
 
     #[test]
-    fn a2_defaults_match_the_tuning() {
+    fn b1_defaults_match_the_tuning() {
         let p = DetectorParams::default();
         assert_eq!((p.history_beats, p.min_state_beats), (64, 4));
         assert_eq!((p.calm_after_quiet, p.rhythm_after_full), (2, 2));
         assert_eq!((p.hats_after_full, p.slow_return_beats), (4, 32));
-        assert_eq!(p.buildup_max_beats, u32::MAX);
+        assert_eq!((p.teaser_beats, p.riser_bars), (16, 4));
+        assert_eq!((p.approach_calm_beats, p.approach_bars), (32, 8));
+        assert_eq!((p.collapse_beats, p.refractory_beats), (4, 16));
         let dbs = [
             (p.learn_db, 16.0),
             (p.calm_kick_db, 16.0),
             (p.calm_high_db, 12.0),
             (p.back_db, 4.0),
             (p.near_db, 8.0),
+            (p.sub_back_db, 10.0),
             (p.jump_db, 10.0),
-            (p.buildup_rise_db, 4.0),
+            (p.teaser_kick_db, 6.0),
+            (p.riser_db, 7.0),
+            (p.riser_level_db, 6.0),
+            (p.approach_above_db, 2.0),
+            (p.approach_rise_db, 2.0),
             (p.groove_buildup_kick_db, 6.0),
             (p.groove_buildup_high_db, 8.0),
             (p.collapse_db, 8.0),
@@ -462,11 +625,65 @@ mod tests {
     }
 
     #[test]
-    fn hats_dropping_with_bass_kept_enter_calm() {
+    fn drop_without_hats_stays_rhythm() {
+        // A drop without hats is still a groove while the kick pumps.
         let o = groove(48, |_| true, |k| if k < 32 { 0.0 } else { -20.0 });
-        let m = moments(&o);
+        assert!(moments(&o).iter().all(|&m| m == Moment::Rhythm));
+    }
+
+    #[test]
+    fn hats_dropping_with_the_kick_band_weaker_enter_calm() {
+        // Hats gone and the kick band 10 dB down (kick gone, bass left): a break.
+        let lens = beats(128.0, 48);
+        let sig = synth_gain(
+            &lens,
+            |k| if k < 32 { 1.0 } else { 0.3 },
+            |_| true,
+            |k| if k < 32 { 0.0 } else { -20.0 },
+        );
+        let m = moments(&drive(&sig, &lens));
         assert!(m[..33].iter().all(|&m| m == Moment::Rhythm), "{m:?}");
-        assert_eq!(m[33], Moment::Calm, "{:?}", &o[30..36]);
+        assert_eq!(m[33], Moment::Calm, "{m:?}");
+    }
+
+    /// Pitched kick (invisible to the sub band): kick on in `kick`, bass tone in `bass`.
+    fn pitched(n: usize, kick: impl Fn(usize) -> f32, bass: impl Fn(usize) -> bool) -> Vec<Moment> {
+        let lens = beats(128.0, n);
+        moments(&drive(&synth_hz(&lens, kick, 115.0, bass, |_| 0.0), &lens))
+    }
+
+    #[test]
+    fn kick_without_bass_does_not_end_a_break() {
+        // Groove 0..32, break 32..48, the kick returns at full level at 48 without bass.
+        let m = pitched(
+            120,
+            |k| if (32..48).contains(&k) { 0.0 } else { 1.0 },
+            |k| !(32..48).contains(&k) && k < 48 || k >= 64,
+        );
+        assert_eq!(m[33], Moment::Calm, "{m:?}");
+        assert!(m[33..64].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        // The bass comes back at 64: the groove is whole again, so the slow return takes it.
+        assert!(m[100..].iter().all(|&m| m == Moment::Rhythm), "{m:?}");
+    }
+
+    #[test]
+    fn one_bar_teaser_returns_to_calm() {
+        // Break at 32, a full bar at 48..52 (a drop), then the kick fades to 0.3.
+        let lens = beats(128.0, 72);
+        let sig = synth_gain(
+            &lens,
+            |k| match k {
+                32..=47 => 0.0,
+                52.. => 0.3,
+                _ => 1.0,
+            },
+            |_| true,
+            |_| 0.0,
+        );
+        let m = moments(&drive(&sig, &lens));
+        assert_eq!(m[49], Moment::Rhythm, "{m:?}");
+        assert_eq!(m[53], Moment::Rhythm, "{m:?}");
+        assert!(m[54..].iter().all(|&m| m == Moment::Calm), "{m:?}");
     }
 
     #[test]
@@ -482,23 +699,63 @@ mod tests {
         2.0 * k.saturating_sub(40) as f32
     }
 
-    #[test]
-    fn three_rising_bars_in_a_break_enter_buildup() {
-        // +2 dB/beat from beat 40: three 4-beat means each 8 dB above the previous.
-        let o = groove(64, |k| k < 32, ramp);
-        let m = moments(&o);
-        assert_eq!(m[33], Moment::Calm);
-        assert!(m[34..50].iter().all(|&m| m == Moment::Calm), "{m:?}");
-        assert!(m[56..].iter().all(|&m| m == Moment::BuildUp), "{m:?}");
+    /// Hats for a break from beat 32: gone (-20 dB) until 48, then +4 dB per bar from -12,
+    /// capped at 0 (the groove level), shifted by `shift` dB.
+    fn riser_hats(shift: f32) -> impl Fn(usize) -> f32 {
+        move |k| match k {
+            0..=31 => 0.0,
+            32..=47 => -20.0 + shift,
+            _ => (-12.0 + 4.0 * ((k - 48) / 4) as f32).min(0.0) + shift,
+        }
     }
 
     #[test]
-    fn a_fill_bar_inside_a_break_is_not_a_buildup() {
-        // One loud bar of hats (beats 48..52) is a fill, not three rising bars.
+    fn riser_in_a_break_enters_buildup() {
+        // Four bars of monotonic rise that bring the highs back to the groove level.
+        let o = groove(72, |k| k < 32, riser_hats(0.0));
+        let m = moments(&o);
+        assert!(m[33..59].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        assert!(m[59..].iter().all(|&m| m == Moment::BuildUp), "{m:?}");
+    }
+
+    #[test]
+    fn riser_far_below_the_groove_is_not_a_buildup() {
+        // The same rise ending 12 dB under the highs reference is not tension.
+        let o = groove(72, |k| k < 32, riser_hats(-12.0));
+        let m = moments(&o);
+        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    /// Break from beat 32 with hats 1 dB under the groove, stepping to +3.5 dB at `step`.
+    fn late_hats(step: usize) -> impl Fn(usize) -> f32 {
+        move |k| match k {
+            0..=31 => 0.0,
+            _ if k < step => -1.0,
+            _ => 3.5,
+        }
+    }
+
+    #[test]
+    fn highs_above_the_groove_late_in_a_break_enter_buildup() {
+        let m = moments(&groove(90, |k| k < 32, late_hats(70)));
+        assert!(m[33..70].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        assert_eq!(m[75], Moment::BuildUp, "{m:?}");
+    }
+
+    #[test]
+    fn the_same_rise_after_16_beats_of_calm_is_not_a_buildup_yet() {
+        // Calm began at 33: until it is 32 beats old (beat 66) the approach rule is silent.
+        let m = moments(&groove(66, |k| k < 32, late_hats(49)));
+        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
+    fn a_short_fill_inside_a_break_is_not_a_buildup() {
+        // Two loud beats of hats (a fill) do not make a bar that rises 7 dB.
         let o = groove(
             72,
             |k| k < 32,
-            |k| if (48..52).contains(&k) { 12.0 } else { 0.0 },
+            |k| if (50..52).contains(&k) { 10.0 } else { 0.0 },
         );
         let m = moments(&o);
         assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
@@ -521,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn buildup_collapses_to_calm_when_highs_fall_without_a_drop() {
+    fn buildup_collapses_to_calm_when_highs_stay_down_without_a_drop() {
         let lens = beats(128.0, 64);
         let sig = synth_gain(
             &lens,
@@ -531,7 +788,43 @@ mod tests {
         );
         let m = moments(&drive(&sig, &lens));
         assert_eq!(m[49], Moment::BuildUp, "{m:?}");
-        assert!(m[54..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        // The highs have been down for 4 beats (53..=56) only at 56.
+        assert_eq!(m[55], Moment::BuildUp, "{m:?}");
+        assert!(m[56..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    /// Kick ducked to 0.4 from beat 40, hats `hats(k)`.
+    fn ducked(n: usize, hats: impl Fn(usize) -> f32) -> Vec<Moment> {
+        let lens = beats(128.0, n);
+        let sig = synth_gain(&lens, |k| if k < 40 { 1.0 } else { 0.4 }, |_| true, hats);
+        moments(&drive(&sig, &lens))
+    }
+
+    #[test]
+    fn pre_drop_gap_does_not_collapse_a_buildup() {
+        // Two beats of silence in the hats right before a drop: not a collapse.
+        let m = ducked(64, |k| match k {
+            0..=39 => 0.0,
+            50 | 51 => -30.0,
+            _ => 10.0,
+        });
+        assert_eq!(m[41], Moment::BuildUp, "{m:?}");
+        assert!(m[41..].iter().all(|&m| m == Moment::BuildUp), "{m:?}");
+    }
+
+    #[test]
+    fn collapse_blocks_a_new_buildup_for_16_beats() {
+        // Collapse at 54; a riser would qualify at 67 but the refractory holds it back until 71.
+        let m = ducked(80, |k| match k {
+            0..=39 => 0.0,
+            40..=49 => 10.0,
+            50..=55 => -20.0,
+            _ => (-12.0 + 4.0 * ((k - 56) / 4) as f32).min(0.0),
+        });
+        assert_eq!(m[49], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[54], Moment::Calm, "{m:?}");
+        assert!(m[54..71].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        assert_eq!(m[71], Moment::BuildUp, "{m:?}");
     }
 
     #[test]
@@ -553,11 +846,16 @@ mod tests {
 
     #[test]
     fn highs_only_return_needs_a_whole_bar() {
-        let o = groove(
-            56,
+        // Kick band 6 dB down and hats gone for 8 beats; then the hats are back (the kick rises
+        // only 6 dB, not a kick jump).
+        let lens = beats(128.0, 56);
+        let sig = synth_gain(
+            &lens,
+            |k| if (32..40).contains(&k) { 0.5 } else { 1.0 },
             |_| true,
             |k| if (32..40).contains(&k) { -20.0 } else { 0.0 },
         );
+        let o = drive(&sig, &lens);
         let m = moments(&o);
         assert_eq!(m[33], Moment::Calm);
         assert_eq!(m[42], Moment::Calm, "hats back for 3 beats: {m:?}");

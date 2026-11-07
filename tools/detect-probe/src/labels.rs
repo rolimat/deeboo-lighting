@@ -10,6 +10,8 @@ const EPISODE_MARGIN_S: f64 = 30.0;
 const SHORT_CALM_BEATS: f64 = 8.0;
 /// A Calm detected up to this late still counts: the cue is the lights settling, not the beat.
 const CALM_TOLERANCE_S: f64 = 6.0;
+/// A Build-up counts when detected up to this early, and anywhere until the next label (the drop).
+const BUILDUP_EARLY_S: f64 = 8.0;
 
 fn tolerance_for(moment: Moment, base_s: f64) -> f64 {
     if moment == Moment::Calm {
@@ -75,9 +77,23 @@ pub struct Score {
     pub per_label: Vec<String>,
 }
 
+/// Detection window of label `li` of an episode, ends included.
+fn window_of(ep: &[Label], li: usize, tolerance_s: f64) -> (f64, f64) {
+    let l = ep[li];
+    if l.moment == Moment::BuildUp {
+        let end = ep.get(li + 1).map_or(l.t + tolerance_s, |next| next.t);
+        (l.t - BUILDUP_EARLY_S, end)
+    } else {
+        let tol = tolerance_for(l.moment, tolerance_s);
+        (l.t - tol, l.t + tol)
+    }
+}
+
 /// `detected`: transitions as (time, moment entered), time-ordered. A Calm of at most 8 beats
 /// followed by Rhythm is not counted as a false alarm (nor is that Rhythm). `tolerance_s` applies
-/// to Rhythm and Build-up; Calm gets at least `CALM_TOLERANCE_S`.
+/// to Rhythm; Calm gets at least `CALM_TOLERANCE_S`. A Build-up label is hit by the nearest detection
+/// from 8 s before it until the next label (or `tolerance_s` after it when none follows), and a
+/// Build-up detection followed by Rhythm leads into the drop, so it is never a false alarm.
 #[must_use]
 pub fn score_with_beat(
     detected: &[(f64, Moment)],
@@ -106,12 +122,13 @@ pub fn score_with_beat(
             .collect();
         let mut used = vec![false; detected.len()];
         let (mut hits, mut misses) = (0, 0);
-        for l in ep {
+        for (li, l) in ep.iter().enumerate() {
+            let window = window_of(ep, li, tolerance_s);
             let best = idx
                 .iter()
                 .copied()
                 .filter(|&i| !used[i] && detected[i].1 == l.moment)
-                .filter(|&i| (detected[i].0 - l.t).abs() <= tolerance_for(l.moment, tolerance_s))
+                .filter(|&i| detected[i].0 >= window.0 && detected[i].0 <= window.1)
                 .min_by(|&a, &b| {
                     (detected[a].0 - l.t)
                         .abs()
@@ -160,7 +177,11 @@ pub fn score_with_beat(
                     detected[j].1 == Moment::Calm
                         && detected[i].0 - detected[j].0 <= SHORT_CALM_BEATS * beat_s
                 });
-            if !short_calm && !after_short_calm {
+            let leads_into_drop = detected[i].1 == Moment::BuildUp
+                && idx
+                    .get(n + 1)
+                    .is_some_and(|&j| detected[j].1 == Moment::Rhythm);
+            if !short_calm && !after_short_calm && !leads_into_drop {
                 false_alarms += 1;
             }
         }
@@ -228,12 +249,12 @@ mod tests {
         let detected = [
             (10.0, BUILD),   // outside any window: ignored
             (101.0, CALM),   // hit, 1 s late
-            (120.0, BUILD),  // false alarm
+            (120.0, BUILD),  // leads into the Rhythm at 146: not a false alarm
             (146.0, RHYTHM), // 6 s late: miss + false alarm
             (505.0, BUILD),  // hit, 5 s > tolerance: miss + false alarm
         ];
         let s = score(&detected, &labels, 4.0);
-        assert_eq!((s.hits, s.misses, s.false_alarms), (1, 2, 3));
+        assert_eq!((s.hits, s.misses, s.false_alarms), (1, 2, 2));
         assert!((s.mean_delay_s - 1.0).abs() < 1e-9);
         assert_eq!(s.per_episode.len(), 2);
     }
@@ -278,5 +299,66 @@ mod tests {
         let detected = [(90.0, CALM), (93.0, RHYTHM), (100.0, BUILD)];
         let s = score(&detected, &labels, 4.0);
         assert_eq!((s.hits, s.false_alarms), (1, 0));
+    }
+
+    #[test]
+    fn buildup_hit_anywhere_before_the_drop() {
+        let labels = [
+            Label {
+                t: 100.0,
+                moment: BUILD,
+            },
+            Label {
+                t: 130.0,
+                moment: RHYTHM,
+            },
+        ];
+        let s = score(&[(120.0, BUILD), (130.5, RHYTHM)], &labels, 4.0);
+        assert_eq!((s.hits, s.misses, s.false_alarms), (2, 0, 0));
+        assert_eq!(s.per_label[0], "01:40.0 buildup +20.0");
+    }
+
+    #[test]
+    fn buildup_more_than_8s_early_is_a_miss() {
+        let labels = [Label {
+            t: 100.0,
+            moment: BUILD,
+        }];
+        assert_eq!(score(&[(91.0, BUILD)], &labels, 4.0).hits, 0);
+        assert_eq!(score(&[(92.5, BUILD)], &labels, 4.0).hits, 1);
+        // With no later label the window ends `tolerance` after the label.
+        assert_eq!(score(&[(105.0, BUILD)], &labels, 4.0).hits, 0);
+    }
+
+    #[test]
+    fn buildup_leading_into_rhythm_is_not_a_false_alarm() {
+        let labels = [
+            Label {
+                t: 100.0,
+                moment: CALM,
+            },
+            Label {
+                t: 130.0,
+                moment: RHYTHM,
+            },
+        ];
+        let s = score(
+            &[(101.0, CALM), (120.0, BUILD), (130.0, RHYTHM)],
+            &labels,
+            4.0,
+        );
+        assert_eq!((s.hits, s.false_alarms), (2, 0));
+        // Followed by Calm instead, it is a false alarm.
+        let s = score(
+            &[
+                (101.0, CALM),
+                (120.0, BUILD),
+                (125.0, CALM),
+                (130.0, RHYTHM),
+            ],
+            &labels,
+            4.0,
+        );
+        assert_eq!(s.false_alarms, 2);
     }
 }
