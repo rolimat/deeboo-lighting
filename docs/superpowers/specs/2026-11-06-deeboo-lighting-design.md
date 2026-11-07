@@ -58,6 +58,7 @@ La app debe ser **genérica**: el clock puede venir de cualquier sitio.
 - Firma de código y notarización de Apple.
 - **Recolocar la frase** con el audio (por ejemplo, en el drop) o con un botón "Mark 1". El usuario eligió que la
   posición de frase salga **solo** del arranque del clock (§6.1).
+- **Abrir al iniciar sesión** (launch at login). El usuario lo descartó (2026-11-07): la app se abre a mano.
 
 **Fase 2 (acordado, fuera de la v1):**
 - introducir la key a mano, como plan B si el login por QR deja de funcionar;
@@ -353,8 +354,7 @@ Mismo estilo visual que Deeboo MIDI Sync: los mismos tokens de color y tarjetas.
   - audio input;
   - strip;
   - detection sensitivity;
-  - **phrase length (4 / 8 / 16 bars)**;
-  - launch at login.
+  - **phrase length (4 / 8 / 16 bars)**.
 
 ### 7.3 Ventana del editor
 
@@ -556,7 +556,7 @@ Fuera de alcance: malware que ya corre con el usuario en el Mac y acceso físico
   - **Hardened Runtime + App Sandbox** con los permisos mínimos: cliente de red, servidor de red (escucha del discovery
     UDP) y entrada de audio;
   - sin auto-updater.
-  - **Verificar pronto** que el puerto MIDI virtual y "abrir al iniciar sesión" funcionan dentro del sandbox. Si algo no
+  - **Verificar pronto** que el puerto MIDI virtual, el discovery y el micrófono funcionan dentro del sandbox. Si algo no
     funciona, se para y se consulta al usuario antes de relajar nada.
 
 **Cadena de suministro y repo**
