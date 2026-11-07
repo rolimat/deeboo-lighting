@@ -91,6 +91,16 @@ impl std::fmt::Debug for Session {
     }
 }
 
+impl Session {
+    /// Host of the validated endpoint (not a secret).
+    #[must_use]
+    pub fn endpoint_host(&self) -> &str {
+        self.endpoint
+            .strip_prefix("https://")
+            .unwrap_or(&self.endpoint)
+    }
+}
+
 #[derive(Deserialize)]
 pub struct CloudDevice {
     pub id: String,

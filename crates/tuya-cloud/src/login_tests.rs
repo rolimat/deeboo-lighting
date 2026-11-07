@@ -407,3 +407,8 @@ fn live_tls_smoke() {
     let r = UreqTransport::new().send(&req);
     assert!(!matches!(r, Err(CloudError::Network)), "{r:?}");
 }
+
+#[test]
+fn endpoint_host_is_bare_host() {
+    assert_eq!(session().endpoint_host(), "apigw.tuyaeu.com");
+}
