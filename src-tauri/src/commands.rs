@@ -54,7 +54,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl AppState {
     #[cfg(debug_assertions)]
-    pub fn set_strip_status(&self, s: StripStatus) {
+    fn set_strip_status(&self, s: StripStatus) {
         *lock(&self.status) = s;
     }
 
@@ -68,6 +68,21 @@ impl AppState {
             strip: lock(&self.status).clone(),
             debug: cfg!(debug_assertions),
         }
+    }
+}
+
+/// Event the popover listens to; its payload is the whole [`Status`].
+#[cfg(debug_assertions)]
+const STATUS_EVENT: &str = "status";
+
+/// Stores the strip status and pushes the new [`Status`] to the popover.
+#[cfg(debug_assertions)]
+pub fn publish_strip_status(app: &tauri::AppHandle, s: StripStatus) {
+    use tauri::{Emitter, Manager};
+    let state = app.state::<AppState>();
+    state.set_strip_status(s);
+    if let Err(e) = app.emit_to("popover", STATUS_EVENT, state.status()) {
+        log::warn!("status event not delivered: {e}");
     }
 }
 

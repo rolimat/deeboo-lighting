@@ -15,7 +15,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use tauri::{AppHandle, Manager};
 
-use crate::commands::{AppState, StripStatus};
+use crate::commands::{AppState, StripStatus, publish_strip_status};
 use crate::lan::is_allowed_lan_ip;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -192,23 +192,25 @@ fn on_local_subnet(ip: IpAddr) -> bool {
 /// Connects in the background when `DEEBOO_DEV_STRIP` points at a valid strip file.
 pub fn start_dev_connection(app: &AppHandle) {
     let Some(cfg) = load_dev_strip() else { return };
-    let state = app.state::<AppState>();
-    state.set_strip_status(StripStatus::Connecting);
+    publish_strip_status(app, StripStatus::Connecting);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
         match Strip::connect(&cfg).await {
             Ok(strip) => {
                 state.set_strip(Arc::new(strip));
-                state.set_strip_status(StripStatus::Connected {
-                    name: cfg.name.clone(),
-                    segments: cfg.segments,
-                });
+                publish_strip_status(
+                    &app,
+                    StripStatus::Connected {
+                        name: cfg.name.clone(),
+                        segments: cfg.segments,
+                    },
+                );
                 log::info!("strip connected");
             }
             Err(e) => {
                 log::error!("strip connection failed: {e}");
-                state.set_strip_status(StripStatus::Error);
+                publish_strip_status(&app, StripStatus::Error);
             }
         }
     });
