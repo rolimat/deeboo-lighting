@@ -12,6 +12,7 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     permissions:
+      contents: read # job-level permissions replace the workflow's; the repo is private
       pull-requests: read
     outputs:
       macos: ${{ steps.filter.outputs.macos }}
