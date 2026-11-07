@@ -383,7 +383,9 @@ Secciones *(mi decisión en la agrupación)*:
 ## 8. Stack técnico (el mismo que Deeboo MIDI Sync)
 
 - **Tauri 2** (Rust, workspace edition 2024, `clippy::pedantic`, toolchain fijada en `rust-toolchain.toml`).
-- **UI:** TypeScript + Vite sin framework, CSS propio con variables, mismos tokens que MIDI Sync. Vitest.
+- **UI:** TypeScript + Vite + Vitest. **Decisión del usuario (2026-11-07): Tailwind CSS y React o una librería JS
+  eficiente** para la interfaz, empezando por el editor (Plan 5). La elección concreta (por ejemplo Preact o SolidJS,
+  por su peso y rendimiento) se cierra al escribir el plan que la introduzca. Mismos tokens de color que MIDI Sync.
 - **MIDI:** `midir`.
 - **Tuya local:** `rustuya` (feature `tokio`). Tauri ya usa Tokio.
 - **Login nube:** cliente HTTP + AES-GCM + HMAC-SHA256 + MD5 portados del SDK MIT. Generación del QR en local.
