@@ -29,21 +29,31 @@ pub struct Status {
     pub strip: StripStatus,
     /// True in debug builds only: the UI shows dev tools then.
     pub debug: bool,
+    /// MIDI clock ticks seen by the debug probe; `None` in release or before it is up.
+    #[serde(rename = "clockTicks")]
+    pub clock_ticks: Option<u64>,
 }
 
 /// Mutable app state shared with the commands.
 pub struct AppState {
     status: Mutex<StripStatus>,
+    clock_ticks: Mutex<Option<u64>>,
     #[cfg(debug_assertions)]
     strip: Mutex<Option<Arc<Strip>>>,
+    /// Keeps the virtual MIDI input alive for the app's lifetime.
+    #[cfg(debug_assertions)]
+    midi: Mutex<Option<midir::MidiInputConnection<()>>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
             status: Mutex::new(StripStatus::NotConfigured),
+            clock_ticks: Mutex::new(None),
             #[cfg(debug_assertions)]
             strip: Mutex::new(None),
+            #[cfg(debug_assertions)]
+            midi: Mutex::new(None),
         }
     }
 }
@@ -63,10 +73,16 @@ impl AppState {
         *lock(&self.strip) = Some(strip);
     }
 
+    #[cfg(debug_assertions)]
+    pub fn set_midi(&self, conn: midir::MidiInputConnection<()>) {
+        *lock(&self.midi) = Some(conn);
+    }
+
     fn status(&self) -> Status {
         Status {
             strip: lock(&self.status).clone(),
             debug: cfg!(debug_assertions),
+            clock_ticks: *lock(&self.clock_ticks),
         }
     }
 }
@@ -78,9 +94,23 @@ const STATUS_EVENT: &str = "status";
 /// Stores the strip status and pushes the new [`Status`] to the popover.
 #[cfg(debug_assertions)]
 pub fn publish_strip_status(app: &tauri::AppHandle, s: StripStatus) {
+    use tauri::Manager;
+    app.state::<AppState>().set_strip_status(s);
+    emit_status(app);
+}
+
+/// Stores the debug MIDI clock count and pushes the new [`Status`] to the popover.
+#[cfg(debug_assertions)]
+pub fn publish_clock_ticks(app: &tauri::AppHandle, n: u64) {
+    use tauri::Manager;
+    *lock(&app.state::<AppState>().clock_ticks) = Some(n);
+    emit_status(app);
+}
+
+#[cfg(debug_assertions)]
+fn emit_status(app: &tauri::AppHandle) {
     use tauri::{Emitter, Manager};
     let state = app.state::<AppState>();
-    state.set_strip_status(s);
     if let Err(e) = app.emit_to("popover", STATUS_EVENT, state.status()) {
         log::warn!("status event not delivered: {e}");
     }
@@ -103,6 +133,15 @@ pub async fn dev_paint_test(state: tauri::State<'_, AppState>) -> Result<(), Str
     strip.paint_test(segments).await.map_err(|e| e.to_string())
 }
 
+/// Debug builds only: peak level of the default input over 1 s, in dBFS.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub async fn dev_mic_level() -> Result<f32, String> {
+    tauri::async_runtime::spawn_blocking(crate::mic_probe::peak_dbfs)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,7 +153,7 @@ mod tests {
         assert_eq!(
             json(&state.status()),
             format!(
-                r#"{{"strip":{{"kind":"notConfigured"}},"debug":{}}}"#,
+                r#"{{"strip":{{"kind":"notConfigured"}},"debug":{},"clockTicks":null}}"#,
                 cfg!(debug_assertions)
             )
         );
@@ -124,10 +163,11 @@ mod tests {
                 segments: 10,
             },
             debug: false,
+            clock_ticks: Some(48),
         };
         assert_eq!(
             json(&connected),
-            r#"{"strip":{"kind":"connected","name":"dj lights","segments":10},"debug":false}"#
+            r#"{"strip":{"kind":"connected","name":"dj lights","segments":10},"debug":false,"clockTicks":48}"#
         );
     }
 }

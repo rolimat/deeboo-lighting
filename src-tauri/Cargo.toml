@@ -29,6 +29,8 @@ secrecy = "0.10"
 base64 = "0.22"
 serde_json = "1"
 tokio = { version = "1", features = ["time"] }
+midir = "0.10"
+cpal = "0.15"
 
 [dev-dependencies]
 tempfile = "3"

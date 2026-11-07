@@ -7,6 +7,10 @@ mod commands;
 #[cfg(debug_assertions)]
 mod lan;
 #[cfg(debug_assertions)]
+mod mic_probe;
+#[cfg(debug_assertions)]
+mod midi_probe;
+#[cfg(debug_assertions)]
 mod strip;
 mod tray;
 
@@ -22,7 +26,8 @@ pub fn run() -> tauri::Result<()> {
     #[cfg(debug_assertions)]
     let builder = builder.invoke_handler(tauri::generate_handler![
         commands::get_status,
-        commands::dev_paint_test
+        commands::dev_paint_test,
+        commands::dev_mic_level
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![commands::get_status]);
@@ -34,8 +39,24 @@ pub fn run() -> tauri::Result<()> {
                 // The dev command's permission exists only in debug manifests (build.rs).
                 app.add_capability(include_str!("../capabilities-dev/popover-dev.json"))?;
                 strip::start_dev_connection(app.handle());
+                start_midi_probe(app.handle());
             }
             Ok(())
         })
         .run(tauri::generate_context!())
+}
+
+/// Debug only: the virtual MIDI input that proves `CoreMIDI` works in the sandbox.
+#[cfg(debug_assertions)]
+fn start_midi_probe(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    match midi_probe::start("Deeboo Lighting In", move |n| {
+        commands::publish_clock_ticks(&handle, n);
+    }) {
+        Ok(conn) => {
+            app.state::<commands::AppState>().set_midi(conn);
+            commands::publish_clock_ticks(app, 0);
+        }
+        Err(e) => log::warn!("MIDI probe not started: {e}"),
+    }
 }

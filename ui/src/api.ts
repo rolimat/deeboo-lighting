@@ -11,6 +11,8 @@ export interface Status {
   strip: StripStatus;
   /** True in debug builds only. */
   debug: boolean;
+  /** MIDI clock ticks seen by the debug probe; null in release. */
+  clockTicks: number | null;
 }
 
 export const api = {
@@ -20,4 +22,6 @@ export const api = {
     listen<Status>("status", (e) => cb(e.payload)),
   /** Debug builds only: the backend rejects it in release. */
   devPaintTest: (): Promise<void> => invoke("dev_paint_test"),
+  /** Debug builds only: peak of the default input over 1 s, in dBFS. */
+  devMicLevel: (): Promise<number> => invoke("dev_mic_level"),
 };

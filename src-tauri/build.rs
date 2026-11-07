@@ -2,7 +2,7 @@ use tauri_build::{AppManifest, Attributes};
 
 /// Release manifest: the dev command must never appear here.
 const COMMANDS: &[&str] = &["get_status"];
-const DEV_COMMANDS: &[&str] = &["get_status", "dev_paint_test"];
+const DEV_COMMANDS: &[&str] = &["get_status", "dev_paint_test", "dev_mic_level"];
 
 fn main() {
     let commands = if std::env::var("PROFILE").as_deref() == Ok("debug") {
