@@ -100,3 +100,11 @@ ship:
     done
     [ -n "$id" ] || { echo "no CI run found for $sha" >&2; exit 1; }
     gh run watch --exit-status "$id"
+
+# Offline detector run on a recording (macOS host, release build): episodes, --timeline, --labels, --bpm, --realtime.
+detect-probe *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ "$(uname)" = Darwin ] || { echo "just detect-probe runs on the macOS host only" >&2; exit 1; }
+    export PATH="$HOME/.cargo/bin:$PATH"
+    cargo run --release -p detect-probe -- {{ARGS}}
