@@ -8,6 +8,16 @@ use std::fmt;
 const EPISODE_GAP_S: f64 = 120.0;
 const EPISODE_MARGIN_S: f64 = 30.0;
 const SHORT_CALM_BEATS: f64 = 8.0;
+/// A Calm detected up to this late still counts: the cue is the lights settling, not the beat.
+const CALM_TOLERANCE_S: f64 = 6.0;
+
+fn tolerance_for(moment: Moment, base_s: f64) -> f64 {
+    if moment == Moment::Calm {
+        base_s.max(CALM_TOLERANCE_S)
+    } else {
+        base_s
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Label {
@@ -60,10 +70,14 @@ pub struct Score {
     pub false_alarms: usize,
     pub mean_delay_s: f64,
     pub per_episode: Vec<String>,
+    /// One line per label: time, moment, offset of the nearest detection of that moment in its
+    /// episode window (`miss` when outside the tolerance, `none` when there is no such detection).
+    pub per_label: Vec<String>,
 }
 
 /// `detected`: transitions as (time, moment entered), time-ordered. A Calm of at most 8 beats
-/// followed by Rhythm is not counted as a false alarm (nor is that Rhythm).
+/// followed by Rhythm is not counted as a false alarm (nor is that Rhythm). `tolerance_s` applies
+/// to Rhythm and Build-up; Calm gets at least `CALM_TOLERANCE_S`.
 #[must_use]
 pub fn score_with_beat(
     detected: &[(f64, Moment)],
@@ -97,12 +111,31 @@ pub fn score_with_beat(
                 .iter()
                 .copied()
                 .filter(|&i| !used[i] && detected[i].1 == l.moment)
-                .filter(|&i| (detected[i].0 - l.t).abs() <= tolerance_s)
+                .filter(|&i| (detected[i].0 - l.t).abs() <= tolerance_for(l.moment, tolerance_s))
                 .min_by(|&a, &b| {
                     (detected[a].0 - l.t)
                         .abs()
                         .total_cmp(&(detected[b].0 - l.t).abs())
                 });
+            let nearest = idx
+                .iter()
+                .copied()
+                .filter(|&i| detected[i].1 == l.moment)
+                .map(|i| detected[i].0 - l.t)
+                .min_by(|a, b| a.abs().total_cmp(&b.abs()));
+            let name = match l.moment {
+                Moment::Calm => "calm",
+                Moment::BuildUp => "buildup",
+                Moment::Rhythm => "rhythm",
+            };
+            let shown = match (nearest, best) {
+                (Some(d), Some(_)) => format!("{d:+.1}"),
+                (Some(d), None) => format!("{d:+.1} miss"),
+                (None, _) => "none".to_string(),
+            };
+            total
+                .per_label
+                .push(format!("{} {name} {shown}", mmss(l.t)));
             if let Some(i) = best {
                 used[i] = true;
                 hits += 1;
@@ -203,6 +236,37 @@ mod tests {
         assert_eq!((s.hits, s.misses, s.false_alarms), (1, 2, 3));
         assert!((s.mean_delay_s - 1.0).abs() < 1e-9);
         assert_eq!(s.per_episode.len(), 2);
+    }
+
+    #[test]
+    fn calm_gets_a_wider_window_than_other_moments() {
+        let calm = [Label {
+            t: 100.0,
+            moment: CALM,
+        }];
+        let rhythm = [Label {
+            t: 100.0,
+            moment: RHYTHM,
+        }];
+        assert_eq!(score(&[(105.5, CALM)], &calm, 4.0).hits, 1);
+        assert_eq!(score(&[(105.5, RHYTHM)], &rhythm, 4.0).hits, 0);
+        assert_eq!(score(&[(106.5, CALM)], &calm, 4.0).hits, 0);
+    }
+
+    #[test]
+    fn per_label_lists_the_nearest_offset_even_on_a_miss() {
+        let labels = [
+            Label {
+                t: 100.0,
+                moment: CALM,
+            },
+            Label {
+                t: 120.0,
+                moment: BUILD,
+            },
+        ];
+        let s = score(&[(101.5, CALM), (95.0, RHYTHM)], &labels, 4.0);
+        assert_eq!(s.per_label, ["01:40.0 calm +1.5", "02:00.0 buildup none"]);
     }
 
     #[test]

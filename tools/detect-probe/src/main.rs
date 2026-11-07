@@ -179,6 +179,9 @@ fn run(args: &Args) -> Result<(), CliError> {
         for e in &s.per_episode {
             println!("{e}");
         }
+        for l in &s.per_label {
+            println!("label {l}");
+        }
         println!(
             "score: {} hits, {} misses, {} false alarms, mean delay {:+.1} s",
             s.hits, s.misses, s.false_alarms, s.mean_delay_s
