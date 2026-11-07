@@ -135,7 +135,37 @@ fn rejects_short_and_bad_header() {
     );
 }
 
+fn any_cmd() -> impl Strategy<Value = PaintCommand> {
+    let hsv = (0u16..=400, 0u16..=1100, 0u16..=1100).prop_map(|(h, s, v)| Hsv { h, s, v });
+    let segs = proptest::collection::vec(any::<u8>(), 0..140);
+    prop_oneof![
+        hsv.clone().prop_map(PaintCommand::Bucket),
+        (hsv, segs.clone()).prop_map(|(color, segments)| PaintCommand::Pencil { color, segments }),
+        segs.prop_map(|segments| PaintCommand::Eraser { segments }),
+    ]
+}
+
 proptest! {
+    #[test]
+    fn encode_never_panics_and_ok_output_is_well_formed(count in any::<u8>(), cmd in any_cmd()) {
+        if let Ok(b) = encode(count, &cmd) {
+            prop_assert_eq!(&b[..4], &[0, 1, 0, count][..]);
+            prop_assert!(b.len() <= 255);
+            let segs = match &cmd {
+                PaintCommand::Bucket(_) => {
+                    prop_assert_eq!(b.len(), 11);
+                    &[][..]
+                }
+                PaintCommand::Pencil { segments, .. } | PaintCommand::Eraser { segments } => segments,
+            };
+            if !segs.is_empty() {
+                let k = segs.len();
+                prop_assert_eq!(b.len(), 12 + k);
+                prop_assert_eq!(usize::from(b[11]), 0x80 | k);
+                prop_assert!(b[12..].iter().all(|s| (1..=count).contains(s)));
+            }
+        }
+    }
     #[test]
     fn decode_never_panics(bytes in any::<Vec<u8>>()) {
         let _ = decode_segment_count(&bytes);

@@ -4802,6 +4802,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hmac 0.12.1",
  "md-5 0.10.6",
+ "proptest",
  "rustls",
  "secrecy",
  "serde",

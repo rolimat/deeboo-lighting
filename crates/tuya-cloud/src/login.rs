@@ -225,7 +225,7 @@ pub fn poll_login(
 }
 
 /// Accepts exactly `https://<host>[/]` with `host` equal to or a subdomain of an allowlisted suffix.
-fn validate_endpoint(raw: &str) -> Result<String, CloudError> {
+pub(crate) fn validate_endpoint(raw: &str) -> Result<String, CloudError> {
     let rest = raw
         .strip_prefix("https://")
         .ok_or(CloudError::EndpointNotAllowed)?;

@@ -12,7 +12,7 @@ pub enum Method {
     Post,
 }
 
-/// Headers and body can carry tokens, so `Debug` is hand-written and shows only method and path.
+/// Headers and body can carry tokens, so `Debug` is hand-written and shows only method and host (paths and queries carry tokens).
 #[derive(Clone)]
 pub struct HttpRequest {
     pub method: Method,
@@ -23,8 +23,12 @@ pub struct HttpRequest {
 
 impl std::fmt::Debug for HttpRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let path = self.url.split('?').next().unwrap_or_default();
-        write!(f, "HttpRequest({:?} {path})", self.method)
+        let host = self
+            .url
+            .strip_prefix("https://")
+            .and_then(|r| r.split(['/', '?']).next())
+            .unwrap_or("[non-https]");
+        write!(f, "HttpRequest({:?} {host})", self.method)
     }
 }
 

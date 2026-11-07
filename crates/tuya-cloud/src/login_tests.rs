@@ -356,7 +356,11 @@ fn debug_output_never_contains_secrets() {
     };
     let qr = QrLogin::for_token("TKN-SECRET");
     let uc = UserCode::parse("UC-SECRET".replace('-', "").as_str()).unwrap();
-    let out = format!("{s:?} {dev:?} {qr:?} {uc:?}");
+    let poll = Fake::new(|_| Ok(r#"{"success":false}"#.into()));
+    poll_login(&poll, &code(), &qr).unwrap();
+    let req = format!("{:?}", poll.seen.borrow()[0]);
+    assert!(req.contains("apigw.iotbing.com"), "{req}");
+    let out = format!("{s:?} {dev:?} {qr:?} {uc:?} {req}");
     for secret in [
         "at-SECRET",
         "rt-SECRET",
@@ -411,4 +415,132 @@ fn live_tls_smoke() {
 #[test]
 fn endpoint_host_is_bare_host() {
     assert_eq!(session().endpoint_host(), "apigw.tuyaeu.com");
+}
+
+mod props {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn fixed(body: String) -> Fake {
+        Fake::new(move |_| Ok(body.clone()))
+    }
+
+    /// Cloud answered with a valid envelope whose decrypted payload is `plain`.
+    fn encrypted(plain: String) -> Fake {
+        Fake::new(move |r| Ok(reply(r, &plain)))
+    }
+
+    proptest! {
+        #[test]
+        fn start_login_never_panics(body in any::<String>()) {
+            let _ = start_login(&fixed(body), &code());
+        }
+
+        #[test]
+        fn poll_login_never_panics(body in any::<String>()) {
+            let _ = poll_login(&fixed(body), &code(), &qr());
+        }
+
+        #[test]
+        fn poll_login_never_panics_on_json_shaped_bodies(
+            ok in any::<bool>(), endpoint in any::<String>(), tok in any::<String>()
+        ) {
+            let body = serde_json::json!({"success": ok, "result": {
+                "endpoint": endpoint, "terminal_id": tok, "access_token": tok, "refresh_token": tok}});
+            let _ = poll_login(&fixed(body.to_string()), &code(), &qr());
+        }
+
+        #[test]
+        fn list_devices_never_panics_on_any_outer_body(body in any::<String>()) {
+            let _ = list_devices(&fixed(body), &session());
+        }
+
+        #[test]
+        fn list_devices_never_panics_on_any_decrypted_payload(plain in any::<String>()) {
+            let _ = list_devices(&encrypted(plain), &session());
+        }
+
+        #[test]
+        fn revoke_never_panics(body in any::<String>()) {
+            let _ = revoke(&fixed(body), session());
+        }
+
+        #[test]
+        fn decrypt_response_never_panics(b64 in any::<String>(), secret in any::<String>()) {
+            let _ = crypto::decrypt_response(&b64, &secret);
+        }
+
+        #[test]
+        fn decrypt_response_never_panics_on_valid_base64(
+            raw in proptest::collection::vec(any::<u8>(), 0..200)
+        ) {
+            use base64::{Engine, engine::general_purpose::STANDARD};
+            let _ = crypto::decrypt_response(&STANDARD.encode(raw), &"k".repeat(16));
+        }
+
+        #[test]
+        fn encrypt_then_decrypt_round_trips(plain in any::<String>(), nonce in any::<[u8; 12]>()) {
+            let key = "k".repeat(16);
+            let enc = crypto::encrypt_request(&plain, &key, &nonce).unwrap();
+            prop_assert_eq!(&*crypto::decrypt_response(&enc, &key).unwrap(), &plain);
+        }
+
+        #[test]
+        fn validate_endpoint_never_panics_and_only_allows_https_allowlisted(raw in any::<String>()) {
+            if let Ok(ok) = validate_endpoint(&raw) {
+                let host = ok.strip_prefix("https://").unwrap();
+                let allowed = ENDPOINT_HOST_SUFFIXES
+                    .iter()
+                    .any(|s| host == *s || host.ends_with(&format!(".{s}")));
+                prop_assert!(allowed);
+            }
+        }
+
+        #[test]
+        fn user_code_accepts_exactly_short_alphanumerics(s in any::<String>()) {
+            let t = s.trim();
+            let valid = (1..=32).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_alphanumeric());
+            prop_assert_eq!(UserCode::parse(&s).is_ok(), valid);
+        }
+
+        #[test]
+        fn parsed_device_never_exposes_local_key_in_debug(key in "[A-Za-z0-9]{16,40}") {
+            let json = serde_json::json!([{"id":"d","name":"n","category":"dd",
+                "product_name":"p","online":true,"local_key": key}]);
+            let f = Fake::new(move |r| {
+                if r.url.contains("/users/homes") {
+                    Ok(reply(r, r#"[{"ownerId":"1"}]"#))
+                } else {
+                    Ok(reply(r, &json.to_string()))
+                }
+            });
+            let devs = list_devices(&f, &session()).unwrap();
+            let shown = format!("{devs:?}");
+            prop_assert!(!shown.contains(&key));
+            prop_assert_eq!(devs[0].local_key.expose_secret(), key.as_str());
+        }
+    }
+}
+
+#[test]
+fn revoke_failure_after_successful_f_is_reported() {
+    let f = Fake::new(|r| {
+        if r.url.ends_with("/v1.0/m/token/terminal/expire") {
+            Err(CloudError::Http(500))
+        } else {
+            Ok(reply(r, "true"))
+        }
+    });
+    let out = run_and_revoke(&f, session(), |_, _| Ok(7));
+    assert_eq!(out.err(), Some(CloudError::Http(500)));
+}
+
+#[test]
+fn successful_run_ends_with_the_expire_post() {
+    let f = Fake::new(|r| Ok(reply(r, "true")));
+    assert_eq!(run_and_revoke(&f, session(), |_, _| Ok(7)).ok(), Some(7));
+    let seen = f.seen.borrow();
+    let last = seen.last().unwrap();
+    assert_eq!(last.method, Method::Post);
+    assert!(last.url.ends_with("/v1.0/m/token/terminal/expire"));
 }

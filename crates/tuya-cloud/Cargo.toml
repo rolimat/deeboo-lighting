@@ -22,3 +22,6 @@ ureq = { version = "3", default-features = false, features = ["rustls-no-provide
 # ring is the single crypto provider (rustls then selects it itself); no aws-lc, no bundled roots.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 zeroize = "1"
+
+[dev-dependencies]
+proptest = "1"
