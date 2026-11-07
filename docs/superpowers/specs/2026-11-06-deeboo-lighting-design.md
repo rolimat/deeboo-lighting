@@ -459,6 +459,15 @@ El repositorio remoto se crea igual que el de MIDI Sync *(constructor: confirmar
 3. El usuario las escucha y corrige (añade, quita o mueve), sin tener que etiquetar desde cero.
 4. El resultado corregido queda como **fichero de etiquetas** junto a la grabación. Es el criterio de aprobado o
    suspenso del detector: transiciones acertadas y retraso de cada una en beats.
+5. **Validación con canciones sueltas** (usuario, 2026-11-07). Con el detector ya afinado, el usuario pasa de 2 a 5
+   canciones sueltas (sin mezclar). `detect-probe` muestra la **línea de tiempo completa** de cada canción: cada cambio
+   de momento con su tiempo, su compás y su duración.
+   - **Simula la escucha en tiempo real:** el audio entra en bloques del tamaño de los de una tarjeta de sonido, en orden
+     con los beats, y cada cambio aparece cuando la app lo decidiría en vivo, sin mirar audio futuro. El tempo sale del
+     audio (o lo da el usuario), igual que en vivo lo da el MIDI clock.
+   - Con `--realtime` va a velocidad real y suena la canción, para verlo y oírlo a la vez.
+   - El usuario revisa a mano que encaja. Si algo falla, se ajusta y se repite con todas las canciones y con la sesión
+     etiquetada, sin empeorarla, hasta que el usuario aprueba todas.
 - La grabación y sus etiquetas **no se suben al repo** (derechos de la música). Viven en una carpeta local ignorada por
   git, y los tests de CI usan señales sintéticas.
 - **Límite conocido:** un MP3 es la señal limpia del master. El micro de la habitación, que *(mi decisión)* es el
