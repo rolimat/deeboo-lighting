@@ -111,7 +111,9 @@ fn run() -> Result<(), String> {
     });
     match &out {
         Ok(_) => eprintln!("session revoked"),
-        Err(_) => eprintln!("WARNING: session revoke failed"),
+        Err(e) => eprintln!(
+            "error: {e}\nthe session was revoked if the cloud accepted it; it expires on its own otherwise"
+        ),
     }
     let picked = out.map_err(|e: CloudError| e.to_string())?;
     let json = picked
