@@ -6,7 +6,6 @@
   "permissions": [
     "allow-get-status",
     "core:event:allow-listen",
-    "core:event:allow-unlisten",
-    "core:window:allow-set-size"
+    "core:event:allow-unlisten"
   ]
 }
