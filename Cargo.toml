@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/light-core"]
+members = ["crates/light-core", "crates/tuya-cloud"]
 
 [workspace.package]
 edition = "2024"
