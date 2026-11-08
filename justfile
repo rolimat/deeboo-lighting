@@ -87,6 +87,17 @@ tuya-login *ARGS:
     export PATH="$HOME/.cargo/bin:$PATH"
     cargo run --release -p tuya-login -- "$@"
 
+# macOS: installs .dev/strip.json (mode 0600) where the sandboxed app reads its strip file (`app_config_dir`).
+install-strip:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ "$(uname)" = Darwin ] || { echo "just install-strip runs on the macOS host only" >&2; exit 1; }
+    [ -f .dev/strip.json ] || { echo ".dev/strip.json is missing: run just tuya-login first" >&2; exit 1; }
+    dest="$HOME/Library/Containers/com.deeboo.lighting/Data/Library/Application Support/com.deeboo.lighting"
+    mkdir -p "$dest"
+    install -m 0600 .dev/strip.json "$dest/strip.json"
+    echo "installed $dest/strip.json"
+
 # Push, wait for the GitHub Actions run of this exact commit, fail if it fails.
 ship:
     #!/usr/bin/env bash
@@ -110,3 +121,10 @@ detect-probe *ARGS:
     [ "$(uname)" = Darwin ] || { echo "just detect-probe runs on the macOS host only" >&2; exit 1; }
     export PATH="$HOME/.cargo/bin:$PATH"
     cargo run --release -p detect-probe -- "$@"
+
+# Regenerates the committed menu bar frames in src-tauri/icons/tray (runs in Docker; output is deterministic).
+tray-frames:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} tray-frames
+    cargo run --locked -p tray-frames

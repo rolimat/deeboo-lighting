@@ -5,6 +5,13 @@
   "windows": ["popover"],
   "permissions": [
     "allow-get-status",
+    "allow-get-settings",
+    "allow-save-settings",
+    "allow-list-midi-sources",
+    "allow-list-audio-inputs",
+    "allow-ui-command",
+    "allow-quit",
+    "core:window:allow-set-size",
     "core:event:allow-listen",
     "core:event:allow-unlisten"
   ]

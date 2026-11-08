@@ -21,11 +21,23 @@ vi.mock("./api", () => ({
 }));
 import { syncStatus } from "./status-sync";
 
-const connecting: Status = { strip: { kind: "connecting" }, debug: true, clockTicks: null };
+const base: Omit<Status, "strip"> = {
+  bpm: null,
+  playing: false,
+  beatInBar: null,
+  barInPhrase: null,
+  phraseBars: 8,
+  moment: "rhythm",
+  auto: true,
+  predicted: false,
+  lightsOn: true,
+  midi: { source: null, ok: true },
+  audio: { ok: false },
+};
+const connecting: Status = { ...base, strip: { kind: "connecting" } };
 const connected: Status = {
+  ...base,
   strip: { kind: "connected", name: "dj lights", segments: 10 },
-  debug: true,
-  clockTicks: null,
 };
 
 beforeEach(() => {

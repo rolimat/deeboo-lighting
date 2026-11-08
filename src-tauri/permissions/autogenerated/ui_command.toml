@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ui-command"
+description = "Enables the ui_command command without any pre-configured scope."
+commands.allow = ["ui_command"]
+
+[[permission]]
+identifier = "deny-ui-command"
+description = "Denies the ui_command command without any pre-configured scope."
+commands.deny = ["ui_command"]

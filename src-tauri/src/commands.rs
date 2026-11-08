@@ -1,59 +1,146 @@
 //! IPC commands. Every DTO here is mirrored in `ui/src/api.ts`.
 
-#[cfg(debug_assertions)]
-use std::sync::Arc;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::TrySendError;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use serde::Serialize;
+use light_core::detect::Moment;
+use light_core::engine::UiCommand;
+use serde::{Deserialize, Serialize};
 
-#[cfg(debug_assertions)]
-use crate::strip::Strip;
+use crate::runtime::{Input, RuntimeHandle};
+use crate::settings::{self, Settings};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StripStatus {
     NotConfigured,
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     Connecting,
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
-    Connected {
-        name: String,
-        segments: u8,
-    },
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    Connected { name: String, segments: u8 },
     Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MidiStatus {
+    pub source: Option<String>,
+    pub ok: bool,
+}
+
+/// Live audio: open only while playing with Auto and Lights on.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioStatus {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    /// Peak of the last beat in dBFS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level_db: Option<f32>,
+}
+
+/// What the popover shows; the engine thread publishes it only while the popover is visible.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::struct_excessive_bools)] // mirrors the UI's status object
 pub struct Status {
     pub strip: StripStatus,
-    /// True in debug builds only: the UI shows dev tools then.
-    pub debug: bool,
-    /// MIDI clock ticks seen by the debug probe; `None` in release or before it is up.
-    #[serde(rename = "clockTicks")]
-    pub clock_ticks: Option<u64>,
+    pub bpm: Option<f32>,
+    pub playing: bool,
+    pub beat_in_bar: Option<u8>,
+    pub bar_in_phrase: Option<u8>,
+    pub phrase_bars: u8,
+    pub moment: MomentDto,
+    pub auto: bool,
+    pub predicted: bool,
+    pub lights_on: bool,
+    pub midi: MidiStatus,
+    pub audio: AudioStatus,
+}
+
+impl Status {
+    /// Before the engine thread has said anything.
+    fn initial() -> Self {
+        Self {
+            strip: StripStatus::NotConfigured,
+            bpm: None,
+            playing: false,
+            beat_in_bar: None,
+            bar_in_phrase: None,
+            phrase_bars: 8,
+            moment: MomentDto::Rhythm,
+            auto: true,
+            predicted: false,
+            lights_on: true,
+            midi: MidiStatus {
+                source: None,
+                ok: true,
+            },
+            audio: AudioStatus::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MomentDto {
+    Rhythm,
+    Calm,
+    BuildUp,
+}
+
+impl From<Moment> for MomentDto {
+    fn from(m: Moment) -> Self {
+        match m {
+            Moment::Rhythm => Self::Rhythm,
+            Moment::Calm => Self::Calm,
+            Moment::BuildUp => Self::BuildUp,
+        }
+    }
+}
+
+/// What the popover can ask of the show; anything else is rejected by serde.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UiCommandDto {
+    Lights { on: bool },
+    Force { moment: MomentDto },
+    Auto,
+}
+
+impl From<UiCommandDto> for UiCommand {
+    fn from(c: UiCommandDto) -> Self {
+        match c {
+            UiCommandDto::Lights { on } => UiCommand::Lights(on),
+            UiCommandDto::Force { moment } => UiCommand::Force(match moment {
+                MomentDto::Rhythm => Moment::Rhythm,
+                MomentDto::Calm => Moment::Calm,
+                MomentDto::BuildUp => Moment::BuildUp,
+            }),
+            UiCommandDto::Auto => UiCommand::Auto,
+        }
+    }
 }
 
 /// Mutable app state shared with the commands.
 pub struct AppState {
-    status: Mutex<StripStatus>,
-    clock_ticks: Mutex<Option<u64>>,
-    #[cfg(debug_assertions)]
-    strip: Mutex<Option<Arc<Strip>>>,
-    /// Keeps the debug MIDI connections alive for the app's lifetime.
-    #[cfg(debug_assertions)]
-    midi: Mutex<Vec<midir::MidiInputConnection<()>>>,
+    /// The last status the engine thread published.
+    status: Mutex<Status>,
+    settings: Mutex<Settings>,
+    /// Where the settings file lives; set at startup.
+    settings_path: Mutex<Option<std::path::PathBuf>>,
+    runtime: Mutex<Option<RuntimeHandle>>,
+    /// Read by the engine thread: status goes out only while this is true.
+    visible: Arc<AtomicBool>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            status: Mutex::new(StripStatus::NotConfigured),
-            clock_ticks: Mutex::new(None),
-            #[cfg(debug_assertions)]
-            strip: Mutex::new(None),
-            #[cfg(debug_assertions)]
-            midi: Mutex::new(Vec::new()),
+            status: Mutex::new(Status::initial()),
+            settings: Mutex::new(Settings::default()),
+            settings_path: Mutex::new(None),
+            runtime: Mutex::new(None),
+            visible: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -63,83 +150,118 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl AppState {
-    #[cfg(debug_assertions)]
-    fn set_strip_status(&self, s: StripStatus) {
+    /// Loads the settings file (defaults on any problem) and remembers its path.
+    pub fn init_settings(&self, path: std::path::PathBuf) {
+        *lock(&self.settings) = settings::load(&path);
+        *lock(&self.settings_path) = Some(path);
+    }
+
+    pub fn settings(&self) -> Settings {
+        lock(&self.settings).clone()
+    }
+
+    fn save_settings(&self, new: Settings) -> Result<Settings, String> {
+        new.validate()?;
+        let path = lock(&self.settings_path)
+            .clone()
+            .ok_or("settings unavailable")?;
+        settings::save(&path, &new).map_err(|e| {
+            log::warn!("settings not saved: {e}");
+            "settings not saved".to_string()
+        })?;
+        *lock(&self.settings) = new.clone();
+        Ok(new)
+    }
+
+    pub fn set_status(&self, s: Status) {
         *lock(&self.status) = s;
     }
 
-    #[cfg(debug_assertions)]
-    pub fn set_strip(&self, strip: Arc<Strip>) {
-        *lock(&self.strip) = Some(strip);
+    pub fn visible_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.visible)
     }
 
-    #[cfg(debug_assertions)]
-    pub fn set_midi(&self, conns: Vec<midir::MidiInputConnection<()>>) {
-        *lock(&self.midi) = conns;
+    pub fn set_runtime(&self, handle: RuntimeHandle) {
+        *lock(&self.runtime) = Some(handle);
     }
 
-    fn status(&self) -> Status {
-        Status {
-            strip: lock(&self.status).clone(),
-            debug: cfg!(debug_assertions),
-            clock_ticks: *lock(&self.clock_ticks),
+    /// Queues an input for the engine thread; never blocks.
+    fn send(&self, input: Input) -> Result<(), String> {
+        let guard = lock(&self.runtime);
+        let handle = guard.as_ref().ok_or("engine not running")?;
+        handle.tx.try_send(input).map_err(|e| match e {
+            TrySendError::Full(_) => "engine busy".to_string(),
+            TrySendError::Disconnected(_) => "engine stopped".to_string(),
+        })
+    }
+
+    /// Called by the tray when the popover shows or hides.
+    pub fn set_popover_visible(&self, visible: bool) {
+        self.visible.store(visible, Ordering::Relaxed);
+        if visible && self.send(Input::PopoverShown).is_err() {
+            log::debug!("popover shown but the engine did not get the news");
         }
     }
-}
 
-/// Event the popover listens to; its payload is the whole [`Status`].
-#[cfg(debug_assertions)]
-const STATUS_EVENT: &str = "status";
-
-/// Stores the strip status and pushes the new [`Status`] to the popover.
-#[cfg(debug_assertions)]
-pub fn publish_strip_status(app: &tauri::AppHandle, s: StripStatus) {
-    use tauri::Manager;
-    app.state::<AppState>().set_strip_status(s);
-    emit_status(app);
-}
-
-/// Stores the debug MIDI clock count and pushes the new [`Status`] to the popover.
-#[cfg(debug_assertions)]
-pub fn publish_clock_ticks(app: &tauri::AppHandle, n: u64) {
-    use tauri::Manager;
-    *lock(&app.state::<AppState>().clock_ticks) = Some(n);
-    emit_status(app);
-}
-
-#[cfg(debug_assertions)]
-fn emit_status(app: &tauri::AppHandle) {
-    use tauri::{Emitter, Manager};
-    let state = app.state::<AppState>();
-    if let Err(e) = app.emit_to("popover", STATUS_EVENT, state.status()) {
-        log::warn!("status event not delivered: {e}");
+    pub fn quit(&self) {
+        let _ = self.send(Input::Quit);
     }
 }
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri::State is passed by value by the macro
 pub fn get_status(state: tauri::State<'_, AppState>) -> Status {
-    state.status()
+    lock(&state.status).clone()
 }
 
-/// Debug builds only; absent from the release handler list, manifest and capabilities.
-#[cfg(debug_assertions)]
 #[tauri::command]
-pub async fn dev_paint_test(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let StripStatus::Connected { segments, .. } = lock(&state.status).clone() else {
-        return Err("strip not connected".into());
-    };
-    let strip = lock(&state.strip).clone().ok_or("strip not connected")?;
-    strip.paint_test(segments).await.map_err(|e| e.to_string())
+#[allow(clippy::needless_pass_by_value)] // tauri::State is passed by value by the macro
+pub fn get_settings(state: tauri::State<'_, AppState>) -> Settings {
+    state.settings()
 }
 
-/// Debug builds only: peak level of the default input over 1 s, in dBFS.
-#[cfg(debug_assertions)]
 #[tauri::command]
-pub async fn dev_mic_level() -> Result<f32, String> {
-    tauri::async_runtime::spawn_blocking(crate::mic_probe::peak_dbfs)
+#[allow(clippy::needless_pass_by_value)]
+pub fn save_settings(
+    state: tauri::State<'_, AppState>,
+    settings: Settings,
+) -> Result<Settings, String> {
+    let saved = state.save_settings(settings)?;
+    state.send(Input::Settings(saved.clone()))?;
+    Ok(saved)
+}
+
+#[tauri::command]
+pub async fn list_midi_sources() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(crate::devices::midi_sources)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_audio_inputs() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(crate::devices::audio_inputs)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Validated by serde on the way in. The lights switch is also persisted.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri::State is passed by value by the macro
+pub fn ui_command(state: tauri::State<'_, AppState>, cmd: UiCommandDto) -> Result<(), String> {
+    if let UiCommandDto::Lights { on } = cmd {
+        let mut s = state.settings();
+        s.lights_on = on;
+        state.save_settings(s)?;
+    }
+    state.send(Input::Ui(cmd.into()))
+}
+
+/// The settings view's Quit button; `RunEvent::Exit` then stops the engine.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
+pub fn quit(app: tauri::AppHandle) {
+    app.exit(0);
 }
 
 #[cfg(test)]
@@ -148,26 +270,66 @@ mod tests {
 
     #[test]
     fn status_serialises_as_the_ui_expects() {
-        let json = |s: &Status| serde_json::to_string(s).unwrap_or_default();
-        let state = AppState::default();
+        let json = serde_json::to_string(&Status::initial()).unwrap_or_default();
         assert_eq!(
-            json(&state.status()),
-            format!(
-                r#"{{"strip":{{"kind":"notConfigured"}},"debug":{},"clockTicks":null}}"#,
-                cfg!(debug_assertions)
-            )
+            json,
+            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false}}"#
         );
-        let connected = Status {
-            strip: StripStatus::Connected {
-                name: "dj lights".into(),
-                segments: 10,
-            },
-            debug: false,
-            clock_ticks: Some(48),
+        let connected = StripStatus::Connected {
+            name: "dj lights".into(),
+            segments: 10,
         };
         assert_eq!(
-            json(&connected),
-            r#"{"strip":{"kind":"connected","name":"dj lights","segments":10},"debug":false,"clockTicks":48}"#
+            serde_json::to_string(&connected).unwrap_or_default(),
+            r#"{"kind":"connected","name":"dj lights","segments":10}"#
         );
+    }
+
+    #[test]
+    fn release_manifest_has_no_dev_commands() {
+        let build = include_str!("../build.rs");
+        assert!(!build.contains("dev_"), "build.rs must list no dev command");
+        let list = build
+            .split("COMMANDS: &[&str] = &[")
+            .nth(1)
+            .and_then(|r| r.split("];").next())
+            .unwrap_or_default();
+        let mut commands: Vec<String> = list
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .map(|c| format!("allow-{}", c.replace('_', "-")))
+            .collect();
+        // The popover capability grants exactly those commands (plus event listening).
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/popover.json")).unwrap_or_default();
+        let mut granted: Vec<String> = cap["permissions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+            .filter(|p| p.starts_with("allow-"))
+            .map(String::from)
+            .collect();
+        commands.sort();
+        granted.sort();
+        assert_eq!(commands.len(), 7);
+        assert_eq!(granted, commands);
+    }
+
+    #[test]
+    fn ui_command_dto_parses_and_rejects_unknown() {
+        let parse = |j: &str| serde_json::from_str::<UiCommandDto>(j);
+        assert_eq!(
+            parse(r#"{"kind":"lights","on":false}"#).ok(),
+            Some(UiCommandDto::Lights { on: false })
+        );
+        assert_eq!(
+            UiCommand::from(parse(r#"{"kind":"force","moment":"buildUp"}"#).unwrap()),
+            UiCommand::Force(Moment::BuildUp)
+        );
+        assert_eq!(parse(r#"{"kind":"auto"}"#).ok(), Some(UiCommandDto::Auto));
+        assert!(parse(r#"{"kind":"reboot"}"#).is_err());
+        assert!(parse(r#"{"kind":"force","moment":"loud"}"#).is_err());
     }
 }

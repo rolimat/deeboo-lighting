@@ -1,5 +1,9 @@
 # App Sandbox check (Plan 1, Task 10)
 
+> Historical record. The debug probes it used (`Test strip`, `Mic level`, the MIDI tick counter, the
+> `dev_*` commands) were removed in Plan 3 Task 8; the app now reads its strip from
+> `<app_config_dir>/strip.json` (`just install-strip`) and listens to MIDI through the engine thread.
+
 Checks that the sandboxed debug bundle can do what the app needs. If any item fails, stop and
 ask (spec §12.2): never relax the sandbox on your own.
 
