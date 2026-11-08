@@ -421,6 +421,9 @@ pub fn save_library(
 /// Messages each step costs to reach from the previous one (the first from the last: it wraps),
 /// so the editor can flag steps the strip would show in several parts. Messages never echo input.
 fn message_counts_of(lib: &Library, seq: &Sequence, palette_id: u32) -> Result<Vec<u8>, String> {
+    if seq.steps.len() > light_core::library::MAX_STEPS {
+        return Err("A sequence has at most 64 steps.".into());
+    }
     seq.validate(lib.segments())
         .map_err(|_| "Every step needs one role per segment.".to_string())?;
     let (_, palette) = lib
@@ -675,6 +678,12 @@ mod tests {
         assert!(message_counts_of(&lib, &short, 1).is_err());
         short.steps.clear();
         assert!(message_counts_of(&lib, &short, 1).is_err());
+        let mut long = seq.clone();
+        long.steps = vec![seq.steps[0].clone(); light_core::library::MAX_STEPS + 1];
+        assert!(
+            message_counts_of(&lib, &long, 1).is_err(),
+            "IPC input is capped"
+        );
     }
 
     fn lib_state() -> (tempfile::TempDir, AppState) {
