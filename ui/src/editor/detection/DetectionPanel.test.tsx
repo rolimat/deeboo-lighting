@@ -59,8 +59,9 @@ beforeEach(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
 });
-afterEach(() => {
-  render(null, root);
+afterEach(async () => {
+  // act() flushes pending effects and cleanups before jsdom is torn down.
+  await act(async () => render(null, root));
   root.remove();
   vi.clearAllMocks();
   vi.useRealTimers();
