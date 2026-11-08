@@ -189,6 +189,20 @@ it("renders_identify_step_and_lights_a_piece", async () => {
   expect(api.wizardSave).toHaveBeenCalled();
 });
 
+it("shows_the_error_when_save_is_rejected", async () => {
+  vi.mocked(api.wizardSave).mockRejectedValue("Saved. Restart the app to use the new strip.");
+  await mount();
+  await emit({ kind: "identify", device: dev("a"), segments: 3 });
+  expect(root.querySelector("[role=alert]")).toBeNull();
+  await act(async () => {
+    button("Save").click();
+    await settle();
+  });
+  expect(root.querySelector("[role=alert]")?.textContent).toBe(
+    "Saved. Restart the app to use the new strip.",
+  );
+});
+
 it("renders_saved_step", async () => {
   await mount();
   await emit({ kind: "saved", device: dev("a"), segments: 10 });

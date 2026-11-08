@@ -467,28 +467,15 @@ mod tests {
         }
     }
 
-    struct Capture(Mutex<Vec<String>>);
-    impl log::Log for Capture {
-        fn enabled(&self, _: &log::Metadata) -> bool {
-            true
-        }
-        fn log(&self, r: &log::Record) {
-            self.0.lock().unwrap().push(format!("{}", r.args()));
-        }
-        fn flush(&self) {}
-    }
-    static CAPTURE: Capture = Capture(Mutex::new(Vec::new()));
-
     #[test]
     fn no_secret_in_logs_through_the_flow() {
-        log::set_logger(&CAPTURE).ok();
-        log::set_max_level(log::LevelFilter::Trace);
+        let _log = crate::wizard::testlog::begin();
         let f = fake();
         f.not_yet.store(1, Ordering::SeqCst);
         let (out, _) = drive(&f, &["d1"], |_| {});
         let err = format!("{:?}", out.as_ref().err());
         assert!(out.is_ok());
-        let logs = CAPTURE.0.lock().unwrap().join("\n");
+        let logs = crate::wizard::testlog::lines();
         assert!(!logs.is_empty(), "the flow should log its steps");
         for s in SECRETS {
             assert!(!logs.contains(s) && !err.contains(s), "{s}");
@@ -497,6 +484,7 @@ mod tests {
 
     #[test]
     fn revoke_failure_still_lists_devices_and_drops_session() {
+        let _log = crate::wizard::testlog::begin();
         let f = Arc::new(Fake {
             fail_revoke: true,
             ..Fake::default()
@@ -505,7 +493,7 @@ mod tests {
         assert_eq!(out.unwrap().1.expose_secret(), KEY_A);
         assert_eq!(f.count("/terminal/expire"), 1);
         assert!(matches!(&ev.lock().unwrap()[1], S::ChooseStrip { .. }));
-        let logs = CAPTURE.0.lock().unwrap().join("\n");
+        let logs = crate::wizard::testlog::lines();
         assert!(!SECRETS.iter().any(|s| logs.contains(s)));
     }
 

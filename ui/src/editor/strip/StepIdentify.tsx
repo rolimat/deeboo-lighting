@@ -1,3 +1,5 @@
+import { useState } from "preact/hooks";
+
 export function StepIdentify({
   segments,
   onPiece,
@@ -5,8 +7,14 @@ export function StepIdentify({
 }: {
   segments: number;
   onPiece: (segment: number) => void;
-  onSave: () => void;
+  /** Rejects with the text to show when the strip could not be saved or handed to the engine. */
+  onSave: () => Promise<void>;
 }) {
+  const [error, setError] = useState("");
+  const save = () => {
+    setError("");
+    onSave().catch((e: unknown) => setError(String(e)));
+  };
   return (
     <div class="space-y-4">
       <div class="flex gap-1">
@@ -23,7 +31,12 @@ export function StepIdentify({
           </button>
         ))}
       </div>
-      <button type="button" onClick={onSave} class="rounded-card bg-green px-4 py-2">
+      {error && (
+        <p role="alert" class="text-red">
+          {error}
+        </p>
+      )}
+      <button type="button" onClick={save} class="rounded-card bg-green px-4 py-2">
         Save
       </button>
     </div>

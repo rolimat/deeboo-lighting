@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use light_core::detect::Moment;
 use light_core::engine::UiCommand;
 use serde::{Deserialize, Serialize};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use crate::runtime::{Input, RuntimeHandle};
 
@@ -210,6 +210,21 @@ impl AppState {
         })
     }
 
+    /// Tells the engine to pause or resume its strip connection. A pause that got lost would leave
+    /// the strip offline, so a full queue hands it to a short-lived thread, like `report_strip`.
+    fn send_strip_pause(&self, pause: bool) {
+        let Some(tx) = lock(&self.runtime).as_ref().map(|h| h.tx.clone()) else {
+            return;
+        };
+        if let Err(TrySendError::Full(input)) = tx.try_send(Input::StripPause(pause)) {
+            let _ = std::thread::Builder::new()
+                .name("strip-pause".into())
+                .spawn(move || {
+                    let _ = tx.send(input);
+                });
+        }
+    }
+
     /// Called by the tray when the popover shows or hides.
     pub fn set_popover_visible(&self, visible: bool) {
         self.visible.store(visible, Ordering::Relaxed);
@@ -306,8 +321,11 @@ pub async fn wizard_start(
     let code = tuya_cloud::UserCode::parse(&user_code).map_err(|_| {
         "Enter the User Code from Smart Life (letters and digits only).".to_string()
     })?;
+    let handle = app.clone();
+    let pause: Arc<dyn Fn(bool) + Send + Sync> =
+        Arc::new(move |p| handle.state::<AppState>().send_strip_pause(p));
     state.wizard.start(
-        Arc::new(RealLan),
+        Arc::new(RealLan(pause)),
         Arc::new(tuya_cloud::UreqTransport::new()),
         code,
         wizard_emit(&app),
@@ -341,14 +359,16 @@ pub async fn strip_identify(state: tauri::State<'_, AppState>, segment: u8) -> R
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
 pub fn wizard_save(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let cfg = state
+    // `Saved` goes out only once the engine has the new strip; if it cannot take the news now, the
+    // file is safe on disk and a restart still picks it up.
+    state
         .wizard
-        .save(&state.strip_path()?, &wizard_emit(&app))?;
-    // The file is safe on disk; if the engine cannot take the news now, a restart still picks it up.
-    state.send(Input::StripChanged(cfg)).map_err(|e| {
-        log::warn!("strip saved but not reloaded: {e}");
-        "Saved. Restart the app to use the new strip.".to_string()
-    })
+        .save(&state.strip_path()?, &wizard_emit(&app), |cfg| {
+            state.send(Input::StripChanged(cfg)).map_err(|e| {
+                log::warn!("strip saved but not reloaded: {e}");
+                "Saved. Restart the app to use the new strip.".to_string()
+            })
+        })
 }
 
 /// The settings view's Quit button; `RunEvent::Exit` then stops the engine.

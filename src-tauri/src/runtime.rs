@@ -30,6 +30,8 @@ pub enum Input {
     StripState(StripStatus),
     /// The wizard saved a new strip file: reconnect with it.
     StripChanged(StripConfig),
+    /// The wizard needs the strip's single LAN connection (`true`) or lets it go (`false`).
+    StripPause(bool),
     Quit,
 }
 
@@ -211,6 +213,8 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     tray_due: Option<u64>,
     /// The OS listed the configured source at the last check (popover show or settings change).
     source_present: bool,
+    /// The wizard holds the strip: the engine keeps running but sends nothing.
+    strip_paused: bool,
 }
 
 /// Paints the menu bar: called with the previous and the new view, only when they differ.
@@ -261,6 +265,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             play_start_us: None,
             tray_due: None,
             source_present,
+            strip_paused: false,
         };
         core.replan(now_us);
         core
@@ -419,6 +424,9 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 self.check_midi_source();
                 self.publisher.touch();
             }
+            Input::StripState(_) if self.strip_paused => {
+                // A report from before the pause: the task will say so again after the resume.
+            }
             Input::StripState(s) => {
                 let connected = matches!(s, StripStatus::Connected { .. });
                 self.strip = s;
@@ -429,6 +437,16 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 self.publisher.touch();
             }
             Input::StripChanged(cfg) => self.strip_changed(cfg),
+            Input::StripPause(pause) => {
+                self.strip_paused = pause;
+                if pause {
+                    self.strip = StripStatus::Connecting;
+                }
+                if let Some(tx) = &self.strip_tx {
+                    let _ = tx.send(StripMsg::Pause(pause));
+                }
+                self.publisher.touch();
+            }
             Input::Quit => return false,
         }
         self.after(now_us);
@@ -873,6 +891,32 @@ mod tests {
         assert!(
             !painted(&mut c, &mut rx).is_empty(),
             "scene resent after reconnect"
+        );
+    }
+
+    #[test]
+    fn pause_lets_the_strip_go_while_the_engine_keeps_running() {
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::StripState(connected()), 1_000);
+        let _ = painted(&mut c, &mut rx);
+        c.handle(Input::StripPause(true), 2_000_000);
+        assert!(matches!(rx.try_recv(), Ok(StripMsg::Pause(true))));
+        assert_eq!(c.status().strip, StripStatus::Connecting);
+        // The task may report a connection it had before it saw the pause: not believed.
+        c.handle(Input::StripState(connected()), 2_100_000);
+        assert_eq!(c.status().strip, StripStatus::Connecting);
+        c.handle(Input::Ui(UiCommand::Lights(false)), 2_200_000);
+        assert!(
+            painted(&mut c, &mut rx).is_empty(),
+            "nothing is sent while paused"
+        );
+        assert!(!c.status().lights_on, "the engine took the command");
+        c.handle(Input::StripPause(false), 3_000_000);
+        assert!(matches!(rx.try_recv(), Ok(StripMsg::Pause(false))));
+        c.handle(Input::StripState(connected()), 3_100_000);
+        assert!(
+            !painted(&mut c, &mut rx).is_empty(),
+            "full scene after the strip is back"
         );
     }
 

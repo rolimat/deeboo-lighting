@@ -79,7 +79,7 @@ function Step({ state }: { state: WizardState }) {
         <StepIdentify
           segments={state.segments}
           onPiece={(n) => void api.stripIdentify(n).catch(swallow)}
-          onSave={() => void api.wizardSave().catch(swallow)}
+          onSave={() => api.wizardSave()}
         />
       );
     case "saved":

@@ -29,6 +29,34 @@ impl fmt::Debug for StripConfig {
     }
 }
 
+impl StripConfig {
+    /// The one rule set for a strip: the store, the file loader and the wizard all use it.
+    ///
+    /// # Errors
+    /// `Invalid` names the first bad field (never its value).
+    pub fn validate(&self) -> Result<(), StoreError> {
+        if !valid_id(&self.id) {
+            return Err(StoreError::Invalid("id"));
+        }
+        if self.name.chars().count() > 63 || self.name.chars().any(char::is_control) {
+            return Err(StoreError::Invalid("name"));
+        }
+        if self.local_key.expose_secret().len() != 16 {
+            return Err(StoreError::Invalid("key"));
+        }
+        if !(1..=60).contains(&self.segments) {
+            return Err(StoreError::Invalid("segments"));
+        }
+        Ok(())
+    }
+}
+
+/// A device id: 1..=64 ASCII alphanumerics.
+#[must_use]
+pub fn valid_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
 /// Never carries file contents or the key.
 #[derive(Debug)]
 pub enum StoreError {
@@ -86,25 +114,15 @@ pub fn load(path: &Path) -> Result<StripConfig, StoreError> {
     if f.version != 1 {
         return Err(StoreError::Invalid("version"));
     }
-    if !(1..=64).contains(&f.id.len()) || !f.id.bytes().all(|b| b.is_ascii_alphanumeric()) {
-        return Err(StoreError::Invalid("id"));
-    }
-    if f.name.chars().count() > 63 || f.name.chars().any(char::is_control) {
-        return Err(StoreError::Invalid("name"));
-    }
-    if f.local_key.len() != 16 {
-        return Err(StoreError::Invalid("key"));
-    }
-    if !(1..=60).contains(&f.segments) {
-        return Err(StoreError::Invalid("segments"));
-    }
-    Ok(StripConfig {
+    let cfg = StripConfig {
         id: f.id,
         name: f.name,
         local_key: SecretString::from(f.local_key),
         segments: f.segments,
         last_ip: f.last_ip,
-    })
+    };
+    cfg.validate()?;
+    Ok(cfg)
 }
 
 /// Atomic: temp file created 0600, written, fsynced, then renamed over `path`.
@@ -112,6 +130,8 @@ pub fn load(path: &Path) -> Result<StripConfig, StoreError> {
 /// # Errors
 /// Any I/O error; `path` needs a parent directory and a file name.
 pub fn save(path: &Path, cfg: &StripConfig) -> io::Result<()> {
+    cfg.validate()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
     let bad = || {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -238,6 +258,31 @@ mod tests {
             load(&d.path().join("missing.json")),
             Err(StoreError::Io)
         ));
+    }
+
+    #[test]
+    fn save_refuses_what_load_would_refuse() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("strip.json");
+        let good = || StripConfig {
+            id: "bf12AB".into(),
+            name: "dj".into(),
+            local_key: SecretString::from(KEY),
+            segments: 4,
+            last_ip: None,
+        };
+        let mut short_key = good();
+        short_key.local_key = SecretString::from(&KEY[..15]);
+        let mut bad_id = good();
+        bad_id.id = "a b".into();
+        let mut no_segments = good();
+        no_segments.segments = 0;
+        for cfg in [short_key, bad_id, no_segments] {
+            assert!(cfg.validate().is_err());
+            assert!(save(&p, &cfg).is_err());
+            assert!(!p.exists(), "nothing is written for an invalid strip");
+        }
+        assert!(good().validate().is_ok());
     }
 
     #[test]

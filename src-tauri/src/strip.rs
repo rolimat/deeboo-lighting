@@ -169,7 +169,7 @@ impl Strip {
 }
 
 /// Gap between messages: the strip loses back-to-back ones (spec §5.3).
-const MESSAGE_GAP: Duration = Duration::from_millis(125);
+pub(crate) const MESSAGE_GAP: Duration = Duration::from_millis(125);
 const MAX_SEGMENTS: u8 = 60;
 const MAX_FRAME: usize = 4096;
 const TUYA_PORT: u16 = 6668;
@@ -398,6 +398,9 @@ pub enum StripMsg {
     Connect,
     /// A new strip file: drop the connection and connect with this config.
     Configure(StripConfig),
+    /// `true`: drop the connection and stay away (the wizard needs the strip, which accepts one
+    /// LAN client); `false`: connect again.
+    Pause(bool),
 }
 
 /// The status a failed connection shows: a rejected key and a missing ID get their own.
@@ -409,11 +412,18 @@ fn status_of(e: &StripError) -> StripStatus {
     }
 }
 
-/// The next config sent to the task; paints and retries meanwhile are stale and dropped.
-async fn wait_configure(rx: &mut UnboundedReceiver<StripMsg>) -> Option<StripConfig> {
+/// What matters while there is no connection; paints and retries meanwhile are stale and dropped.
+enum Control {
+    Configure(StripConfig),
+    Pause(bool),
+}
+
+async fn next_control(rx: &mut UnboundedReceiver<StripMsg>) -> Option<Control> {
     loop {
-        if let StripMsg::Configure(c) = rx.recv().await? {
-            return Some(c);
+        match rx.recv().await? {
+            StripMsg::Configure(c) => return Some(Control::Configure(c)),
+            StripMsg::Pause(p) => return Some(Control::Pause(p)),
+            StripMsg::Paint(_) | StripMsg::Connect => {}
         }
     }
 }
@@ -432,11 +442,21 @@ pub async fn run<P, Fut>(
 {
     let mut cfg = initial.map(Arc::new);
     let mut painter = None;
+    let mut paused = false;
     'connect: loop {
+        // Paused: no connection and no reports; only a new config (kept) or the resume matter.
+        while paused {
+            match next_control(&mut rx).await {
+                Some(Control::Configure(new)) => cfg = Some(Arc::new(new)),
+                Some(Control::Pause(p)) => paused = p,
+                None => return,
+            }
+        }
         let Some(c) = cfg.clone() else {
             report(StripStatus::NotConfigured);
-            match wait_configure(&mut rx).await {
-                Some(new) => cfg = Some(Arc::new(new)),
+            match next_control(&mut rx).await {
+                Some(Control::Configure(new)) => cfg = Some(Arc::new(new)),
+                Some(Control::Pause(p)) => paused = p,
                 None => return,
             }
             continue;
@@ -445,12 +465,16 @@ pub async fn run<P, Fut>(
             report(StripStatus::Connecting);
             let attempt = tokio::select! {
                 r = connect(c.clone()) => Ok(r),
-                new = wait_configure(&mut rx) => Err(new),
+                new = next_control(&mut rx) => Err(new),
             };
             match attempt {
                 Err(None) => return,
-                Err(Some(new)) => {
+                Err(Some(Control::Configure(new))) => {
                     cfg = Some(Arc::new(new));
+                    continue;
+                }
+                Err(Some(Control::Pause(p))) => {
+                    paused = p;
                     continue;
                 }
                 Ok(Ok(p)) => {
@@ -458,12 +482,17 @@ pub async fn run<P, Fut>(
                     // `Connected`), except a newer config.
                     let mut newer = None;
                     while let Ok(m) = rx.try_recv() {
-                        if let StripMsg::Configure(new) = m {
-                            newer = Some(new);
+                        match m {
+                            StripMsg::Configure(new) => newer = Some(new),
+                            StripMsg::Pause(p) => paused = p,
+                            StripMsg::Paint(_) | StripMsg::Connect => {}
                         }
                     }
+                    let restart = newer.is_some() || paused;
                     if let Some(new) = newer {
                         cfg = Some(Arc::new(new));
+                    }
+                    if restart {
                         continue;
                     }
                     painter = Some(p);
@@ -484,6 +513,13 @@ pub async fn run<P, Fut>(
             match (&painter, msg) {
                 (_, StripMsg::Configure(new)) => {
                     cfg = Some(Arc::new(new));
+                    painter = None;
+                    continue 'connect;
+                }
+                (Some(_), StripMsg::Pause(false)) => {}
+                // Dropping the painter closes the connection.
+                (_, StripMsg::Pause(p)) => {
+                    paused = p;
                     painter = None;
                     continue 'connect;
                 }
@@ -827,6 +863,10 @@ mod tests {
             paused(identify_via(&rec, 11, 10)),
             Err(StripError::Encode)
         ));
+        assert!(
+            rec.0.lock().unwrap().is_empty(),
+            "nothing reached the strip"
+        );
     }
 
     // --- reconnecting, classification and the stale-address fallback ---
@@ -964,6 +1004,74 @@ mod tests {
                 segments: 10
             })
         );
+    }
+
+    #[test]
+    fn pause_drops_the_connection_and_resume_connects_with_the_latest_config() {
+        let dialled = Arc::new(Mutex::new(Vec::<String>::new()));
+        let d = Arc::clone(&dialled);
+        let connected = |n: &str| StripStatus::Connected {
+            name: n.into(),
+            segments: 10,
+        };
+        let r = drive_task(
+            Some(cfg("old", None)),
+            move |c| {
+                d.lock().unwrap().push(c.name.clone());
+                Box::pin(async { Ok(Fake(Arc::new(AtomicUsize::new(0)))) })
+            },
+            async |tx, _| {
+                settle().await;
+                tx.send(StripMsg::Pause(true)).unwrap_or_default();
+                settle().await;
+                // While paused nothing dials: retries and paints are stale, a new config is kept.
+                tx.send(StripMsg::Connect).unwrap_or_default();
+                tx.send(StripMsg::Configure(cfg("new", None)))
+                    .unwrap_or_default();
+                settle().await;
+                tx.send(StripMsg::Pause(false)).unwrap_or_default();
+                settle().await;
+            },
+        );
+        assert_eq!(*dialled.lock().unwrap(), ["old", "new"]);
+        assert_eq!(
+            r,
+            vec![
+                StripStatus::Connecting,
+                connected("old"),
+                StripStatus::Connecting,
+                connected("new")
+            ]
+        );
+    }
+
+    #[test]
+    fn pause_wins_over_a_connection_attempt_in_flight() {
+        let dials = Arc::new(AtomicUsize::new(0));
+        let d = Arc::clone(&dials);
+        let r = drive_task(
+            Some(cfg("dj", None)),
+            move |_| {
+                if d.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Box::pin(std::future::pending())
+                } else {
+                    Box::pin(async { Ok(Fake(Arc::new(AtomicUsize::new(0)))) })
+                }
+            },
+            async |tx, _| {
+                settle().await;
+                tx.send(StripMsg::Pause(true)).unwrap_or_default();
+                settle().await;
+                assert_eq!(
+                    dials.load(Ordering::SeqCst),
+                    1,
+                    "no second dial while paused"
+                );
+                tx.send(StripMsg::Pause(false)).unwrap_or_default();
+                settle().await;
+            },
+        );
+        assert!(matches!(r.last(), Some(StripStatus::Connected { .. })));
     }
 
     struct FakeLink {
