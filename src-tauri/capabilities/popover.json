@@ -11,6 +11,7 @@
     "allow-list-audio-inputs",
     "allow-ui-command",
     "allow-quit",
+    "allow-open-editor",
     "core:window:allow-set-size",
     "core:event:allow-listen",
     "core:event:allow-unlisten"

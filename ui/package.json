@@ -15,17 +15,20 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@tailwindcss/vite": "4.3.5",
     "@tauri-apps/cli": "^2.12.4",
     "eslint": "^10.14.0",
     "globals": "^17.14.0",
     "jsdom": "^31.0.0",
     "prettier": "^3.9.10",
+    "tailwindcss": "4.3.5",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.72.1",
     "vite": "^8.3.6",
     "vitest": "^5.1.0"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.12.4"
+    "@tauri-apps/api": "^2.12.4",
+    "preact": "11.2.0"
   }
 }

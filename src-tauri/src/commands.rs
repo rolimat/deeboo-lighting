@@ -300,20 +300,27 @@ mod tests {
             .step_by(2)
             .map(|c| format!("allow-{}", c.replace('_', "-")))
             .collect();
-        // The popover capability grants exactly those commands (plus event listening).
-        let cap: serde_json::Value =
-            serde_json::from_str(include_str!("../capabilities/popover.json")).unwrap_or_default();
-        let mut granted: Vec<String> = cap["permissions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v.as_str())
-            .filter(|p| p.starts_with("allow-"))
-            .map(String::from)
-            .collect();
-        commands.sort();
+        // The popover and editor capabilities together grant exactly those commands.
+        let mut granted: Vec<String> = Vec::new();
+        for cap in [
+            include_str!("../capabilities/popover.json"),
+            include_str!("../capabilities/editor.json"),
+        ] {
+            let cap: serde_json::Value = serde_json::from_str(cap).unwrap_or_default();
+            granted.extend(
+                cap["permissions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str())
+                    .filter(|p| p.starts_with("allow-"))
+                    .map(String::from),
+            );
+        }
         granted.sort();
-        assert_eq!(commands.len(), 7);
+        granted.dedup();
+        commands.sort();
+        assert_eq!(commands.len(), 8);
         assert_eq!(granted, commands);
     }
 

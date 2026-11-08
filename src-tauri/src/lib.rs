@@ -6,6 +6,7 @@ mod audio;
 mod clock;
 mod commands;
 mod devices;
+mod editor_window;
 mod lan;
 mod midi;
 mod qr;
@@ -42,7 +43,8 @@ pub fn run() -> tauri::Result<()> {
             commands::list_midi_sources,
             commands::list_audio_inputs,
             commands::ui_command,
-            commands::quit
+            commands::quit,
+            editor_window::open_editor
         ])
         .setup(|app| {
             tray::setup(app)?;
