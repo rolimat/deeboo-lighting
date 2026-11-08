@@ -161,3 +161,14 @@ it("preview_generated_shows_in_simulation", async () => {
   expect(api.previewGenerated).toHaveBeenCalledWith("rhythm");
   expect(root.querySelector("svg[aria-label='Simulation']")).not.toBeNull();
 });
+
+it("preview_is_cleared_when_switching_sets", async () => {
+  vi.mocked(api.previewGenerated).mockResolvedValue({
+    name: "Generated",
+    moment: "rhythm",
+    steps: [{ len: "one", roles: [] }],
+  });
+  await click(q("button[aria-label='Preview generated Rhythm']"));
+  await click(button("Club"));
+  expect(root.querySelector("svg[aria-label='Simulation']")).toBeNull();
+});

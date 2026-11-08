@@ -51,7 +51,7 @@ export function SetEditor() {
   const [sets, setSets] = useState<LibrarySet[]>([]);
   const [sel, setSel] = useState(0);
   const [error, setError] = useState("");
-  const [preview, setPreview] = useState<{ key: string; seq: Sequence } | null>(null);
+  const [preview, setPreview] = useState<{ set: number; key: string; seq: Sequence } | null>(null);
 
   useEffect(() => {
     api.getLibrary().then(
@@ -204,7 +204,11 @@ export function SetEditor() {
                       aria-label={`Preview generated ${label}`}
                       onClick={async () => {
                         try {
-                          setPreview({ key, seq: await api.previewGenerated(seqMoment) });
+                          setPreview({
+                            set: current.id,
+                            key,
+                            seq: await api.previewGenerated(seqMoment),
+                          });
                           setError("");
                         } catch (e) {
                           setError(String(e));
@@ -215,7 +219,7 @@ export function SetEditor() {
                       Preview
                     </button>
                   </fieldset>
-                  {preview?.key === key && pal && (
+                  {preview?.set === current.id && preview.key === key && pal && (
                     <Simulation sequence={preview.seq} pieces={lib.shape.pieces} palette={pal} />
                   )}
                   <fieldset aria-label={`${label} palettes`} class="flex flex-wrap gap-3">
