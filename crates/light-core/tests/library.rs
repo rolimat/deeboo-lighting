@@ -167,6 +167,14 @@ fn validate_rejects_each_limit() {
             }),
         ),
         (
+            "sets[0].rhythm.sequences",
+            Box::new(|l| l.sets[0].rhythm.sequences = vec![SeqRef::Generated; 65]),
+        ),
+        (
+            "sets[0].calm.palettes",
+            Box::new(|l| l.sets[0].calm.palettes = vec![l.palettes[0].0; 33]),
+        ),
+        (
             "sets[0].rhythm.interval",
             Box::new(|l| l.sets[0].rhythm.interval = Interval::Bars(0)),
         ),
@@ -247,4 +255,24 @@ fn unknown_fields_are_refused() {
     let mut v = serde_json::to_value(Library::builtin(4)).expect("ser");
     v["shape"]["pieces"][0]["extra"] = 1.into();
     assert!(serde_json::from_value::<Library>(v).is_err());
+}
+
+#[test]
+fn resize_segments_pads_with_off_and_truncates() {
+    use light_core::model::Role;
+    for m in [4u8, 12, 60] {
+        let mut l = Library::builtin(10);
+        l.shape = Shape::row(m);
+        assert!(l.validate().is_err(), "roles still have 10 entries (m={m})");
+        let before = l.clone();
+        l.resize_segments(m);
+        assert_eq!(l.validate(), Ok(()), "m={m}");
+        for ((_, a), (_, b)) in before.sequences.iter().zip(&l.sequences) {
+            for (x, y) in a.steps.iter().zip(&b.steps) {
+                let keep = usize::from(m).min(10);
+                assert_eq!(x.roles[..keep], y.roles[..keep]);
+                assert!(y.roles[keep..].iter().all(|r| *r == Role::Off));
+            }
+        }
+    }
 }

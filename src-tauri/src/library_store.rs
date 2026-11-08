@@ -9,7 +9,10 @@ use std::collections::HashMap;
 use light_core::library::{Library, SeqRef};
 
 /// A hand-edited multi-GB file must not blow memory: larger files count as invalid.
-const MAX_BYTES: u64 = 1 << 20;
+/// The largest library `validate` accepts is ~2.3 MB compact.
+const MAX_BYTES: u64 = 4 << 20;
+/// Kept-aside invalid files: `.bad`, `.bad.1` .. `.bad.4`.
+const BAD_KEPT: u32 = 5;
 const BACKUPS: u32 = 5;
 
 fn sibling(path: &Path, suffix: &str) -> PathBuf {
@@ -26,13 +29,41 @@ fn read_capped(path: &Path) -> io::Result<Option<String>> {
     Ok((text.len() as u64 <= MAX_BYTES).then_some(text))
 }
 
+/// `serde_json`'s own message echoes the offending value; only its kind and position are safe to log.
+fn describe(e: &serde_json::Error) -> String {
+    format!("{:?} at {}:{}", e.classify(), e.line(), e.column())
+}
+
+/// The first free `.bad`, `.bad.1`, ...; when all are taken, the oldest one (it is overwritten).
+fn bad_slot(path: &Path) -> PathBuf {
+    let slots: Vec<PathBuf> = (0..BAD_KEPT)
+        .map(|i| {
+            sibling(
+                path,
+                &if i == 0 {
+                    ".bad".into()
+                } else {
+                    format!(".bad.{i}")
+                },
+            )
+        })
+        .collect();
+    let age = |p: &PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    slots
+        .iter()
+        .find(|p| !p.exists())
+        .or_else(|| slots.iter().min_by_key(|p| age(p)))
+        .cloned()
+        .unwrap_or_else(|| sibling(path, ".bad"))
+}
+
 /// Built-ins for `segments` on a missing, corrupt or invalid file. A valid library built for a
 /// different segment count is kept as is (the engine falls back, see plan 5).
 #[must_use]
 pub fn load(path: &Path, segments: u8) -> Library {
     let parsed = match read_capped(path) {
         Ok(Some(t)) => serde_json::from_str::<Library>(&t)
-            .map_err(|e| e.to_string())
+            .map_err(|e| describe(&e))
             .and_then(|l| l.validate().map(|()| l).map_err(|e| e.to_string())),
         Ok(None) => Err("file too large".to_string()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Library::builtin(segments),
@@ -41,7 +72,7 @@ pub fn load(path: &Path, segments: u8) -> Library {
     parsed.unwrap_or_else(|e| {
         log::warn!("library invalid, using built-ins: {e}");
         // Moved, not copied: a huge file is not duplicated, and the next save cannot overwrite it.
-        if let Err(e) = std::fs::rename(path, sibling(path, ".bad")) {
+        if let Err(e) = std::fs::rename(path, bad_slot(path)) {
             log::warn!("cannot keep the invalid library aside: {e}");
         }
         Library::builtin(segments)
@@ -58,7 +89,7 @@ pub fn save(path: &Path, lib: &Library) -> io::Result<()> {
     }
     let tmp = sibling(path, ".tmp");
     let mut f = std::fs::File::create(&tmp)?;
-    f.write_all(&serde_json::to_vec_pretty(lib)?)?;
+    f.write_all(&serde_json::to_vec(lib)?)?;
     f.sync_all()?;
     drop(f);
     if path.exists() {
@@ -156,7 +187,7 @@ mod tests {
             with(|v| v["shape"]["pieces"][0]["x"] = json!(null)),
             with(|v| v["extra"] = json!(1)),
             "not json".to_string(),
-            " ".repeat(2 << 20),
+            " ".repeat(5 << 20),
         ];
         for text in tampered {
             let (dir, p) = tmp();
@@ -167,6 +198,63 @@ mod tests {
                 text
             );
         }
+    }
+
+    #[test]
+    fn largest_valid_library_survives_a_save_and_reload() {
+        let mut lib = Library::builtin(60);
+        let seq = lib.sequences[0].1.clone();
+        let mut big = seq.clone();
+        big.steps = vec![seq.steps[0].clone(); light_core::library::MAX_STEPS];
+        lib.sequences = (1..=64).map(|i| (i, big.clone())).collect();
+        lib.sets[0].rhythm.sequences = vec![SeqRef::Id(1)];
+        lib.sets[0].calm.sequences = vec![SeqRef::Id(1)];
+        lib.sets[0].buildup.sequences = vec![SeqRef::Id(1)];
+        assert_eq!(lib.validate(), Ok(()));
+        let (_d, p) = tmp();
+        save(&p, &lib).unwrap();
+        assert!(
+            std::fs::metadata(&p).unwrap().len() > 1 << 20,
+            "past the old cap"
+        );
+        assert_eq!(load(&p, 10), lib);
+    }
+
+    #[test]
+    fn parse_errors_are_described_without_the_value() {
+        let e = serde_json::from_str::<Library>(r#"{"schemaVersion":"HUNTER2"}"#).unwrap_err();
+        assert!(
+            e.to_string().contains("HUNTER2"),
+            "premise: serde echoes the value"
+        );
+        assert!(!describe(&e).contains("HUNTER2"), "{}", describe(&e));
+    }
+
+    #[test]
+    fn later_invalid_libraries_do_not_overwrite_earlier_ones() {
+        let (dir, p) = tmp();
+        let bad = |n: u32| {
+            std::fs::write(&p, format!("not json {n}")).unwrap();
+            let _ = load(&p, 10);
+        };
+        (0..5).for_each(bad);
+        let read = |s: &str| std::fs::read_to_string(dir.path().join(s));
+        assert_eq!(read("library.json.bad").unwrap(), "not json 0");
+        assert_eq!(read("library.json.bad.1").unwrap(), "not json 1");
+        assert_eq!(read("library.json.bad.4").unwrap(), "not json 4");
+        (5..8).for_each(bad);
+        let kept: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".bad")
+            })
+            .collect();
+        assert_eq!(kept.len(), 5, "capped");
+        assert!(!dir.path().join("library.json.bad.5").exists());
     }
 
     #[test]

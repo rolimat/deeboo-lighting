@@ -236,10 +236,21 @@ impl Library {
         u8::try_from(self.shape.pieces.len()).unwrap_or(u8::MAX)
     }
 
+    /// Gives every step exactly `m` roles: missing ones are `Off`, extra ones are dropped. Used when
+    /// the shape's piece count changes (a re-paired strip); the shape itself is not touched.
+    pub fn resize_segments(&mut self, m: u8) {
+        for (_, s) in &mut self.sequences {
+            for st in &mut s.steps {
+                st.roles.resize(usize::from(m), crate::model::Role::Off);
+            }
+        }
+    }
+
     /// Independent of the strip's current segment count: a re-paired strip keeps the library.
     ///
     /// # Errors
     /// The first violated limit, naming the field.
+    #[allow(clippy::too_many_lines)] // one flat list of limits
     pub fn validate(&self) -> Result<(), LibraryError> {
         if self.schema_version != SCHEMA_VERSION {
             return err("schema_version", "is not supported");
@@ -308,6 +319,12 @@ impl Library {
                 let (Interval::Beats(v) | Interval::Bars(v) | Interval::Phrases(v)) = m.interval;
                 if v == 0 {
                     return err(format!("sets[{i}].{n}.interval"), "must be at least 1");
+                }
+                if m.sequences.len() > MAX_SEQUENCES {
+                    return err(format!("sets[{i}].{n}.sequences"), "has too many entries");
+                }
+                if m.palettes.len() > MAX_PALETTES {
+                    return err(format!("sets[{i}].{n}.palettes"), "has too many entries");
                 }
                 if m.sequences.is_empty() {
                     return err(
