@@ -18,8 +18,10 @@ use light_core::library::Library;
 use light_core::model::{Sequence, resolve};
 use light_core::scene;
 
-/// The most the app waits at exit for the wizard to revoke its cloud session.
-const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// The most the app waits at exit for the wizard to revoke its cloud session: the request already in
+/// flight (10 s timeout) plus the revoke (10 s). It returns as soon as the run ends, and at once
+/// when no wizard runs, so only a hanging network makes quitting slow.
+const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(22);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
