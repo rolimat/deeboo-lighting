@@ -61,7 +61,7 @@ perf SECONDS="60":
 
 # Fails (exit 1, line numbers only) if a session log holds a secret shape.
 log-scan FILE KEY="":
-    scripts/log-scan.sh {{FILE}} {{KEY}}
+    scripts/log-scan.sh {{quote(FILE)}} {{ if KEY == "" { "" } else { quote(KEY) } }}
 
 # Frees build caches (host target/, the Docker target volume, Docker build cache); all rebuildable.
 clean-cache:
