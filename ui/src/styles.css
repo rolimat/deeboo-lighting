@@ -47,3 +47,189 @@ body {
 .strip-status {
   color: var(--dim);
 }
+
+[hidden] {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+button[aria-pressed="true"] {
+  background: var(--green-dark);
+  border-color: var(--green);
+}
+
+.view-main,
+.view-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.header-row .header {
+  margin: 0;
+}
+
+.gear {
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-size: 16px;
+}
+
+.glyph {
+  pointer-events: none;
+}
+
+.tempo {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.bpm {
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.beats {
+  display: flex;
+  gap: 4px;
+}
+
+.beat {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border);
+}
+
+.beat.lit {
+  background: var(--green);
+}
+
+.beat.accent.lit {
+  background: var(--text);
+}
+
+.bar {
+  grid-column: 1 / -1;
+  color: var(--dim);
+}
+
+.segmented {
+  display: flex;
+  gap: 6px;
+}
+
+.segmented button {
+  flex: 1;
+}
+
+.moment-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.predicted {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.field-row,
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field-title {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.back {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  font-weight: 700;
+}
+
+.quit {
+  color: var(--red);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.dot[data-state="ok"] {
+  background: var(--green);
+}
+
+.dot[data-state="bad"] {
+  background: var(--red);
+}
+
+.level {
+  margin-left: auto;
+  width: 48px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.level-fill {
+  display: block;
+  height: 100%;
+  background: var(--green);
+}
+
+.error {
+  margin-top: 8px;
+  color: var(--red);
+}

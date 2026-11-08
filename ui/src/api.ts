@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type StripStatus =
@@ -48,6 +49,9 @@ export const api = {
   listMidiSources: (): Promise<string[]> => invoke("list_midi_sources"),
   listAudioInputs: (): Promise<string[]> => invoke("list_audio_inputs"),
   uiCommand: (cmd: UiCommand): Promise<void> => invoke("ui_command", { cmd }),
+  quit: (): Promise<void> => invoke("quit"),
+  setWindowHeight: (height: number): Promise<void> =>
+    getCurrentWindow().setSize(new LogicalSize(340, height)),
   /** The backend pushes the whole status on every change, only while the popover is visible (event `status`). */
   onStatus: (cb: (status: Status) => void): Promise<UnlistenFn> =>
     listen<Status>("status", (e) => cb(e.payload)),

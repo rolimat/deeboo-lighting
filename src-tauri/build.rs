@@ -8,6 +8,7 @@ const COMMANDS: &[&str] = &[
     "list_midi_sources",
     "list_audio_inputs",
     "ui_command",
+    "quit",
 ];
 
 fn main() {

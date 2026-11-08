@@ -28,7 +28,8 @@ pub fn run() -> tauri::Result<()> {
             commands::save_settings,
             commands::list_midi_sources,
             commands::list_audio_inputs,
-            commands::ui_command
+            commands::ui_command,
+            commands::quit
         ])
         .setup(|app| {
             tray::setup(app)?;

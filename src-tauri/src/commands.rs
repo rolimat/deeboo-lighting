@@ -257,6 +257,13 @@ pub fn ui_command(state: tauri::State<'_, AppState>, cmd: UiCommandDto) -> Resul
     state.send(Input::Ui(cmd.into()))
 }
 
+/// The settings view's Quit button; `RunEvent::Exit` then stops the engine.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
+pub fn quit(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,7 +313,7 @@ mod tests {
             .collect();
         commands.sort();
         granted.sort();
-        assert_eq!(commands.len(), 6);
+        assert_eq!(commands.len(), 7);
         assert_eq!(granted, commands);
     }
 
