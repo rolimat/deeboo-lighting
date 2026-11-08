@@ -663,16 +663,17 @@ mod tests {
 
     #[test]
     fn kick_without_bass_does_not_end_a_break() {
-        // Groove 0..32, break 32..48, the kick returns at full level at 48 without bass.
+        // Groove 0..32, break 32..48, the kick returns at full level at 48 without bass; the bass at 84.
         let m = pitched(
-            120,
+            140,
             |k| if (32..48).contains(&k) { 0.0 } else { 1.0 },
-            |k| !(32..48).contains(&k) && k < 48 || k >= 64,
+            |k| !(32..84).contains(&k),
         );
         assert_eq!(m[33], Moment::Calm, "{m:?}");
-        assert!(m[33..64].iter().all(|&m| m == Moment::Calm), "{m:?}");
-        // The bass comes back at 64: the groove is whole again, so the slow return takes it.
-        assert!(m[100..].iter().all(|&m| m == Moment::Rhythm), "{m:?}");
+        // Without the sub check in `near`, 24 near beats would bring Rhythm back around beat 75.
+        assert!(m[33..84].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        // The bass comes back at 84: the groove is whole again, so the slow return takes it.
+        assert!(m[130..].iter().all(|&m| m == Moment::Rhythm), "{m:?}");
     }
 
     #[test]
@@ -865,6 +866,77 @@ mod tests {
         assert_eq!(m[66], Moment::Calm, "{m:?}");
         assert!(m[66..83].iter().all(|&m| m == Moment::Calm), "{m:?}");
         assert_eq!(m[83], Moment::BuildUp, "{m:?}");
+    }
+
+    #[test]
+    fn a_drop_inside_the_first_beats_of_a_buildup_is_shown() {
+        // Build-up from Rhythm at 41; the kick is back at full level from 42: a drop 2 beats in.
+        let lens = beats(128.0, 52);
+        let sig = synth_gain(
+            &lens,
+            |k| if (40..42).contains(&k) { 0.3 } else { 1.0 },
+            |_| true,
+            |k| if (40..42).contains(&k) { 10.0 } else { 0.0 },
+        );
+        let m = moments(&drive(&sig, &lens));
+        assert_eq!(m[41], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[43], Moment::Rhythm, "{m:?}");
+    }
+
+    #[test]
+    fn a_riser_right_after_the_cap_does_not_start_a_buildup() {
+        // Up for 87 beats, the cap ends it at 137; a riser completes at 143 (and again at 147).
+        let m = ducked(160, |k| match k {
+            0..=39 | 128..=131 => 0.0,
+            132..=135 => 3.0,
+            136..=139 => 6.0,
+            _ => 10.0,
+        });
+        assert_eq!(m[136], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[137], Moment::Calm, "{m:?}");
+        assert!(m[137..153].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
+    fn a_long_groove_without_hats_does_not_drag_the_reference_down() {
+        // Hats 20 dB down is below `learn_db`: those beats stay out of the references.
+        let o = groove(140, |_| true, |k| if k < 32 { 0.0 } else { -20.0 });
+        let f = o[139].1.unwrap();
+        assert!(f.high_ref_db - f.high_db > 15.0, "{f:?}");
+    }
+
+    #[test]
+    fn a_weak_kick_at_the_start_of_the_track_is_not_a_teaser() {
+        // The track starts in Rhythm: that is not a return, so a weak kick after 10 beats stays Rhythm.
+        let lens = beats(128.0, 24);
+        let sig = synth_gain(&lens, |k| if k < 10 { 1.0 } else { 0.4 }, |_| true, |_| 0.0);
+        let m = moments(&drive(&sig, &lens));
+        assert!(m.iter().all(|&m| m == Moment::Rhythm), "{m:?}");
+    }
+
+    #[test]
+    fn a_riser_with_a_dip_is_not_a_buildup() {
+        // Bars at -20, -8, -14, -4 dB rise 16 dB overall, the last near the groove, but not monotonically.
+        let o = groove(
+            66,
+            |k| k < 32,
+            |k| match k {
+                0..=31 => 0.0,
+                32..=47 => -20.0,
+                48..=51 => -8.0,
+                52..=55 => -14.0,
+                _ => -4.0,
+            },
+        );
+        let m = moments(&o);
+        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
+    fn highs_above_the_groove_but_flat_are_not_a_buildup() {
+        // Highs 3.5 dB over the reference from before the break, flat for 8 bars: no approach.
+        let m = moments(&groove(90, |k| k < 32, |k| if k < 30 { 0.0 } else { 3.5 }));
+        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
     }
 
     #[test]
