@@ -12,7 +12,7 @@ and paints the strip accordingly.
 ## Install
 Download the `.dmg` and `SHA256SUMS` from the GitHub Releases page. The app is ad-hoc signed but not notarized, so macOS warns the first time.
 1. **Verify the download (recommended).** In the folder with both files run `shasum -a 256 -c SHA256SUMS`, or
-   `gh attestation verify "Deeboo Lighting_<version>_aarch64.dmg" --repo rolimat/deeboo-lighting`.
+   `gh attestation verify Deeboo-Lighting_<version>_aarch64.dmg --repo rolimat/deeboo-lighting`.
 2. Open the DMG and drag the app to Applications.
 3. Right-click the app and choose **Open**, then **Open** again. If macOS only offers Done, go to
    **System Settings → Privacy & Security** and click **Open Anyway**.
