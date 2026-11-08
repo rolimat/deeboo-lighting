@@ -530,6 +530,34 @@ pub fn message_counts(
     message_counts_of(&state.library(), &sequence, palette_id)
 }
 
+/// One example of what Generated would play for `moment`, built for the saved shape and a fresh seed.
+fn preview_generated_of(lib: &Library, moment: Moment, seed: u64) -> Result<Sequence, String> {
+    let n = lib.segments();
+    let groups = light_core::groups::groups(&lib.shape);
+    let seq = light_core::generator::Generator::new(seed).next(moment, &groups, n);
+    seq.validate(n)
+        .map_err(|_| "Could not generate a sequence for this strip.".to_string())?;
+    Ok(seq)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn preview_generated(
+    state: tauri::State<'_, AppState>,
+    moment: MomentDto,
+) -> Result<Sequence, String> {
+    let moment = match moment {
+        MomentDto::Rhythm => Moment::Rhythm,
+        MomentDto::Calm => Moment::Calm,
+        MomentDto::BuildUp => Moment::BuildUp,
+    };
+    // Wall-clock microseconds: any seed works, it only has to differ between clicks.
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |d| u64::try_from(d.as_micros()).unwrap_or(1));
+    preview_generated_of(&state.library(), moment, seed)
+}
+
 #[tauri::command]
 pub async fn list_midi_sources() -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(crate::devices::midi_sources)
@@ -709,7 +737,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 22);
+        assert_eq!(commands.len(), 23);
         assert_eq!(granted, commands);
     }
 
@@ -813,6 +841,18 @@ mod tests {
             message_counts_of(&lib, &long, 1).is_err(),
             "IPC input is capped"
         );
+    }
+
+    #[test]
+    fn preview_generated_validates_for_current_n() {
+        for n in [1u8, 4, 10, 16] {
+            let lib = Library::builtin(n);
+            for m in [Moment::Rhythm, Moment::Calm, Moment::BuildUp] {
+                let seq = preview_generated_of(&lib, m, 42 + u64::from(n)).unwrap();
+                assert_eq!(seq.moment, m);
+                assert!(seq.validate(n).is_ok());
+            }
+        }
     }
 
     fn lib_state() -> (tempfile::TempDir, AppState) {

@@ -3,7 +3,9 @@ import { act } from "preact/test-utils";
 import { render } from "preact";
 import type { Library, MomentSet } from "../api";
 
-vi.mock("../api", () => ({ api: { getLibrary: vi.fn(), saveLibrary: vi.fn() } }));
+vi.mock("../api", () => ({
+  api: { getLibrary: vi.fn(), saveLibrary: vi.fn(), previewGenerated: vi.fn() },
+}));
 import { api } from "../api";
 import { SetEditor } from "./SetEditor";
 
@@ -92,9 +94,9 @@ afterEach(() => {
 it("set_lists_only_matching_moment_sequences", () => {
   const names = (m: string) =>
     [...group(m).querySelectorAll("input[type=checkbox]")].map((c) => c.getAttribute("aria-label"));
-  expect(names("Rhythm sequences")).toEqual(["Pulse"]);
-  expect(names("Calm sequences")).toEqual(["Drift"]);
-  expect(names("Build-up sequences")).toEqual(["Rise"]);
+  expect(names("Rhythm sequences")).toEqual(["Pulse", "Generated"]);
+  expect(names("Calm sequences")).toEqual(["Drift", "Generated"]);
+  expect(names("Build-up sequences")).toEqual(["Rise", "Generated"]);
 });
 
 it("saves_edits_and_keeps_generated", async () => {
@@ -134,4 +136,28 @@ it("save_keeps_the_popovers_active_set_unless_it_was_deleted", async () => {
   await click(button("Delete set"));
   await click(button("Save"));
   expect(vi.mocked(api.saveLibrary).mock.calls[1]?.[0].activeSet).toBe(1);
+});
+
+it("generated_entry_toggles", async () => {
+  const gen = (m: string) =>
+    q<HTMLInputElement>(`fieldset[aria-label='${m} sequences'] input[aria-label='Generated']`);
+  expect(gen("Rhythm").checked).toBe(true);
+  expect(gen("Calm").checked).toBe(false);
+  await click(gen("Rhythm"));
+  await click(gen("Calm"));
+  await click(button("Save"));
+  const s = vi.mocked(api.saveLibrary).mock.calls[0]?.[0].sets[0];
+  expect(s?.rhythm.sequences).toEqual([{ id: 10 }]);
+  expect(s?.calm.sequences).toEqual([{ id: 11 }, "generated"]);
+});
+
+it("preview_generated_shows_in_simulation", async () => {
+  vi.mocked(api.previewGenerated).mockResolvedValue({
+    name: "Generated",
+    moment: "rhythm",
+    steps: [{ len: "one", roles: [] }],
+  });
+  await click(q("button[aria-label='Preview generated Rhythm']"));
+  expect(api.previewGenerated).toHaveBeenCalledWith("rhythm");
+  expect(root.querySelector("svg[aria-label='Simulation']")).not.toBeNull();
 });

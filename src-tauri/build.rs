@@ -22,6 +22,7 @@ const COMMANDS: &[&str] = &[
     "identify_segment",
     "wizard_save",
     "message_counts",
+    "preview_generated",
     "detection_watch",
     "set_detection_thresholds",
 ];

@@ -1,5 +1,13 @@
 import { useEffect, useState } from "preact/hooks";
-import { api, type Interval, type Library, type LibrarySet, type MomentSet } from "../api";
+import { Simulation } from "../sequences/Simulation";
+import {
+  api,
+  type Interval,
+  type Library,
+  type LibrarySet,
+  type MomentSet,
+  type Sequence,
+} from "../api";
 
 const MAX_SETS = 16;
 const NAME_MSG = "Name must be 1 to 63 characters, without control characters.";
@@ -43,6 +51,7 @@ export function SetEditor() {
   const [sets, setSets] = useState<LibrarySet[]>([]);
   const [sel, setSel] = useState(0);
   const [error, setError] = useState("");
+  const [preview, setPreview] = useState<{ key: string; seq: Sequence } | null>(null);
 
   useEffect(() => {
     api.getLibrary().then(
@@ -140,6 +149,8 @@ export function SetEditor() {
             </div>
             {MOMENTS.map(([key, seqMoment, label]) => {
               const m = current[key];
+              const pal = (lib.palettes.find(([id]) => id === m.palettes[0]) ??
+                lib.palettes[0])?.[1];
               return (
                 <div key={key} class="space-y-2 rounded-card border border-border p-3">
                   <h2>{label}</h2>
@@ -168,7 +179,45 @@ export function SetEditor() {
                           {s.name}
                         </label>
                       ))}
+                    <label class="flex items-center gap-1">
+                      <input
+                        type="checkbox"
+                        aria-label="Generated"
+                        checked={m.sequences.includes("generated")}
+                        onChange={(e) => {
+                          const on = e.currentTarget.checked;
+                          editMoment(key, (x) => ({
+                            ...x,
+                            sequences: toggle(
+                              x.sequences,
+                              "generated" as const,
+                              on,
+                              (r) => r === "generated",
+                            ),
+                          }));
+                        }}
+                      />
+                      Generated
+                    </label>
+                    <button
+                      type="button"
+                      aria-label={`Preview generated ${label}`}
+                      onClick={async () => {
+                        try {
+                          setPreview({ key, seq: await api.previewGenerated(seqMoment) });
+                          setError("");
+                        } catch (e) {
+                          setError(String(e));
+                        }
+                      }}
+                      class={btn}
+                    >
+                      Preview
+                    </button>
                   </fieldset>
+                  {preview?.key === key && pal && (
+                    <Simulation sequence={preview.seq} pieces={lib.shape.pieces} palette={pal} />
+                  )}
                   <fieldset aria-label={`${label} palettes`} class="flex flex-wrap gap-3">
                     {lib.palettes.map(([id, p]) => (
                       <label key={id} class="flex items-center gap-1">
@@ -206,7 +255,7 @@ export function SetEditor() {
                         </option>
                       ))}
                     </select>
-                    <span class="text-dim">every</span>
+                    <span class="text-dim">changes every</span>
                     <input
                       type="number"
                       min={1}
