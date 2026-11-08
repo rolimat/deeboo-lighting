@@ -52,10 +52,14 @@ impl Rotator {
     /// Starts the palette position at the palette on show, so a drop always moves to another one.
     #[must_use]
     pub fn with_palette(mut self, shown: Option<u32>) -> Self {
+        self.sync_palette(shown);
+        self
+    }
+
+    pub fn sync_palette(&mut self, shown: Option<u32>) {
         if let Some(i) = shown.and_then(|id| self.pals.iter().position(|p| *p == id)) {
             self.pal_i = i;
         }
-        self
     }
 
     /// The sequence in force (the set's first until the first change).

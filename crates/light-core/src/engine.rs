@@ -138,6 +138,32 @@ impl Look {
     }
 }
 
+impl Look {
+    /// The same look for a new delivery of a library that changed nothing the rotation depends on
+    /// (shape, sequences, active set): rotation state and playing sequences stay, only the library
+    /// data and a changed pinned palette are taken. `None` when it has to be rebuilt.
+    fn kept(&self, lib: &Library, segments: u8) -> Option<Self> {
+        let old = &self.rot.as_ref()?.lib;
+        let same = lib.segments() == segments
+            && old.current_set() == lib.current_set()
+            && old.sequences == lib.sequences
+            && old.shape == lib.shape;
+        if !same {
+            return None;
+        }
+        let mut look = self.clone();
+        let r = look.rot.as_mut()?;
+        if old.active_palette != lib.active_palette {
+            look.palette = lib.current_palette();
+            for rot in &mut r.rots {
+                rot.sync_palette(lib.current_palette_id());
+            }
+        }
+        r.lib = lib.clone();
+        Some(look)
+    }
+}
+
 pub struct Engine {
     cfg: EngineConfig,
     clock: ClockTracker,
@@ -148,6 +174,8 @@ pub struct Engine {
     pending: Option<Look>,
     generator: Generator,
     seed: u64,
+    /// Library rebuilds so far: mixed into the seed so a rebuilt rotation does not replay the last.
+    rebuilds: u64,
     /// The moment the last step was planned for, to see entries and drops.
     rot_moment: Option<Moment>,
     playing: Option<Playing>,
@@ -169,6 +197,7 @@ impl Engine {
         Self {
             generator: Generator::new(seed),
             seed,
+            rebuilds: 0,
             rot_moment: None,
             cfg,
             clock: ClockTracker::new(cfg.phrase),
@@ -255,7 +284,19 @@ impl Engine {
 
     /// A stopped show uses the library at once; a running one from its next bar start.
     pub fn set_library(&mut self, now_us: u64, lib: &Library) -> Vec<PaintCommand> {
-        let look = Look::from_library(lib, self.cfg.segments, self.seed, &mut self.generator);
+        let segments = self.cfg.segments;
+        let kept = self
+            .pending
+            .as_ref()
+            .unwrap_or(&self.look)
+            .kept(lib, segments);
+        let look = kept.unwrap_or_else(|| {
+            self.rebuilds += 1;
+            let seed = self
+                .seed
+                .wrapping_add(self.rebuilds.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            Look::from_library(lib, segments, seed, &mut self.generator)
+        });
         if self.clock.running() {
             self.pending = Some(look);
         } else {

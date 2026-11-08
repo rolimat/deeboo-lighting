@@ -654,3 +654,66 @@ fn rotation_continues_after_a_start_while_playing() {
         "back to Suave one phrase after the restart"
     );
 }
+/// The pencil segment lists sent: the pattern, whatever the palette.
+fn shapes(s: &Sim) -> Vec<Vec<u8>> {
+    s.sends
+        .iter()
+        .filter_map(|(_, c)| match c {
+            PaintCommand::Pencil { segments, .. } => Some(segments.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn gen_lib() -> light_core::library::Library {
+    use light_core::library::{Interval, Library, SeqRef};
+    let mut lib = Library::builtin(4);
+    let ms = &mut lib.sets[0].rhythm;
+    ms.sequences = vec![SeqRef::Generated];
+    ms.order = light_core::library::Order::Fixed;
+    ms.interval = Interval::Phrases(100);
+    lib
+}
+
+#[test]
+fn redelivering_the_same_library_keeps_the_playing_sequence() {
+    let run = |redeliver: bool| {
+        let mut s = sim125();
+        s.e.set_library(s.now, &gen_lib());
+        s.start();
+        s.beats_of(2, &mut none);
+        if redeliver {
+            s.e.set_library(s.now, &gen_lib());
+        }
+        s.beats_of(14, &mut none);
+        shapes(&s)
+    };
+    assert_eq!(run(true), run(false));
+}
+
+#[test]
+fn only_the_pinned_palette_changing_keeps_the_sequence() {
+    let mut lib2 = gen_lib();
+    let mut p2 = lib2.palettes[0].1.clone();
+    p2.principal.h = 100;
+    p2.contraste.h = 100;
+    p2.suave.h = 100;
+    lib2.palettes.push((99, p2));
+    let mut lib3 = lib2.clone();
+    lib3.active_palette = Some(99);
+    let run = |second: Option<&light_core::library::Library>| {
+        let mut s = sim125();
+        s.e.set_library(s.now, &lib2);
+        s.start();
+        s.beats_of(2, &mut none);
+        if let Some(l) = second {
+            s.e.set_library(s.now, l);
+        }
+        s.beats_of(14, &mut none);
+        s
+    };
+    let (a, b) = (run(None), run(Some(&lib3)));
+    assert_eq!(shapes(&a), shapes(&b));
+    assert_eq!(hue_sends(&a, 100), Vec::<u64>::new());
+    assert_ne!(hue_sends(&b, 100), Vec::<u64>::new());
+}
