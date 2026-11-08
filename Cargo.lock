@@ -964,6 +964,7 @@ dependencies = [
  "light-core",
  "log",
  "midir",
+ "proptest",
  "qrcode",
  "rtrb",
  "rustuya",
