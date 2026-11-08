@@ -8,17 +8,31 @@ mod commands;
 mod devices;
 mod lan;
 mod midi;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "consumed by the wizard in Plan 4 task 2")
+)]
+mod qr;
 mod runtime;
 mod settings;
 mod strip;
 mod tray;
+
+/// Env-driven logger; the network stacks stay at `warn` even with `RUST_LOG=trace`, so
+/// cloud request details can never reach the log.
+fn logger() -> env_logger::Builder {
+    let mut b = env_logger::Builder::from_default_env();
+    b.filter_module("ureq", log::LevelFilter::Warn)
+        .filter_module("rustls", log::LevelFilter::Warn);
+    b
+}
 
 /// Starts the tray app.
 ///
 /// # Errors
 /// Returns the Tauri error if the runtime fails to start.
 pub fn run() -> tauri::Result<()> {
-    env_logger::init();
+    logger().init();
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
         .manage(commands::AppState::default())
@@ -47,4 +61,28 @@ pub fn run() -> tauri::Result<()> {
             }
         });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use log::{Level, Record};
+
+    fn allowed(target: &str, level: Level) -> bool {
+        let log = super::logger().build();
+        log.matches(&Record::builder().target(target).level(level).build())
+    }
+
+    #[test]
+    fn log_filter_caps_ureq_and_rustls() {
+        for t in [
+            "ureq",
+            "ureq::unversioned::transport",
+            "rustls",
+            "rustls::client",
+        ] {
+            assert!(!allowed(t, Level::Info), "{t} info");
+            assert!(!allowed(t, Level::Debug), "{t} debug");
+            assert!(allowed(t, Level::Warn), "{t} warn");
+        }
+    }
 }
