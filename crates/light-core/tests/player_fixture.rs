@@ -60,7 +60,9 @@ fn name(l: StepLen) -> &'static str {
 fn shown_steps(seq: &Sequence) -> Vec<usize> {
     let mut lib = Library::builtin(SEGMENTS);
     lib.sequences[0].1 = seq.clone();
-    assert!(matches!(lib.sets[0].rhythm.sequences[0], SeqRef::Id(1)));
+    lib.sets[0].rhythm.sequences = vec![SeqRef::Id(1)];
+    lib.sets[0].rhythm.order = light_core::library::Order::InOrder;
+    lib.sets[0].rhythm.palettes = vec![1];
     let mut e = Engine::new(EngineConfig {
         segments: SEGMENTS,
         phrase: PhraseBars::Four,

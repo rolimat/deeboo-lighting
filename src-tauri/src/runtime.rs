@@ -1054,7 +1054,7 @@ mod tests {
     #[test]
     fn library_input_reaches_the_popover_status() {
         let (mut c, _rx, _) = core(false);
-        assert_eq!(c.status().selection.set, "Default");
+        assert_eq!(c.status().selection.set, "Auto");
         let mut lib = Library::builtin(10);
         lib.sets[0].name = "Club".into();
         c.handle(Input::Library(Box::new(lib.clone())), 1_000);

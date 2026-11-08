@@ -465,8 +465,27 @@ fn lead_ms_changes_send_times() {
     assert!(c.sends.iter().any(|(t, _)| *t == T0 + 1_500_000 - 500_000));
 }
 
+/// The built-in library reduced to one palette and the first sequence of each moment, in order.
+fn plain(n: u8) -> light_core::library::Library {
+    use light_core::library::{Order, SeqRef};
+    let mut lib = light_core::library::Library::builtin(n);
+    lib.palettes.truncate(1);
+    lib.active_palette = Some(1);
+    let set = &mut lib.sets[0];
+    for (ms, id) in [
+        (&mut set.rhythm, 1),
+        (&mut set.calm, 5),
+        (&mut set.buildup, 8),
+    ] {
+        ms.sequences = vec![SeqRef::Id(id)];
+        ms.palettes = vec![1];
+        ms.order = Order::InOrder;
+    }
+    lib
+}
+
 fn lib4(principal_h: u16) -> light_core::library::Library {
-    let mut lib = light_core::library::Library::builtin(4);
+    let mut lib = plain(4);
     lib.palettes[0].1.principal.h = principal_h;
     lib
 }
@@ -538,7 +557,7 @@ fn matching_library_sequence_is_played() {
     s.start();
     s.beats_of(2, &mut none);
     let got = apply_all(&s.sends, vec![None; 4]);
-    assert_eq!(got, vec![hsv(240, 1000, 1000); 4]);
+    assert_eq!(got, vec![hsv(280, 900, 950); 4]);
 }
 
 #[test]
@@ -571,8 +590,7 @@ fn generated_sequence_plays_and_changes() {
 
 #[test]
 fn new_palette_on_drop() {
-    use light_core::library::Library;
-    let mut lib = Library::builtin(4);
+    let mut lib = plain(4);
     let mut p2 = lib.palettes[0].1.clone();
     p2.principal.h = 100;
     lib.palettes.push((2, p2));

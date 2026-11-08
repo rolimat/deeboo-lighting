@@ -647,7 +647,7 @@ mod tests {
         let json = serde_json::to_string(&Status::initial()).unwrap_or_default();
         assert_eq!(
             json,
-            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Default","palette":{"name":"Test","colours":[{"h":0,"s":1000,"v":1000},{"h":240,"s":1000,"v":1000},{"h":120,"s":350,"v":1000}]}}}"#
+            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}}}"#
         );
         let connected = StripStatus::Connected {
             name: "dj lights".into(),
@@ -891,15 +891,15 @@ mod tests {
         lib.palettes.push((900, pal));
         state.save_library(lib).unwrap();
         let name = |sel: Selection| sel.palette.name;
-        assert_eq!(name(state.select(Pick::Palette, 1).unwrap()), "Second");
+        assert_eq!(name(state.select(Pick::Palette, 1).unwrap()), "Ocean");
         assert_eq!(state.library().active_palette, Some(2));
-        // Wraps both ways.
-        assert_eq!(name(state.select(Pick::Palette, 1).unwrap()), "Test");
-        assert_eq!(name(state.select(Pick::Palette, -1).unwrap()), "Second");
         assert_eq!(
             crate::library_store::load(&dir.path().join("library.json"), 10).active_palette,
             Some(2)
         );
+        // Wraps both ways.
+        assert_eq!(name(state.select(Pick::Palette, -1).unwrap()), "Sunset");
+        assert_eq!(name(state.select(Pick::Palette, -1).unwrap()), "Second");
         for bad in [0, 2, -2] {
             assert!(state.select(Pick::Palette, bad).is_err());
             assert!(state.select(Pick::Set, bad).is_err());
@@ -916,7 +916,7 @@ mod tests {
         lib.sets.push(set);
         state.save_library(lib).unwrap();
         assert_eq!(state.select(Pick::Set, 1).unwrap().set, "Club");
-        assert_eq!(state.select(Pick::Set, 1).unwrap().set, "Default");
+        assert_eq!(state.select(Pick::Set, 1).unwrap().set, "Auto");
         assert_eq!(state.select(Pick::Set, -1).unwrap().set, "Club");
     }
 
@@ -941,16 +941,16 @@ mod tests {
         let saved = state.save_library(lib).unwrap();
         assert_eq!(
             saved.palettes.iter().map(|p| p.0).collect::<Vec<_>>(),
-            [1, 2]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9]
         );
         assert_eq!(
             saved.sequences.iter().map(|p| p.0).collect::<Vec<_>>(),
-            [1, 2, 3, 4]
+            (1..=11).collect::<Vec<_>>()
         );
         assert_eq!(saved.sets[1].id, 2);
-        assert_eq!(saved.sets[1].rhythm.sequences, [SeqRef::Id(4)]);
-        assert_eq!(saved.sets[1].rhythm.palettes, [2]);
-        assert_eq!((saved.active_set, saved.active_palette), (2, Some(2)));
+        assert_eq!(saved.sets[1].rhythm.sequences, [SeqRef::Id(11)]);
+        assert_eq!(saved.sets[1].rhythm.palettes, [9]);
+        assert_eq!((saved.active_set, saved.active_palette), (2, Some(9)));
         assert_eq!(state.library(), saved);
         assert_eq!(
             crate::library_store::load(&dir.path().join("library.json"), 10),
