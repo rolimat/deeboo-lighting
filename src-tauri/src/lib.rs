@@ -58,6 +58,7 @@ pub fn run() -> tauri::Result<()> {
             commands::identify_segment,
             commands::wizard_save,
             commands::message_counts,
+            commands::preview_generated,
             commands::detection_watch,
             commands::set_detection_thresholds
         ])

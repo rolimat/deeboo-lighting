@@ -465,8 +465,27 @@ fn lead_ms_changes_send_times() {
     assert!(c.sends.iter().any(|(t, _)| *t == T0 + 1_500_000 - 500_000));
 }
 
+/// The built-in library reduced to one palette and the first sequence of each moment, in order.
+fn plain(n: u8) -> light_core::library::Library {
+    use light_core::library::{Order, SeqRef};
+    let mut lib = light_core::library::Library::builtin(n);
+    lib.palettes.truncate(1);
+    lib.active_palette = Some(1);
+    let set = &mut lib.sets[0];
+    for (ms, id) in [
+        (&mut set.rhythm, 1),
+        (&mut set.calm, 5),
+        (&mut set.buildup, 8),
+    ] {
+        ms.sequences = vec![SeqRef::Id(id)];
+        ms.palettes = vec![1];
+        ms.order = Order::InOrder;
+    }
+    lib
+}
+
 fn lib4(principal_h: u16) -> light_core::library::Library {
-    let mut lib = light_core::library::Library::builtin(4);
+    let mut lib = plain(4);
     lib.palettes[0].1.principal.h = principal_h;
     lib
 }
@@ -538,5 +557,207 @@ fn matching_library_sequence_is_played() {
     s.start();
     s.beats_of(2, &mut none);
     let got = apply_all(&s.sends, vec![None; 4]);
-    assert_eq!(got, vec![hsv(240, 1000, 1000); 4]);
+    assert_eq!(got, vec![hsv(280, 900, 950); 4]);
+}
+
+#[test]
+fn generated_sequence_plays_and_changes() {
+    use light_core::library::{Interval, Library, SeqRef};
+    let mut lib = Library::builtin(4);
+    let ms = &mut lib.sets[0].rhythm;
+    ms.sequences = vec![SeqRef::Generated];
+    ms.interval = Interval::Bars(1);
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(64, &mut none);
+    // The messages of each bar (windows start one lead before the bar): built-in Halves repeats
+    // identically, a generated sequence rotating every bar does not.
+    let bars: Vec<String> = (1..15u64)
+        .map(|bar| {
+            let from = T0 + bar * 4 * 480_000 - LEAD;
+            format!(
+                "{:?}",
+                s.sends_in(from, from + 4 * 480_000)
+                    .iter()
+                    .map(|(_, c)| c)
+                    .collect::<Vec<_>>()
+            )
+        })
+        .collect();
+    assert!(bars.iter().any(|b| *b != bars[0]), "{bars:?}");
+}
+
+#[test]
+fn new_palette_on_drop() {
+    let mut lib = plain(4);
+    let mut p2 = lib.palettes[0].1.clone();
+    p2.principal.h = 100;
+    lib.palettes.push((2, p2));
+    lib.sets[0].rhythm.palettes = vec![1, 2];
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    s.cmd(UiCommand::Force(BuildUp));
+    s.beats_of(8, &mut none);
+    s.cmd(UiCommand::Force(Rhythm));
+    s.beats_of(8, &mut none);
+    assert_ne!(hue_sends(&s, 100), Vec::<u64>::new());
+}
+
+/// Rhythm alternates two sequences, `Suave` (hue 120) then `Contraste` (hue 240), every phrase.
+fn two_seq_lib() -> light_core::library::Library {
+    use light_core::library::Interval;
+    use light_core::model::Role;
+    let mut lib = plain(4);
+    let mut q2 = lib.sequences[0].1.clone();
+    for (q, role) in [
+        (&mut lib.sequences[0].1, Role::Suave),
+        (&mut q2, Role::Contraste),
+    ] {
+        for st in &mut q.steps {
+            st.roles = vec![role; 4];
+        }
+    }
+    lib.sequences.push((99, q2));
+    lib.sets[0].rhythm.sequences = vec![
+        light_core::library::SeqRef::Id(1),
+        light_core::library::SeqRef::Id(99),
+    ];
+    lib.sets[0].rhythm.interval = Interval::Phrases(1);
+    lib
+}
+
+fn colour_at(s: &Sim, hue: u16, from: u64, to: u64) -> bool {
+    s.sends_in(from, to).iter().any(|(_, c)| match c {
+        PaintCommand::Bucket(h) => h.h == hue,
+        PaintCommand::Pencil { color, .. } => color.h == hue,
+        PaintCommand::Eraser { .. } => false,
+    })
+}
+
+#[test]
+fn rotation_continues_after_a_start_while_playing() {
+    let mut s = sim125();
+    let lib = two_seq_lib();
+    let suave = lib.palettes[0].1.suave.h;
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(20, &mut none); // changed to Contraste at beat 16
+    s.start();
+    let restart = s.now;
+    s.beats_of(20, &mut none);
+    let beat = 480_000;
+    assert!(
+        colour_at(&s, suave, restart + 15 * beat, restart + 20 * beat),
+        "back to Suave one phrase after the restart"
+    );
+}
+/// The pencil segment lists sent: the pattern, whatever the palette.
+fn shapes(s: &Sim) -> Vec<Vec<u8>> {
+    s.sends
+        .iter()
+        .filter_map(|(_, c)| match c {
+            PaintCommand::Pencil { segments, .. } => Some(segments.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn gen_lib() -> light_core::library::Library {
+    use light_core::library::{Interval, Library, SeqRef};
+    let mut lib = Library::builtin(4);
+    let ms = &mut lib.sets[0].rhythm;
+    ms.sequences = vec![SeqRef::Generated];
+    ms.order = light_core::library::Order::Fixed;
+    ms.interval = Interval::Phrases(100);
+    lib
+}
+
+#[test]
+fn redelivering_the_same_library_keeps_the_playing_sequence() {
+    let run = |redeliver: bool| {
+        let mut s = sim125();
+        s.e.set_library(s.now, &gen_lib());
+        s.start();
+        s.beats_of(2, &mut none);
+        if redeliver {
+            s.e.set_library(s.now, &gen_lib());
+        }
+        s.beats_of(14, &mut none);
+        shapes(&s)
+    };
+    assert_eq!(run(true), run(false));
+}
+
+#[test]
+fn only_the_pinned_palette_changing_keeps_the_sequence() {
+    let mut lib2 = gen_lib();
+    let mut p2 = lib2.palettes[0].1.clone();
+    p2.principal.h = 100;
+    p2.contraste.h = 100;
+    p2.suave.h = 100;
+    lib2.palettes.push((99, p2));
+    let mut lib3 = lib2.clone();
+    lib3.active_palette = Some(99);
+    let run = |second: Option<&light_core::library::Library>| {
+        let mut s = sim125();
+        s.e.set_library(s.now, &lib2);
+        s.start();
+        s.beats_of(2, &mut none);
+        if let Some(l) = second {
+            s.e.set_library(s.now, l);
+        }
+        s.beats_of(14, &mut none);
+        s
+    };
+    let (a, b) = (run(None), run(Some(&lib3)));
+    assert_eq!(shapes(&a), shapes(&b));
+    assert_eq!(hue_sends(&a, 100), Vec::<u64>::new());
+    assert_ne!(hue_sends(&b, 100), Vec::<u64>::new());
+}
+
+#[test]
+fn edited_shown_palette_shows_from_the_next_bar() {
+    let mut lib = plain(4);
+    let mut p2 = lib.palettes[0].1.clone();
+    p2.principal.h = 100;
+    lib.palettes.push((2, p2));
+    lib.sets[0].rhythm.palettes = vec![1, 2];
+    let mut edited = lib.clone();
+    edited.palettes[0].1.principal.h = 77;
+    edited.palettes[0].1.contraste.h = 77;
+    edited.palettes[0].1.suave.h = 77;
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    s.e.set_library(s.now, &edited);
+    s.beats_of(6, &mut none);
+    assert_ne!(hue_sends(&s, 77), Vec::<u64>::new());
+    // The rotation position is unchanged: the next drop goes to palette 2.
+    s.cmd(UiCommand::Force(BuildUp));
+    s.beats_of(8, &mut none);
+    s.cmd(UiCommand::Force(Rhythm));
+    s.beats_of(8, &mut none);
+    assert_ne!(hue_sends(&s, 100), Vec::<u64>::new());
+}
+
+#[test]
+fn edited_playing_sequence_shows_from_the_next_bar() {
+    use light_core::model::Role;
+    let lib = plain(4);
+    let mut edited = lib.clone();
+    for st in &mut edited.sequences[0].1.steps {
+        st.roles = vec![Role::Contraste; 4];
+    }
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    s.e.set_library(s.now, &edited);
+    s.beats_of(6, &mut none);
+    let got = apply_all(&s.sends, vec![None; 4]);
+    assert_eq!(got, vec![hsv(280, 900, 950); 4]);
 }

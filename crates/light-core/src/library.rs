@@ -1,6 +1,5 @@
 //! The user library: shape, palettes, sequences and sets, with strict validation (plan 5).
-use crate::builtin::{sequence, test_palette};
-use crate::detect::Moment;
+use crate::builtin::{self, test_palette};
 use crate::model::{Palette, Sequence};
 use crate::paint::Hsv;
 use std::fmt;
@@ -172,38 +171,21 @@ fn unique_ids<'a>(field: &str, ids: impl Iterator<Item = &'a u32>) -> Result<(),
 }
 
 impl Library {
-    /// Test palette, the three built-in sequences and a "Default" set (spec §6.3).
+    /// First-run library (spec §6.3): the 8 built-in palettes, the 10 built-in sequences for a row of
+    /// `segments`, and the active set "Auto". A stored library always has palettes and sequences, so
+    /// built-ins are never merged into one; `library_store::load` only uses this when none is usable.
     #[must_use]
     pub fn builtin(segments: u8) -> Self {
-        let set_of = |moment, interval| {
-            let id = match moment {
-                Moment::Rhythm => 1,
-                Moment::Calm => 2,
-                Moment::BuildUp => 3,
-            };
-            MomentSet {
-                sequences: vec![SeqRef::Id(id)],
-                palettes: vec![1],
-                order: Order::InOrder,
-                interval,
-            }
-        };
+        let shape = Shape::row(segments);
+        let seqs = builtin::sequences(segments, &crate::groups::groups(&shape));
+        let palettes: Vec<(u32, Palette)> = (1..).zip(builtin::palettes()).collect();
+        let ids: Vec<u32> = palettes.iter().map(|(i, _)| *i).collect();
         Library {
             schema_version: SCHEMA_VERSION,
-            shape: Shape::row(segments),
-            palettes: vec![(1, test_palette())],
-            sequences: [(1, Moment::Rhythm), (2, Moment::Calm), (3, Moment::BuildUp)]
-                .into_iter()
-                .map(|(id, m)| (id, sequence(m, segments)))
-                .collect(),
-            sets: vec![Set {
-                id: 1,
-                name: "Default".into(),
-                rhythm: set_of(Moment::Rhythm, Interval::Phrases(1)),
-                // "Per break": one pass per calm section.
-                calm: set_of(Moment::Calm, Interval::Phrases(1)),
-                buildup: set_of(Moment::BuildUp, Interval::Bars(2)),
-            }],
+            shape,
+            palettes,
+            sequences: (1..).zip(seqs).collect(),
+            sets: vec![builtin::auto_set(1, &ids)],
             active_set: 1,
             active_palette: Some(1),
         }

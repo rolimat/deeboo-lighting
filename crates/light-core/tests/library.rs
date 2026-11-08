@@ -19,10 +19,10 @@ fn shape_row_has_n_pieces() {
 }
 
 #[test]
-fn builtin_default_set_uses_spec_intervals() {
+fn builtin_auto_set_uses_spec_intervals() {
     let l = Library::builtin(8);
     let s = &l.sets[0];
-    assert_eq!(s.name, "Default");
+    assert_eq!(s.name, "Auto");
     assert_eq!(s.rhythm.interval, Interval::Phrases(1));
     assert_eq!(s.buildup.interval, Interval::Bars(2));
     assert_eq!(l.active_set, s.id);
@@ -274,5 +274,47 @@ fn resize_segments_pads_with_off_and_truncates() {
                 assert!(y.roles[keep..].iter().all(|r| *r == Role::Off));
             }
         }
+    }
+}
+
+#[test]
+fn palettes_combine() {
+    let ps = light_core::builtin::palettes();
+    assert_eq!(ps.len(), 8);
+    let names: std::collections::HashSet<_> = ps.iter().map(|p| p.name.clone()).collect();
+    assert_eq!(names.len(), 8);
+    for p in &ps {
+        let d = p.principal.h.abs_diff(p.contraste.h);
+        assert!(d.min(360 - d) >= 60, "{}", p.name);
+        assert!(p.suave.s <= 450 && p.suave.v >= 800, "{}", p.name);
+    }
+}
+
+#[test]
+fn ten_sequences_validate_for_common_n() {
+    use light_core::detect::Moment::{BuildUp, Calm, Rhythm};
+    for n in [1u8, 4, 6, 9, 10, 12, 16, 60] {
+        let g = light_core::groups::groups(&Shape::row(n));
+        let seqs = light_core::builtin::sequences(n, &g);
+        assert_eq!(seqs.len(), 10);
+        let count = |m| seqs.iter().filter(|s| s.moment == m).count();
+        assert_eq!((count(Rhythm), count(Calm), count(BuildUp)), (4, 3, 3));
+        let names: std::collections::HashSet<_> = seqs.iter().map(|s| &s.name).collect();
+        assert_eq!(names.len(), 10, "n={n}");
+        for s in &seqs {
+            assert!(s.validate(n).is_ok(), "{} n={n}", s.name);
+        }
+    }
+}
+
+#[test]
+fn first_run_seeds_auto_set() {
+    let l = Library::builtin(10);
+    assert_eq!((l.palettes.len(), l.sequences.len()), (8, 10));
+    let s = l.current_set().expect("active");
+    assert_eq!(s.name, "Auto");
+    for m in [&s.rhythm, &s.calm, &s.buildup] {
+        assert_eq!(m.sequences, vec![SeqRef::Generated]);
+        assert_eq!(m.palettes.len(), 8);
     }
 }

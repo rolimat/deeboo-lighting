@@ -226,6 +226,18 @@ impl AppState {
         *lock(&self.library_path) = Some(path);
     }
 
+    /// A library that was never saved is just the first-run built-ins: rebuild it for the strip's new
+    /// segment count. A saved one is the user's and stays as it is (the editor adapts it).
+    fn rebuild_unsaved_library(&self, segments: u8) -> Option<Library> {
+        let path = lock(&self.library_path).clone()?;
+        let mut current = lock(&self.library);
+        if path.exists() || current.segments() == segments {
+            return None;
+        }
+        *current = Library::builtin(segments);
+        Some(current.clone())
+    }
+
     pub fn library(&self) -> Library {
         lock(&self.library).clone()
     }
@@ -518,6 +530,34 @@ pub fn message_counts(
     message_counts_of(&state.library(), &sequence, palette_id)
 }
 
+/// One example of what Generated would play for `moment`, built for the saved shape and a fresh seed.
+fn preview_generated_of(lib: &Library, moment: Moment, seed: u64) -> Result<Sequence, String> {
+    let n = lib.segments();
+    let groups = light_core::groups::groups(&lib.shape);
+    let seq = light_core::generator::Generator::new(seed).next(moment, &groups, n);
+    seq.validate(n)
+        .map_err(|_| "Could not generate a sequence for this strip.".to_string())?;
+    Ok(seq)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn preview_generated(
+    state: tauri::State<'_, AppState>,
+    moment: MomentDto,
+) -> Result<Sequence, String> {
+    let moment = match moment {
+        MomentDto::Rhythm => Moment::Rhythm,
+        MomentDto::Calm => Moment::Calm,
+        MomentDto::BuildUp => Moment::BuildUp,
+    };
+    // Wall-clock microseconds: any seed works, it only has to differ between clicks.
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |d| u64::try_from(d.as_micros()).unwrap_or(1));
+    preview_generated_of(&state.library(), moment, seed)
+}
+
 #[tauri::command]
 pub async fn list_midi_sources() -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(crate::devices::midi_sources)
@@ -624,6 +664,9 @@ pub fn wizard_save(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> 
     state
         .wizard
         .save(&state.strip_path()?, &wizard_emit(&app), |cfg| {
+            if let Some(lib) = state.rebuild_unsaved_library(cfg.segments) {
+                state.deliver(Input::Library(Box::new(lib)));
+            }
             state.send(Input::StripChanged(cfg)).map_err(|e| {
                 log::warn!("strip saved but not reloaded: {e}");
                 "Saved. Restart the app to use the new strip.".to_string()
@@ -647,7 +690,7 @@ mod tests {
         let json = serde_json::to_string(&Status::initial()).unwrap_or_default();
         assert_eq!(
             json,
-            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Default","palette":{"name":"Test","colours":[{"h":0,"s":1000,"v":1000},{"h":240,"s":1000,"v":1000},{"h":120,"s":350,"v":1000}]}}}"#
+            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}}}"#
         );
         let connected = StripStatus::Connected {
             name: "dj lights".into(),
@@ -694,7 +737,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 22);
+        assert_eq!(commands.len(), 23);
         assert_eq!(granted, commands);
     }
 
@@ -800,11 +843,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn preview_generated_validates_for_current_n() {
+        for n in [1u8, 4, 10, 16] {
+            let lib = Library::builtin(n);
+            for m in [Moment::Rhythm, Moment::Calm, Moment::BuildUp] {
+                let seq = preview_generated_of(&lib, m, 42 + u64::from(n)).unwrap();
+                assert_eq!(seq.moment, m);
+                assert!(seq.validate(n).is_ok());
+            }
+        }
+    }
+
     fn lib_state() -> (tempfile::TempDir, AppState) {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::default();
         state.init_library(dir.path().join("library.json"), 10);
         (dir, state)
+    }
+
+    #[test]
+    fn unsaved_builtin_library_follows_the_strip_but_a_saved_one_does_not() {
+        let (dir, state) = lib_state();
+        assert_eq!(state.rebuild_unsaved_library(10), None, "same count");
+        let lib = state.rebuild_unsaved_library(12).expect("rebuilt");
+        assert_eq!((lib.segments(), lib.validate()), (12, Ok(())));
+        assert_eq!(state.library(), lib);
+        assert_eq!(lib.sets[0].name, "Auto");
+        // Once saved it is the user's.
+        state.save_library(lib.clone()).unwrap();
+        assert!(dir.path().join("library.json").exists());
+        assert_eq!(state.rebuild_unsaved_library(6), None);
+        assert_eq!(state.library(), lib);
     }
 
     #[test]
@@ -891,15 +961,15 @@ mod tests {
         lib.palettes.push((900, pal));
         state.save_library(lib).unwrap();
         let name = |sel: Selection| sel.palette.name;
-        assert_eq!(name(state.select(Pick::Palette, 1).unwrap()), "Second");
+        assert_eq!(name(state.select(Pick::Palette, 1).unwrap()), "Ocean");
         assert_eq!(state.library().active_palette, Some(2));
-        // Wraps both ways.
-        assert_eq!(name(state.select(Pick::Palette, 1).unwrap()), "Test");
-        assert_eq!(name(state.select(Pick::Palette, -1).unwrap()), "Second");
         assert_eq!(
             crate::library_store::load(&dir.path().join("library.json"), 10).active_palette,
             Some(2)
         );
+        // Wraps both ways.
+        assert_eq!(name(state.select(Pick::Palette, -1).unwrap()), "Sunset");
+        assert_eq!(name(state.select(Pick::Palette, -1).unwrap()), "Second");
         for bad in [0, 2, -2] {
             assert!(state.select(Pick::Palette, bad).is_err());
             assert!(state.select(Pick::Set, bad).is_err());
@@ -916,7 +986,7 @@ mod tests {
         lib.sets.push(set);
         state.save_library(lib).unwrap();
         assert_eq!(state.select(Pick::Set, 1).unwrap().set, "Club");
-        assert_eq!(state.select(Pick::Set, 1).unwrap().set, "Default");
+        assert_eq!(state.select(Pick::Set, 1).unwrap().set, "Auto");
         assert_eq!(state.select(Pick::Set, -1).unwrap().set, "Club");
     }
 
@@ -941,16 +1011,16 @@ mod tests {
         let saved = state.save_library(lib).unwrap();
         assert_eq!(
             saved.palettes.iter().map(|p| p.0).collect::<Vec<_>>(),
-            [1, 2]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9]
         );
         assert_eq!(
             saved.sequences.iter().map(|p| p.0).collect::<Vec<_>>(),
-            [1, 2, 3, 4]
+            (1..=11).collect::<Vec<_>>()
         );
         assert_eq!(saved.sets[1].id, 2);
-        assert_eq!(saved.sets[1].rhythm.sequences, [SeqRef::Id(4)]);
-        assert_eq!(saved.sets[1].rhythm.palettes, [2]);
-        assert_eq!((saved.active_set, saved.active_palette), (2, Some(2)));
+        assert_eq!(saved.sets[1].rhythm.sequences, [SeqRef::Id(11)]);
+        assert_eq!(saved.sets[1].rhythm.palettes, [9]);
+        assert_eq!((saved.active_set, saved.active_palette), (2, Some(9)));
         assert_eq!(state.library(), saved);
         assert_eq!(
             crate::library_store::load(&dir.path().join("library.json"), 10),

@@ -111,6 +111,9 @@ export const api = {
   /** Messages each step costs to reach from the previous one (the first wraps from the last). */
   messageCounts: (sequence: Sequence, paletteId: number): Promise<number[]> =>
     invoke("message_counts", { sequence, paletteId }),
+  /** An example of what Generated plays for a moment, built for the saved shape with a fresh seed. */
+  previewGenerated: (moment: MomentName): Promise<Sequence> =>
+    invoke("preview_generated", { moment }),
   wizardStart: (userCode: string): Promise<void> => invoke("wizard_start", { userCode }),
   wizardChoose: (deviceId: string): Promise<void> => invoke("wizard_choose", { deviceId }),
   wizardRetry: (): Promise<void> => invoke("wizard_retry"),

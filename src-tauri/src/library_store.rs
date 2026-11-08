@@ -266,6 +266,22 @@ mod tests {
     }
 
     #[test]
+    fn existing_user_library_is_not_overwritten() {
+        let (_d, p) = tmp();
+        let mut lib = Library::builtin(6);
+        lib.palettes.truncate(1);
+        lib.active_palette = Some(lib.palettes[0].0);
+        for s in &mut lib.sets {
+            for m in [&mut s.rhythm, &mut s.calm, &mut s.buildup] {
+                m.palettes = vec![lib.palettes[0].0];
+            }
+        }
+        lib.sets[0].name = "Mine".into();
+        save(&p, &lib).unwrap();
+        assert_eq!(load(&p, 6), lib);
+    }
+
+    #[test]
     fn save_rotates_five_backups() {
         let (dir, p) = tmp();
         for n in 1..=8u8 {

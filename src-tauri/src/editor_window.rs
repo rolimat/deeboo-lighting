@@ -124,6 +124,7 @@ mod tests {
                 "allow-identify-segment",
                 "allow-wizard-save",
                 "allow-message-counts",
+                "allow-preview-generated",
                 "allow-detection-watch",
                 "allow-set-detection-thresholds",
                 "core:event:allow-listen",
