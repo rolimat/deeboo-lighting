@@ -8,6 +8,7 @@ const H: f32 = 18.0;
 const FRAMES: usize = 8;
 
 type Rgb = [u8; 3];
+type Shape = Box<dyn Fn(f32, f32) -> (Rgb, f32)>;
 
 /// Distance from `(px, py)` to the polyline.
 fn dist_line(pts: &[(f32, f32)], px: f32, py: f32) -> f32 {
@@ -109,6 +110,28 @@ fn circle(cx: f32, cy: f32, r: f32, rgb: Rgb) -> impl Fn(f32, f32) -> (Rgb, f32)
     move |x, y| (rgb, (x - cx).hypot(y - cy) - r)
 }
 
+/// Template silhouette of the app icon: 10 LED segments around a vinyl with a hole for the label.
+fn icon_shapes() -> Vec<Shape> {
+    const BLACK: Rgb = [0, 0, 0];
+    let (cx, cy) = (W / 2.0, H / 2.0);
+    let mut out: Vec<Shape> = Vec::new();
+    for i in 0..10_u8 {
+        let mid = (f32::from(i) * 36.0 + 18.0).to_radians();
+        let pts: Vec<_> = (-2_i8..=2)
+            .map(|k| {
+                let a = mid + f32::from(k) * 4.5_f32.to_radians();
+                (cx + 7.4 * a.cos(), cy + 7.4 * a.sin())
+            })
+            .collect();
+        out.push(Box::new(move |x, y| (BLACK, dist_line(&pts, x, y) - 0.8)));
+    }
+    // Vinyl: annulus 1.7..4.9 px (the hole is the label).
+    out.push(Box::new(move |x, y| {
+        (BLACK, ((x - cx).hypot(y - cy) - 3.3).abs() - 1.6)
+    }));
+    out
+}
+
 /// Every frame as (file name, PNG bytes).
 fn frames() -> Vec<(String, Vec<u8>)> {
     const RING: Rgb = [142, 142, 147]; // mid grey: legible on light and dark menu bars
@@ -117,6 +140,12 @@ fn frames() -> Vec<(String, Vec<u8>)> {
     for scale in [1, 2] {
         let at = if scale == 1 { "" } else { "@2x" };
         let ring = |x: f32, y: f32| (RING, ((x - 9.0).hypot(y - 9.0) - 6.2).abs() - 0.8);
+        let icon = icon_shapes();
+        let refs: Vec<&dyn Fn(f32, f32) -> (Rgb, f32)> = icon.iter().map(AsRef::as_ref).collect();
+        out.push((
+            format!("icon{at}.png"),
+            encode(scale, &render(scale, &refs)),
+        ));
         for (name, rgb) in [
             ("red", [255, 69, 58]),
             ("green-on", [48, 209, 88]),
@@ -165,8 +194,58 @@ mod tests {
     #[test]
     fn tray_frames_tool_is_deterministic() {
         let a = frames();
-        assert_eq!(a.len(), 2 * (3 + 3 * FRAMES * 2));
+        assert_eq!(a.len(), 2 * (3 + 3 * FRAMES * 2 + 1));
         assert_eq!(a, frames());
         assert!(a.iter().any(|(n, _)| n == "rhythm-7-forced@2x.png"));
+    }
+
+    /// Template images: every pixel is black, only alpha varies. Dot frames are coloured on purpose.
+    #[test]
+    fn tray_template_is_monochrome() {
+        let all = frames();
+        assert!(
+            all.iter().any(|(n, _)| n == "icon@2x.png"),
+            "app icon silhouette missing"
+        );
+        for (name, bytes) in all.iter().filter(|(n, _)| !n.starts_with("dot-")) {
+            let mut r = png::Decoder::new(std::io::Cursor::new(bytes.as_slice()))
+                .read_info()
+                .unwrap();
+            let mut buf = vec![0; r.output_buffer_size().unwrap()];
+            r.next_frame(&mut buf).unwrap();
+            assert!(
+                buf.chunks(4).all(|p| p[..3] == [0, 0, 0]),
+                "{name} is not black + alpha"
+            );
+            assert!(
+                name.starts_with("icon") <= buf.chunks(4).any(|p| p[3] > 0),
+                "{name} is empty"
+            );
+        }
+    }
+
+    /// Bundle PNGs (written by `tauri icon`) have their nominal sizes; the SVG source ships beside them.
+    #[test]
+    fn app_icon_sizes_exist() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/icons");
+        for (name, size) in [
+            ("32x32", 32),
+            ("64x64", 64),
+            ("128x128", 128),
+            ("128x128@2x", 256),
+            ("icon", 512),
+        ] {
+            let bytes = std::fs::read(dir.join(format!("{name}.png"))).unwrap();
+            let info = png::Decoder::new(std::io::Cursor::new(bytes.as_slice()))
+                .read_info()
+                .unwrap();
+            let i = info.info();
+            assert_eq!((i.width, i.height), (size, size), "{name}.png");
+        }
+        assert!(
+            dir.join("app-icon.svg").is_file()
+                && dir.join("icon.icns").is_file()
+                && dir.join("icon.ico").is_file()
+        );
     }
 }
