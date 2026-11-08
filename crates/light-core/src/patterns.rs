@@ -1,0 +1,281 @@
+//! Pattern library: step sequences per moment (spec §6.4).
+//!
+//! Patterns are built from chains of states where each transition is a single
+//! `scene::diff` message (bucket, one pencil or one eraser): see `wipe` and `duel`.
+//! Moment constraints beat `Params`: Calm always uses `Suave`/`Off` and `StepLen::Four`;
+//! Build-up steps are at most `StepLen::One`. Out-of-range params are clamped.
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::enum_glob_use
+)]
+use crate::detect::Moment;
+use crate::groups::Groups;
+use crate::model::{Role, Sequence, Step, StepLen};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pattern {
+    // Rhythm
+    Halves,
+    EndsCentre,
+    OddEven,
+    Quarters,
+    Snake,
+    Mirror,
+    // Calm
+    Drift,
+    Sparse,
+    // Build-up
+    GroupFlash,
+    FastSnake,
+    Strobe,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Params {
+    pub step: StepLen,
+    pub roles: (Role, Role),
+    pub reverse: bool,
+    /// 1..=4, clamped. More = finer chunks / wider windows.
+    pub density: u8,
+}
+
+#[must_use]
+pub fn for_moment(m: Moment) -> &'static [Pattern] {
+    use Pattern::*;
+    match m {
+        Moment::Rhythm => &[Halves, EndsCentre, OddEven, Quarters, Snake, Mirror],
+        Moment::Calm => &[Drift, Sparse],
+        Moment::BuildUp => &[GroupFlash, FastSnake, Strobe],
+    }
+}
+
+type State = Vec<Role>;
+
+fn paint(n: usize, base: Role, sets: &[(&[u8], Role)]) -> State {
+    let mut s = vec![base; n];
+    for (segs, r) in sets {
+        for &g in *segs {
+            if let Some(slot) = usize::from(g).checked_sub(1).and_then(|i| s.get_mut(i)) {
+                *slot = *r;
+            }
+        }
+    }
+    s
+}
+
+/// Splits `items` into at most `c` contiguous merged groups.
+fn merge(items: &[Vec<u8>], c: usize) -> Vec<Vec<u8>> {
+    let (len, c) = (items.len(), c.min(items.len()));
+    (0..c)
+        .map(|k| items[k * len / c..(k + 1) * len / c].concat())
+        .collect()
+}
+
+/// all `a`, groups turn `b` one by one, all `b`, groups turn back to `a` one by one.
+/// Every transition is one message.
+fn wipe(groups: &[Vec<u8>], a: Role, b: Role, n: usize) -> Vec<State> {
+    let cum = |k: usize, on: Role, rest: Role| {
+        let lit: Vec<u8> = groups[..k].concat();
+        paint(n, rest, &[(&lit, on)])
+    };
+    let g = groups.len();
+    (0..=g)
+        .map(|k| cum(k, b, a))
+        .chain((1..g).map(|k| cum(k, a, b)))
+        .collect()
+}
+
+/// all `a`; `y` turns `b`; all `b`; `y` turns back `a`. One message per transition.
+/// (`x` is the complement of `y`; it needs no painting.)
+fn duel(y: &[u8], a: Role, b: Role, n: usize) -> Vec<State> {
+    vec![
+        paint(n, a, &[]),
+        paint(n, a, &[(y, b)]),
+        paint(n, b, &[]),
+        paint(n, b, &[(y, a)]),
+    ]
+}
+
+fn dedupe(mut v: Vec<State>) -> Vec<State> {
+    v.dedup();
+    if v.len() > 1 && v.first() == v.last() {
+        v.pop();
+    }
+    v
+}
+
+fn singles(n: u8) -> Vec<Vec<u8>> {
+    (1..=n).map(|s| vec![s]).collect()
+}
+
+fn calm_states(p: Pattern, params: Params, n: u8) -> Vec<State> {
+    let nn = usize::from(n);
+    let d = usize::from(params.density);
+    let on = Role::Suave;
+    let lit = |set: &[u8]| paint(nn, Role::Off, &[(set, on)]);
+    if p == Pattern::Sparse {
+        let m = nn.min(2 + d);
+        let mut dots: Vec<u8> = (0..m)
+            .map(|i| u8::try_from(i * nn / m + 1).unwrap_or(u8::MAX))
+            .collect();
+        if params.reverse {
+            dots.reverse();
+        }
+        return (1..=m)
+            .map(|k| lit(&dots[..k]))
+            .chain((1..=m).map(|k| lit(&dots[k..])))
+            .collect();
+    }
+    let mut units = merge(&singles(n), 8);
+    if params.reverse {
+        units.reverse();
+    }
+    let c = units.len();
+    if c < 2 {
+        return vec![lit(&units.concat()), lit(&[])];
+    }
+    let w = d.min(c / 2).max(1);
+    let window = |i: usize, len: usize| -> State {
+        let set: Vec<u8> = (i..i + len).flat_map(|u| units[u % c].clone()).collect();
+        lit(&set)
+    };
+    (0..c)
+        .flat_map(|i| [window(i, w), window(i, w + 1)])
+        .collect()
+}
+
+/// # Panics
+/// Never: all indexing is bounds-checked or clamped.
+#[must_use]
+pub fn build(p: Pattern, params: &Params, groups: &Groups, n: u8) -> Sequence {
+    use Pattern::*;
+    let nn = usize::from(n);
+    let params = Params {
+        density: params.density.clamp(1, 4),
+        ..*params
+    };
+    let d = usize::from(params.density);
+    let (mut a, mut b) = params.roles;
+    if params.reverse {
+        (a, b) = (b, a);
+    }
+    let rev = |mut v: Vec<Vec<u8>>| {
+        if params.reverse {
+            v.reverse();
+        }
+        v
+    };
+    let along = singles(n);
+    let (moment, name, len, states) = match p {
+        Halves => (
+            Moment::Rhythm,
+            "Halves",
+            params.step,
+            duel(&groups.left_right[1], a, b, nn),
+        ),
+        EndsCentre => (
+            Moment::Rhythm,
+            "Ends and centre",
+            params.step,
+            duel(&groups.centre_ends[1], a, b, nn),
+        ),
+        OddEven => (
+            Moment::Rhythm,
+            "Odd and even",
+            params.step,
+            duel(&groups.odd_even[1], a, b, nn),
+        ),
+        Quarters => (
+            Moment::Rhythm,
+            "Quarters",
+            params.step,
+            wipe(
+                &rev(groups.quarters.to_vec()),
+                params.roles.0,
+                params.roles.1,
+                nn,
+            ),
+        ),
+        Snake => (
+            Moment::Rhythm,
+            "Snake",
+            params.step,
+            wipe(
+                &rev(merge(&along, 4 * d)),
+                params.roles.0,
+                params.roles.1,
+                nn,
+            ),
+        ),
+        Mirror => {
+            let pairs: Vec<Vec<u8>> = (0..along.len().div_ceil(2))
+                .map(|k| {
+                    let mut v = along[k].clone();
+                    let o = &along[along.len() - 1 - k];
+                    if o != &v {
+                        v.extend(o);
+                    }
+                    v
+                })
+                .collect();
+            (
+                Moment::Rhythm,
+                "Mirror",
+                params.step,
+                wipe(
+                    &rev(merge(&pairs, 4 * d)),
+                    params.roles.0,
+                    params.roles.1,
+                    nn,
+                ),
+            )
+        }
+        Drift | Sparse => (
+            Moment::Calm,
+            if p == Drift { "Drift" } else { "Sparse" },
+            StepLen::Four,
+            calm_states(p, params, n),
+        ),
+        GroupFlash => (
+            Moment::BuildUp,
+            "Group flash",
+            fast(params.step),
+            wipe(
+                &rev(groups.quarters.to_vec()),
+                Role::Off,
+                params.roles.0,
+                nn,
+            ),
+        ),
+        FastSnake => (
+            Moment::BuildUp,
+            "Fast snake",
+            fast(params.step),
+            wipe(&rev(merge(&along, 4 * d)), Role::Off, params.roles.0, nn),
+        ),
+        Strobe => (
+            Moment::BuildUp,
+            "Strobe",
+            fast(params.step),
+            vec![paint(nn, params.roles.0, &[]), paint(nn, Role::Off, &[])],
+        ),
+    };
+    let mut states = dedupe(states);
+    if states.is_empty() {
+        states.push(vec![Role::Off; nn]);
+    }
+    Sequence {
+        name: name.into(),
+        moment,
+        steps: states
+            .into_iter()
+            .map(|roles| Step { len, roles })
+            .collect(),
+    }
+}
+
+/// Build-up steps are at most one beat.
+fn fast(s: StepLen) -> StepLen {
+    if s.half_beats() > 2 { StepLen::One } else { s }
+}

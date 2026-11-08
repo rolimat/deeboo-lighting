@@ -8,5 +8,6 @@ pub mod library;
 pub mod model;
 pub mod moments;
 pub mod paint;
+pub mod patterns;
 pub mod scene;
 pub mod scheduler;
