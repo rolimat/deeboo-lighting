@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, type Library, type Sequence, type Step } from "../api";
 import { Grid, MAX_STEPS } from "./Grid";
+import { Simulation } from "./Simulation";
 import { RolePicker, type Role } from "./RolePicker";
 
 const MAX_SEQUENCES = 64;
@@ -162,6 +163,7 @@ export function SequenceList() {
               counts={counts}
               onChange={(steps: Step[]) => update((s) => ({ ...s, steps }))}
             />
+            <Simulation sequence={current} pieces={lib.shape.pieces} palette={palette} />
             <div class="flex gap-2">
               <button
                 type="button"
