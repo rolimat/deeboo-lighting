@@ -305,4 +305,49 @@ mod tests {
             );
         }
     }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
+            #[test]
+            fn arbitrary_bytes_never_panic_and_are_refused(
+                raw in proptest::collection::vec(any::<u8>(), 0..2048)
+            ) {
+                let d = tempfile::tempdir().unwrap();
+                let p = d.path().join("strip.json");
+                fs::write(&p, &raw).unwrap();
+                fs::set_permissions(&p, fs::Permissions::from_mode(0o600)).unwrap();
+                prop_assert!(load(&p).is_err());
+            }
+
+            #[test]
+            fn valid_strips_round_trip(
+                id in "[a-zA-Z0-9]{1,64}",
+                name in "[ -~]{0,63}",
+                key in "[ -~]{16}",
+                segments in 1u8..=60,
+                ip in proptest::option::of(any::<[u8; 4]>().prop_map(Ipv4Addr::from)),
+            ) {
+                let d = tempfile::tempdir().unwrap();
+                let p = d.path().join("strip.json");
+                let cfg = StripConfig {
+                    id: id.clone(),
+                    name: name.clone(),
+                    local_key: SecretString::from(key.clone()),
+                    segments,
+                    last_ip: ip,
+                };
+                save(&p, &cfg).unwrap();
+                let back = load(&p).unwrap();
+                prop_assert_eq!(
+                    (back.id, back.name, back.local_key.expose_secret().to_owned(), back.segments, back.last_ip),
+                    (id, name, key, segments, ip)
+                );
+            }
+        }
+    }
 }

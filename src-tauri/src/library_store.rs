@@ -304,4 +304,40 @@ mod tests {
         save(&p, &Library::builtin(3)).unwrap();
         assert_eq!(load(&p, 3), Library::builtin(3));
     }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
+            #[test]
+            fn arbitrary_bytes_never_panic_and_load_a_valid_library(
+                raw in proptest::collection::vec(any::<u8>(), 0..2048),
+                segments in 1u8..=60,
+            ) {
+                let d = tempfile::tempdir().unwrap();
+                let p = d.path().join("library.json");
+                std::fs::write(&p, &raw).unwrap();
+                let lib = load(&p, segments);
+                prop_assert!(lib.validate().is_ok());
+                // Not a valid library: the built-ins come back and the original is kept aside.
+                let valid = serde_json::from_slice::<Library>(&raw).is_ok_and(|l| l.validate().is_ok());
+                if !valid {
+                    prop_assert_eq!(lib, Library::builtin(segments));
+                    prop_assert_eq!(std::fs::read(d.path().join("library.json.bad")).unwrap(), raw);
+                }
+            }
+
+            #[test]
+            fn builtin_libraries_round_trip(segments in 1u8..=60) {
+                let d = tempfile::tempdir().unwrap();
+                let p = d.path().join("library.json");
+                let lib = Library::builtin(segments);
+                save(&p, &lib).unwrap();
+                prop_assert_eq!(load(&p, segments), lib);
+            }
+        }
+    }
 }

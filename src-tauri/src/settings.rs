@@ -301,4 +301,71 @@ mod tests {
         assert!((p.calm_high_db - d.calm_high_db).abs() < 1e-6);
         assert!(detector_params(&st(10)).calm_kick_db < d.calm_kick_db);
     }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn any_valid() -> impl Strategy<Value = Settings> {
+            (
+                proptest::option::of("[a-zA-Z0-9][a-zA-Z0-9 ]{0,60}[a-zA-Z0-9]"),
+                prop::sample::select(vec![4u8, 8, 16]),
+                1u8..=10,
+                10u8..=100,
+                0u16..=500,
+                any::<bool>(),
+                (8u8..=30, 6u8..=24, 3u8..=15),
+            )
+                .prop_map(
+                    |(
+                        m,
+                        phrase_bars,
+                        sensitivity,
+                        brightness_pct,
+                        lead_ms,
+                        lights_on,
+                        (k, h, r),
+                    )| {
+                        Settings {
+                            midi_source: m,
+                            phrase_bars,
+                            sensitivity,
+                            brightness_pct,
+                            lead_ms,
+                            lights_on,
+                            calm_kick_db: k,
+                            calm_high_db: h,
+                            riser_db: r,
+                            ..Settings::default()
+                        }
+                    },
+                )
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
+            #[test]
+            fn arbitrary_bytes_never_panic_and_never_yield_invalid_settings(
+                raw in proptest::collection::vec(any::<u8>(), 0..2048)
+            ) {
+                let (_d, p) = tmp();
+                std::fs::write(&p, &raw).unwrap();
+                let s = load(&p);
+                prop_assert!(s.validate().is_ok());
+                // Garbage is never accepted: unless the bytes are a valid file, defaults come back.
+                if serde_json::from_slice::<Settings>(&raw).map_or(true, |x| x.validate().is_err()) {
+                    prop_assert_eq!(s, Settings::default());
+                }
+            }
+
+            #[test]
+            fn valid_settings_round_trip(s in any_valid()) {
+                prop_assert!(s.validate().is_ok());
+                let (_d, p) = tmp();
+                save(&p, &s).unwrap();
+                prop_assert_eq!(load(&p), s);
+            }
+        }
+    }
 }
