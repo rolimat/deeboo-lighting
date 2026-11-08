@@ -19,7 +19,11 @@ fn messages_start_lead_before_the_step_and_are_spaced() {
     assert_eq!(s.due(799_999), Vec::<PaintCommand>::new());
     assert_eq!(s.due(800_000).len(), 1);
     assert_eq!(s.next_deadline_us(), Some(800_000 + MESSAGE_GAP_US));
-    assert_eq!(s.due(800_000 + 2 * MESSAGE_GAP_US).len(), 2);
+    // Called late: still one message, the last one is pushed a gap after it.
+    let late = 800_000 + 2 * MESSAGE_GAP_US;
+    assert_eq!(s.due(late).len(), 1);
+    assert_eq!(s.next_deadline_us(), Some(late + MESSAGE_GAP_US));
+    assert_eq!(s.due(late + MESSAGE_GAP_US).len(), 1);
     assert_eq!(s.next_deadline_us(), None);
 }
 
@@ -44,7 +48,12 @@ fn unsent_messages_are_dropped_when_the_next_step_is_planned() {
     let mut expect = vec![None; 3];
     light_core::scene::apply(&mut expect, first.first().unwrap());
     assert_eq!(s.sent(), expect.as_slice());
-    let cmds = s.due(10_000_000);
+    let mut cmds = Vec::new();
+    let mut now = 10_000_000;
+    while let Some(at) = s.next_deadline_us() {
+        now = now.max(at);
+        cmds.extend(s.due(now));
+    }
     let mut state = expect.clone();
     for cmd in &cmds {
         light_core::scene::apply(&mut state, cmd);
@@ -79,4 +88,34 @@ fn forget_sent_makes_the_next_plan_a_full_scene() {
     s.forget_sent();
     s.plan(1_000_000, 1_000_000, 0, &[Some(c(1)); 3]);
     assert_eq!(s.due(1_000_000), vec![PaintCommand::Bucket(c(1))]);
+}
+
+/// The engine can wake up late: overdue messages must still leave the strip at least one gap apart,
+/// measured from the real send time (closer messages get lost or reordered, tuya-protocol skill).
+#[test]
+fn late_wakeup_keeps_the_gap() {
+    use light_core::paint::Hsv;
+    use light_core::scheduler::{MESSAGE_GAP_US, Scheduler};
+    let (a, b) = (
+        Some(Hsv {
+            h: 0,
+            s: 1000,
+            v: 1000,
+        }),
+        Some(Hsv {
+            h: 240,
+            s: 1000,
+            v: 1000,
+        }),
+    );
+    let mut s = Scheduler::new(4);
+    s.plan(0, 1_000_000, 0, &[a, b, None, a]);
+    // Wake up 1 s late: only one message may go now.
+    assert_eq!(s.due(2_000_000).len(), 1);
+    assert_eq!(s.next_deadline_us(), Some(2_000_000 + MESSAGE_GAP_US));
+    assert_eq!(
+        s.due(2_000_000 + MESSAGE_GAP_US - 1),
+        Vec::<PaintCommand>::new()
+    );
+    assert_eq!(s.due(2_000_000 + MESSAGE_GAP_US).len(), 1);
 }

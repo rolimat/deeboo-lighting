@@ -46,20 +46,24 @@ impl Scheduler {
     }
 
     /// Messages whose time has come, in order; they join the sent state.
+    /// At most one message per call: if the caller wakes up late, the rest are pushed back so the
+    /// strip always gets at least `MESSAGE_GAP_US` between real sends.
     pub fn due(&mut self, now_us: u64) -> Vec<PaintCommand> {
-        let mut out = Vec::new();
-        while let Some((at, _)) = self.pending.front() {
-            if *at > now_us {
-                break;
-            }
-            let Some((at, cmd)) = self.pending.pop_front() else {
-                break;
-            };
-            apply(&mut self.sent, &cmd);
-            self.last_send_us = Some(at.max(self.last_send_us.unwrap_or(0)));
-            out.push(cmd);
+        match self.pending.front() {
+            Some((at, _)) if *at <= now_us => {}
+            _ => return Vec::new(),
         }
-        out
+        let Some((_, cmd)) = self.pending.pop_front() else {
+            return Vec::new();
+        };
+        apply(&mut self.sent, &cmd);
+        self.last_send_us = Some(now_us);
+        let mut earliest = now_us.saturating_add(MESSAGE_GAP_US);
+        for (at, _) in &mut self.pending {
+            *at = (*at).max(earliest);
+            earliest = at.saturating_add(MESSAGE_GAP_US);
+        }
+        vec![cmd]
     }
 
     #[must_use]
