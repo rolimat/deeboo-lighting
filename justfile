@@ -49,6 +49,18 @@ perf-core:
     [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} perf-core
     cargo test --locked --release -p light-core --test perf -- --ignored --nocapture
 
+# Frees build caches (host target/, the Docker target volume, Docker build cache); all rebuildable.
+clean-cache:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="$HOME/.cargo/bin:$PATH"
+    cargo clean
+    if docker info >/dev/null 2>&1; then
+        docker volume rm -f "$(basename "$PWD")_target" >/dev/null
+        docker builder prune -f >/dev/null
+    fi
+    df -h ~ | tail -1
+
 # Builds ui/dist: tauri::generate_context! needs it before cargo compiles src-tauri.
 ui-dist: ui-deps
     npm --prefix ui run build
