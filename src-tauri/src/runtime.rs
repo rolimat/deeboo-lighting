@@ -487,14 +487,15 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
 
     /// A deadline passed.
     pub fn tick(&mut self, now_us: u64) {
-        if self.engine.next_deadline_us().is_some_and(|d| d <= now_us) {
-            let cmds = self.engine.on_deadline(now_us);
-            self.flush(cmds);
-        }
         self.after(now_us);
     }
 
     fn after(&mut self, now_us: u64) {
+        // Also after every input: a flood of inputs must not starve the clock timeout.
+        if self.engine.next_deadline_us().is_some_and(|d| d <= now_us) {
+            let cmds = self.engine.on_deadline(now_us);
+            self.flush(cmds);
+        }
         let now = snapshot(&self.engine);
         if now != self.last {
             self.last = now;
@@ -817,6 +818,22 @@ mod tests {
         c.handle(Input::PopoverShown, 2);
         assert!(c.status().midi.ok);
         assert_eq!(calls.borrow().len(), 3);
+    }
+
+    #[test]
+    fn input_flood_does_not_keep_the_show_from_stopping() {
+        let (mut c, _rx, _) = core(false);
+        let midi = |at_us, status| Input::Midi(MidiEvent { at_us, status });
+        c.handle(midi(0, 0xFA), 0);
+        for i in 0..4 {
+            c.handle(midi(i * 20_000, 0xF8), i * 20_000);
+        }
+        assert!(c.status().playing);
+        // The clock stops; the loop never times out because inputs keep coming.
+        for ms in 100..800u64 {
+            c.handle(Input::Ui(UiCommand::Brightness(50)), ms * 1_000);
+        }
+        assert!(!c.status().playing, "500 ms without clock must stop it");
     }
 
     #[test]
