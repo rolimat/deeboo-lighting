@@ -122,6 +122,7 @@ mod tests {
                 "allow-strip-identify",
                 "allow-identify-segment",
                 "allow-wizard-save",
+                "allow-message-counts",
                 "core:event:allow-listen",
                 "core:event:allow-unlisten"
             ]

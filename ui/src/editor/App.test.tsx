@@ -5,7 +5,7 @@ import { render } from "preact";
 vi.mock("./api", () => ({
   api: {
     getStatus: vi.fn(),
-    getLibrary: vi.fn(async () => ({ shape: { pieces: [] } })),
+    getLibrary: vi.fn(async () => ({ shape: { pieces: [] }, palettes: [], sequences: [] })),
     onWizard: vi.fn(async () => () => {}),
     wizardCancel: vi.fn(),
   },
@@ -31,7 +31,7 @@ it("renders_strip_section", async () => {
   const root = document.createElement("div");
   await mount(root);
   const nav = root.querySelector("nav");
-  expect(nav?.textContent).toBe("Strip");
+  expect(nav?.textContent).toBe("StripSequences");
   expect(nav?.querySelector("[aria-current='page']")?.textContent).toBe("Strip");
   expect(root.querySelector("section")?.textContent).toContain("dj lights (10 segments)");
 });
@@ -41,4 +41,14 @@ it("shows_not_connected_when_no_strip", async () => {
   const root = document.createElement("div");
   await mount(root);
   expect(root.querySelector("section")?.textContent).toContain("not connected");
+});
+
+it("switches_to_sequences", async () => {
+  vi.mocked(api.getStatus).mockResolvedValue({ kind: "notConfigured" });
+  const root = document.createElement("div");
+  await mount(root);
+  const tab = [...root.querySelectorAll("nav button")].find((b) => b.textContent === "Sequences");
+  await act(async () => (tab as HTMLElement).click());
+  expect(root.querySelector("section")?.getAttribute("aria-label")).toBe("Sequences");
+  expect(tab?.getAttribute("aria-current")).toBe("page");
 });

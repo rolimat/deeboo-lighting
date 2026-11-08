@@ -21,6 +21,7 @@ const COMMANDS: &[&str] = &[
     "strip_identify",
     "identify_segment",
     "wizard_save",
+    "message_counts",
 ];
 
 fn main() {

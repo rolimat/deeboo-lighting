@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-message-counts"
+description = "Enables the message_counts command without any pre-configured scope."
+commands.allow = ["message_counts"]
+
+[[permission]]
+identifier = "deny-message-counts"
+description = "Denies the message_counts command without any pre-configured scope."
+commands.deny = ["message_counts"]

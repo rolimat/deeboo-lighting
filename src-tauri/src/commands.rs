@@ -15,6 +15,8 @@ use crate::library_store;
 use crate::settings::{self, Settings};
 use crate::wizard::session::{Emit, RealLan, Wizard};
 use light_core::library::Library;
+use light_core::model::{Sequence, resolve};
+use light_core::scene;
 
 /// The most the app waits at exit for the wizard to revoke its cloud session.
 const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -416,6 +418,40 @@ pub fn save_library(
     Ok(saved)
 }
 
+/// Messages each step costs to reach from the previous one (the first from the last: it wraps),
+/// so the editor can flag steps the strip would show in several parts. Messages never echo input.
+fn message_counts_of(lib: &Library, seq: &Sequence, palette_id: u32) -> Result<Vec<u8>, String> {
+    seq.validate(lib.segments())
+        .map_err(|_| "Every step needs one role per segment.".to_string())?;
+    let (_, palette) = lib
+        .palettes
+        .iter()
+        .find(|(id, _)| *id == palette_id)
+        .ok_or("No such palette.")?;
+    let scenes: Vec<Vec<_>> = seq
+        .steps
+        .iter()
+        .map(|s| s.roles.iter().map(|r| resolve(*r, palette, 100)).collect())
+        .collect();
+    let n = scenes.len();
+    Ok((0..n)
+        .map(|i| {
+            let count = scene::diff(&scenes[(i + n - 1) % n], &scenes[i]).len();
+            u8::try_from(count).unwrap_or(u8::MAX)
+        })
+        .collect())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn message_counts(
+    state: tauri::State<'_, AppState>,
+    sequence: Sequence,
+    palette_id: u32,
+) -> Result<Vec<u8>, String> {
+    message_counts_of(&state.library(), &sequence, palette_id)
+}
+
 #[tauri::command]
 pub async fn list_midi_sources() -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(crate::devices::midi_sources)
@@ -592,7 +628,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 19);
+        assert_eq!(commands.len(), 20);
         assert_eq!(granted, commands);
     }
 
@@ -611,6 +647,34 @@ mod tests {
             identify_check(&StripStatus::Connecting, 1),
             Err("Strip not connected.".into())
         );
+    }
+
+    #[test]
+    fn message_counts_matches_scene_diff() {
+        use Role::{Contraste as C, Off, Principal as P};
+        use light_core::model::{Role, Step, StepLen};
+        let lib = Library::builtin(4);
+        let step = |roles: [Role; 4]| Step {
+            len: StepLen::One,
+            roles: roles.to_vec(),
+        };
+        let seq = Sequence {
+            name: "t".into(),
+            moment: Moment::Rhythm,
+            steps: vec![
+                step([P, P, P, P]),         // from the last (all off): 1 bucket
+                step([C, P, Off, Off]),     // a pencil and an eraser: 2
+                step([Off, Off, Off, Off]), // 1 eraser
+                step([Off, Off, Off, Off]), // unchanged: 0
+            ],
+        };
+        assert_eq!(message_counts_of(&lib, &seq, 1), Ok(vec![1, 2, 1, 0]));
+        assert!(message_counts_of(&lib, &seq, 99).is_err());
+        let mut short = seq.clone();
+        short.steps[1].roles.pop();
+        assert!(message_counts_of(&lib, &short, 1).is_err());
+        short.steps.clear();
+        assert!(message_counts_of(&lib, &short, 1).is_err());
     }
 
     fn lib_state() -> (tempfile::TempDir, AppState) {

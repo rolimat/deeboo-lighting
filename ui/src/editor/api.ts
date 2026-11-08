@@ -92,6 +92,9 @@ export const api = {
   getLibrary: (): Promise<Library> => invoke("get_library"),
   /** Rejects with a short message; the previous library is kept. */
   saveLibrary: (library: Library): Promise<Library> => invoke("save_library", { library }),
+  /** Messages each step costs to reach from the previous one (the first wraps from the last). */
+  messageCounts: (sequence: Sequence, paletteId: number): Promise<number[]> =>
+    invoke("message_counts", { sequence, paletteId }),
   wizardStart: (userCode: string): Promise<void> => invoke("wizard_start", { userCode }),
   wizardChoose: (deviceId: string): Promise<void> => invoke("wizard_choose", { deviceId }),
   wizardRetry: (): Promise<void> => invoke("wizard_retry"),
