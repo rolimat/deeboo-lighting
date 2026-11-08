@@ -105,3 +105,30 @@ What B1 still cannot do:
 - It can show a short Build-up inside a long break that collapses back to Calm after 2 to 4 s (a riser or crash
   that does not lead to the drop).
 - Fitted on the session plus three reviewed songs, all at 122 to 128 BPM.
+
+## Second song review (rule set B2)
+
+2026-11-08. The user reviewed all five songs again on the B1 timelines. Three changes fix the build-ups that B1 cut
+short, without changing any session label result, and make the detector robust to a stale groove reference.
+
+| change | parameters | musical reason |
+|---|---|---|
+| Slower collapse | `collapse_beats` 4 to 16 | A riser that pauses or changes texture for a bar or two keeps the tension: only four bars with the highs well under their entry level end a Build-up. |
+| Faster slow return | `slow_return_beats` 32 to 24 | After a long break the groove reference can be stale (the next track is a few dB quieter): six bars of a steady near groove are enough to return. |
+| Build-up cap | `buildup_max_beats` 96 (back, new meaning) | A Build-up is the last bars before a drop; one that runs 24 bars without a drop was the break itself. It ends in Calm and starts the refractory like a collapse. |
+
+Beat agreement with the user's labels on songs 1 to 5 (replica): mean 90.2 % (B1) to 92.6 % (B2); per song
+91/81/100/97/82 to 90/87/100/98/88 %. Session unchanged: Calm 7 of 9, Rhythm 9 of 9, Build-up 8 of 8.
+
+What B2 still cannot do:
+
+- A Calm where only the kick leaves and the bass stays (two songs) is not seen.
+- A Build-up made by fading the kick out over 8 bars (one song) is not seen: in the session the same fade leads into a Calm.
+- A two-beat kick-and-bass hit at the end of a Build-up shows Rhythm for about 2 s.
+
+Tried and rejected:
+
+- A sudden sub-and-kick drop as Calm: fixes one song, makes the session miss a drop.
+- A kick-fade Build-up rule: turns three session breaks into Build-ups.
+- A relative drop on stale references: R/C flicker in long session breaks.
+- Kick attack and on-beat pulse features: they do not separate kick from bass.

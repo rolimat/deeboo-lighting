@@ -32,7 +32,8 @@ pub struct DetectorParams {
     pub rhythm_after_full: u32,
     /// Full beats after a highs-only jump -> Rhythm (hats back for a whole bar).
     pub hats_after_full: u32,
-    /// Near beats in a row -> Rhythm without a jump (fade-in, quieter track).
+    /// Near beats in a row -> Rhythm without a jump (fade-in, quieter track; after a long break the groove
+    /// reference can be stale, so six bars of a steady near groove are enough).
     pub slow_return_beats: u32,
     /// Rhythm -> Build-up: kick at least this far below its reference...
     pub groove_buildup_kick_db: f32,
@@ -64,11 +65,14 @@ pub struct DetectorParams {
     pub approach_above_db: f32,
     pub approach_rise_db: f32,
     pub approach_bars: usize,
-    /// Build-up -> Calm needs this many beats in a row below the collapse level (a one- or two-beat
-    /// silence before a drop is not a collapse)...
+    /// Build-up -> Calm needs this many beats in a row below the collapse level (a riser that pauses or
+    /// changes texture for a bar or two keeps the tension: only four bars well under the entry level end it)...
     pub collapse_beats: u32,
     /// ...and after a collapse there is no Calm -> Build-up for this many beats.
     pub refractory_beats: u32,
+    /// A Build-up is the last bars before a drop: one that lasts this many beats without a drop was the
+    /// break itself -> Calm (and the refractory starts, as for a collapse).
+    pub buildup_max_beats: u32,
 }
 
 impl Default for DetectorParams {
@@ -84,7 +88,7 @@ impl Default for DetectorParams {
             jump_db: 10.0,
             rhythm_after_full: 2,
             hats_after_full: 4,
-            slow_return_beats: 32,
+            slow_return_beats: 24,
             groove_buildup_kick_db: 6.0,
             groove_buildup_high_db: 8.0,
             collapse_db: 8.0,
@@ -101,8 +105,9 @@ impl Default for DetectorParams {
             approach_above_db: 2.0,
             approach_rise_db: 2.0,
             approach_bars: 8,
-            collapse_beats: 4,
+            collapse_beats: 16,
             refractory_beats: 16,
+            buildup_max_beats: 96,
         }
     }
 }
@@ -333,7 +338,10 @@ impl MomentDetector {
             Moment::BuildUp => {
                 let low = high4 < self.entry_high - p.collapse_db;
                 self.collapse_run = if low { self.collapse_run + 1 } else { 0 };
-                if may && self.collapse_run >= p.collapse_beats {
+                // A collapse, or a Build-up that outlasted `buildup_max_beats`: Calm and the refractory.
+                if (may && self.collapse_run >= p.collapse_beats)
+                    || self.in_state >= p.buildup_max_beats
+                {
                     self.since_collapse = 0;
                     Moment::Calm
                 } else {
@@ -577,14 +585,15 @@ mod tests {
     }
 
     #[test]
-    fn b1_defaults_match_the_tuning() {
+    fn b2_defaults_match_the_tuning() {
         let p = DetectorParams::default();
         assert_eq!((p.history_beats, p.min_state_beats), (64, 4));
         assert_eq!((p.calm_after_quiet, p.rhythm_after_full), (2, 2));
-        assert_eq!((p.hats_after_full, p.slow_return_beats), (4, 32));
+        assert_eq!((p.hats_after_full, p.slow_return_beats), (4, 24));
         assert_eq!((p.teaser_beats, p.riser_bars), (16, 4));
         assert_eq!((p.approach_calm_beats, p.approach_bars), (32, 8));
-        assert_eq!((p.collapse_beats, p.refractory_beats), (4, 16));
+        assert_eq!((p.collapse_beats, p.refractory_beats), (16, 16));
+        assert_eq!(p.buildup_max_beats, 96);
         let dbs = [
             (p.learn_db, 16.0),
             (p.calm_kick_db, 16.0),
@@ -778,8 +787,8 @@ mod tests {
     }
 
     #[test]
-    fn buildup_collapses_to_calm_when_highs_stay_down_without_a_drop() {
-        let lens = beats(128.0, 64);
+    fn buildup_collapses_to_calm_when_highs_stay_down_for_four_bars() {
+        let lens = beats(128.0, 100);
         let sig = synth_gain(
             &lens,
             |k| if k < 40 { 1.0 } else { 0.3 },
@@ -788,9 +797,40 @@ mod tests {
         );
         let m = moments(&drive(&sig, &lens));
         assert_eq!(m[49], Moment::BuildUp, "{m:?}");
-        // The highs have been down for 4 beats (53..=56) only at 56.
-        assert_eq!(m[55], Moment::BuildUp, "{m:?}");
-        assert!(m[56..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        // The highs have been down for 16 beats (53..=68) only at 68.
+        assert_eq!(m[67], Moment::BuildUp, "{m:?}");
+        assert!(m[68..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
+    fn a_one_bar_pause_keeps_the_buildup() {
+        // A riser that pauses for two bars keeps the tension.
+        let lens = beats(128.0, 80);
+        let sig = synth_gain(
+            &lens,
+            |k| if k < 40 { 1.0 } else { 0.3 },
+            |_| true,
+            |k| {
+                if (40..50).contains(&k) || k >= 58 {
+                    20.0
+                } else {
+                    0.0
+                }
+            },
+        );
+        let m = moments(&drive(&sig, &lens));
+        assert!(m[41..].iter().all(|&m| m == Moment::BuildUp), "{m:?}");
+    }
+
+    #[test]
+    fn a_buildup_without_a_drop_ends_after_24_bars() {
+        // Highs stay up the whole time, no drop: the break itself, not the last bars before a drop.
+        let m = ducked(160, |k| if k < 40 { 0.0 } else { 10.0 });
+        assert_eq!(m[41], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[136], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[137], Moment::Calm, "{m:?}");
+        // Like a collapse, it starts the refractory.
+        assert!(m[137..153].iter().all(|&m| m == Moment::Calm), "{m:?}");
     }
 
     /// Kick ducked to 0.4 from beat 40, hats `hats(k)`.
@@ -813,18 +853,18 @@ mod tests {
     }
 
     #[test]
-    fn collapse_blocks_a_new_buildup_for_16_beats() {
-        // Collapse at 54; a riser would qualify at 67 but the refractory holds it back until 71.
-        let m = ducked(80, |k| match k {
+    fn collapse_blocks_a_new_buildup_for_16_beats_after_a_16_beat_collapse() {
+        // Collapse at 66; a riser would qualify at 79 but the refractory holds it back until 83.
+        let m = ducked(100, |k| match k {
             0..=39 => 0.0,
             40..=49 => 10.0,
-            50..=55 => -20.0,
-            _ => (-12.0 + 4.0 * ((k - 56) / 4) as f32).min(0.0),
+            50..=67 => -20.0,
+            _ => (-12.0 + 4.0 * ((k - 68) / 4) as f32).min(0.0),
         });
         assert_eq!(m[49], Moment::BuildUp, "{m:?}");
-        assert_eq!(m[54], Moment::Calm, "{m:?}");
-        assert!(m[54..71].iter().all(|&m| m == Moment::Calm), "{m:?}");
-        assert_eq!(m[71], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[66], Moment::Calm, "{m:?}");
+        assert!(m[66..83].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        assert_eq!(m[83], Moment::BuildUp, "{m:?}");
     }
 
     #[test]
@@ -863,8 +903,8 @@ mod tests {
     }
 
     #[test]
-    fn quieter_groove_returns_after_32_near_beats() {
-        // Break, then the groove comes back 6 dB quieter: no jump, so it needs 8 bars.
+    fn quieter_groove_returns_after_24_near_beats() {
+        // Break, then the groove comes back 6 dB quieter: no jump, so it needs 6 bars.
         let lens = beats(128.0, 100);
         let sig = synth_gain(
             &lens,
@@ -882,7 +922,7 @@ mod tests {
             .iter()
             .position(|&x| x == Moment::Rhythm)
             .map(|i| i + 44);
-        assert_eq!(back, Some(78), "{m:?}");
+        assert_eq!(back, Some(70), "{m:?}");
     }
 
     #[test]
