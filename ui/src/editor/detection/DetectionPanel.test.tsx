@@ -117,3 +117,16 @@ it("reset_restores_defaults", async () => {
   expect(slider("Highs drop").value).toBe("12");
   expect(slider("Riser").value).toBe("7");
 });
+
+it("unmounting_right_after_a_move_still_saves_it", async () => {
+  await move("Kick drop", "27");
+  await act(async () => render(null, root));
+  expect(api.setDetectionThresholds).toHaveBeenCalledTimes(1);
+  expect(api.setDetectionThresholds).toHaveBeenCalledWith({
+    calmKickDb: 27,
+    calmHighDb: 10,
+    riserDb: 5,
+  });
+  await act(async () => void (await vi.advanceTimersByTimeAsync(400)));
+  expect(api.setDetectionThresholds).toHaveBeenCalledTimes(1);
+});

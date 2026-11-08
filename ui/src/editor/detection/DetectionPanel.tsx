@@ -36,6 +36,8 @@ export function DetectionPanel() {
   const [beat, setBeat] = useState<DetectorEvent | null>(null);
   const [error, setError] = useState("");
   const timer = useRef<number | undefined>(undefined);
+  /** A slider change not yet sent: flushed on unmount so closing the section does not drop it. */
+  const pending = useRef<Thresholds | null>(null);
 
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -51,6 +53,7 @@ export function DetectionPanel() {
       gone = true;
       off?.();
       clearTimeout(timer.current);
+      if (pending.current) void api.setDetectionThresholds(pending.current).catch(() => {});
       void api.detectionWatch(false).catch(() => {});
     };
   }, []);
@@ -58,7 +61,9 @@ export function DetectionPanel() {
   const send = (next: Thresholds, delay: number) => {
     setT(next);
     clearTimeout(timer.current);
+    pending.current = next;
     timer.current = window.setTimeout(() => {
+      pending.current = null;
       api.setDetectionThresholds(next).then(
         () => setError(""),
         (e) => setError(String(e)),

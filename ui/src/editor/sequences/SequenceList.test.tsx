@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act } from "preact/test-utils";
 import { render } from "preact";
-import type { Library } from "../api";
+import type { Library, Sequence } from "../api";
 
 vi.mock("../api", () => ({
   api: { getLibrary: vi.fn(), saveLibrary: vi.fn(), messageCounts: vi.fn() },
@@ -34,9 +34,9 @@ const lib = (): Library => ({
 
 let root: HTMLElement;
 const settle = (ms = 0) => new Promise((r) => setTimeout(r, ms));
-async function mount() {
+async function mount(stripSegments?: number) {
   await act(async () => {
-    render(<SequenceList />, root);
+    render(<SequenceList stripSegments={stripSegments} />, root);
     await settle();
   });
   // Effects flush when act ends; the debounced counts call then needs its own window.
@@ -119,6 +119,55 @@ it("rename_validation_message", async () => {
 it("shows_the_save_error", async () => {
   vi.mocked(api.saveLibrary).mockRejectedValue("sets references an unknown sequence");
   await mount();
-  await act(async () => button("Save").click());
+  await act(async () => {
+    button("Save").click();
+    await settle();
+  });
   expect(root.textContent).toContain("sets references an unknown sequence");
+});
+
+const seqSet = (id: number, name: string) => {
+  const ms = {
+    sequences: [{ id }],
+    palettes: [1],
+    order: "inOrder" as const,
+    interval: { bars: 2 },
+  };
+  return { id: 1, name, rhythm: ms, calm: ms, buildup: ms };
+};
+
+it("save_replaces_only_sequences_on_a_fresh_library", async () => {
+  // The popover changed the active set after this section loaded.
+  vi.mocked(api.getLibrary)
+    .mockResolvedValueOnce(lib())
+    .mockResolvedValueOnce({ ...lib(), activeSet: 5, activePalette: null });
+  await mount();
+  await act(async () => button("Save").click());
+  const sent = vi.mocked(api.saveLibrary).mock.calls[0]?.[0];
+  expect(sent?.activeSet).toBe(5);
+  expect(sent?.activePalette).toBeNull();
+  expect(sent?.sequences[0]?.[0]).toBe(7);
+});
+
+it("delete_is_disabled_while_a_set_uses_the_sequence", async () => {
+  const l = lib();
+  l.sequences.push([8, { ...(l.sequences[0] as [number, Sequence])[1], name: "Spare" }]);
+  l.sets = [seqSet(7, "Club")];
+  vi.mocked(api.getLibrary).mockResolvedValue(l);
+  await mount();
+  expect(button("Delete sequence").hasAttribute("disabled")).toBe(true);
+  expect(root.textContent).toContain("Used by set Club \u2014 remove it there first.");
+  await act(async () => button("Spare").click());
+  expect(button("Delete sequence").hasAttribute("disabled")).toBe(false);
+  expect(root.textContent).not.toContain("Used by set");
+});
+
+it("notes_when_the_sequences_are_for_another_segment_count", async () => {
+  await mount(5);
+  expect(root.textContent).toContain(
+    "These sequences are for 3 segments; the strip has 5. Save the strip shape to adapt them.",
+  );
+  render(null, root);
+  await mount(3);
+  expect(root.textContent).not.toContain("These sequences are for");
 });

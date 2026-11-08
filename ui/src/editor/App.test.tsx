@@ -5,7 +5,12 @@ import { render } from "preact";
 vi.mock("./api", () => ({
   api: {
     getStatus: vi.fn(),
-    getLibrary: vi.fn(async () => ({ shape: { pieces: [] }, palettes: [], sequences: [] })),
+    getLibrary: vi.fn(async () => ({
+      shape: { pieces: [] },
+      palettes: [],
+      sequences: [],
+      sets: [],
+    })),
     onWizard: vi.fn(async () => () => {}),
     wizardCancel: vi.fn(),
   },

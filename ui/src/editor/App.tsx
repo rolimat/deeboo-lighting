@@ -29,7 +29,7 @@ export function App() {
   );
   useEffect(() => {
     api.getStatus().then(setStrip, () => setStrip({ kind: "error" }));
-  }, []);
+  }, [section]); // current after a re-pair: the section was left and re-entered
   return (
     <div class="flex h-screen">
       <nav class="w-40 space-y-1 border-r border-border p-3" aria-label="Sections">
@@ -48,7 +48,7 @@ export function App() {
       {section === "Sequences" && (
         <section class="min-w-0 flex-1 overflow-auto p-6" aria-label="Sequences">
           <h1 class="mb-4 text-lg">Sequences</h1>
-          <SequenceList />
+          <SequenceList stripSegments={strip?.kind === "connected" ? strip.segments : undefined} />
         </section>
       )}
       {section === "Palettes" && (

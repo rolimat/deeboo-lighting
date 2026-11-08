@@ -36,6 +36,13 @@ const lib = (): Library => ({
       calm: ms([{ id: 11 }]),
       buildup: ms([{ id: 12 }]),
     },
+    {
+      id: 2,
+      name: "Club",
+      rhythm: ms(["generated"]),
+      calm: ms(["generated"]),
+      buildup: ms(["generated"]),
+    },
   ],
   activeSet: 1,
   activePalette: 1,
@@ -115,4 +122,16 @@ it("shows_rust_message_on_refused_save", async () => {
   await click(button("Delete set"));
   await click(button("Save"));
   expect(root.textContent).toContain("cannot delete the last set");
+});
+
+it("save_keeps_the_popovers_active_set_unless_it_was_deleted", async () => {
+  // The popover switched to set 2 after this section loaded.
+  vi.mocked(api.getLibrary).mockResolvedValue({ ...lib(), activeSet: 2 });
+  await click(button("Save"));
+  expect(vi.mocked(api.saveLibrary).mock.calls[0]?.[0].activeSet).toBe(2);
+  // Deleting the set the popover has active falls back to the first remaining one.
+  await click(button("Club"));
+  await click(button("Delete set"));
+  await click(button("Save"));
+  expect(vi.mocked(api.saveLibrary).mock.calls[1]?.[0].activeSet).toBe(1);
 });

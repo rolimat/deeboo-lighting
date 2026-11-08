@@ -53,7 +53,14 @@ export function PaletteEditor() {
       return;
     }
     try {
-      const saved = await api.saveLibrary({ ...lib, palettes: pals });
+      // Fresh copy: the popover may have changed the active set or palette since this loaded.
+      const fresh = await api.getLibrary();
+      const active = fresh.activePalette;
+      const saved = await api.saveLibrary({
+        ...fresh,
+        palettes: pals,
+        activePalette: pals.some(([id]) => id === active) ? active : null,
+      });
       setLib(saved);
       setPals(saved.palettes);
       setSel((s) => Math.min(s, saved.palettes.length - 1));
@@ -65,6 +72,11 @@ export function PaletteEditor() {
 
   if (!lib) return <p class="text-dim">{error || "Loading…"}</p>;
   const btn = "rounded-card border border-border px-3 py-1 disabled:opacity-40";
+  const usedBy = lib.sets
+    .filter((set) =>
+      [set.rhythm, set.calm, set.buildup].some((m) => m.palettes.includes(pals[sel]?.[0] ?? -1)),
+    )
+    .map((set) => set.name);
   return (
     <div class="space-y-4">
       <div class="flex gap-4">
@@ -123,7 +135,7 @@ export function PaletteEditor() {
             <p class="text-dim">Suave: use a light colour for Calm.</p>
             <button
               type="button"
-              disabled={pals.length <= 1}
+              disabled={pals.length <= 1 || usedBy.length > 0}
               onClick={() => {
                 setPals((all) => all.filter((_, i) => i !== sel));
                 setSel(Math.max(0, sel - 1));
@@ -132,6 +144,12 @@ export function PaletteEditor() {
             >
               Delete palette
             </button>
+            {usedBy.length > 0 && (
+              <p class="text-dim">
+                Used by {usedBy.length > 1 ? "sets" : "set"} {usedBy.join(", ")} {"\u2014"} remove
+                it there first.
+              </p>
+            )}
           </div>
         )}
       </div>

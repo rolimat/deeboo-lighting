@@ -22,7 +22,7 @@ const nameOk = (n: string) => {
 let nextId = 1_000_000;
 
 /** Sequences section: list, grid editor and message warnings. Saving goes through `save_library`. */
-export function SequenceList() {
+export function SequenceList(props: { stripSegments?: number }) {
   const [lib, setLib] = useState<Library | null>(null);
   const [seqs, setSeqs] = useState<[number, Sequence][]>([]);
   const [sel, setSel] = useState(0);
@@ -86,7 +86,8 @@ export function SequenceList() {
       return;
     }
     try {
-      const saved = await api.saveLibrary({ ...lib, sequences: seqs });
+      // Fresh copy: the popover may have changed the active set or palette since this loaded.
+      const saved = await api.saveLibrary({ ...(await api.getLibrary()), sequences: seqs });
       setLib(saved);
       setSeqs(saved.sequences);
       setError("");
@@ -96,8 +97,22 @@ export function SequenceList() {
   };
 
   if (!lib) return <p class="text-dim">{error || "Loading…"}</p>;
+  const pieces = lib.shape.pieces.length;
+  const usedBy = lib.sets
+    .filter((set) =>
+      [set.rhythm, set.calm, set.buildup].some((m) =>
+        m.sequences.some((r) => typeof r === "object" && r.id === seqs[sel]?.[0]),
+      ),
+    )
+    .map((set) => set.name);
   return (
     <div class="space-y-4">
+      {props.stripSegments !== undefined && props.stripSegments !== pieces && (
+        <p class="text-dim">
+          These sequences are for {pieces} segments; the strip has {props.stripSegments}. Save the
+          strip shape to adapt them.
+        </p>
+      )}
       <div class="flex gap-4">
         <ul class="w-48 space-y-1" aria-label="Sequences">
           {seqs.map(([id, s], i) => (
@@ -197,7 +212,7 @@ export function SequenceList() {
               </button>
               <button
                 type="button"
-                disabled={seqs.length <= 1}
+                disabled={seqs.length <= 1 || usedBy.length > 0}
                 onClick={() => {
                   setSeqs((all) => all.filter((_, i) => i !== sel));
                   setSel(Math.max(0, sel - 1));
@@ -207,6 +222,12 @@ export function SequenceList() {
                 Delete sequence
               </button>
             </div>
+            {usedBy.length > 0 && (
+              <p class="text-dim">
+                Used by {usedBy.length > 1 ? "sets" : "set"} {usedBy.join(", ")} {"\u2014"} remove
+                it there first.
+              </p>
+            )}
           </div>
         ) : (
           <p class="text-dim">No palette to show colours with.</p>

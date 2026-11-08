@@ -41,7 +41,6 @@ let nextId = 3_000_000;
 export function SetEditor() {
   const [lib, setLib] = useState<Library | null>(null);
   const [sets, setSets] = useState<LibrarySet[]>([]);
-  const [active, setActive] = useState(0);
   const [sel, setSel] = useState(0);
   const [error, setError] = useState("");
 
@@ -50,7 +49,6 @@ export function SetEditor() {
       (l) => {
         setLib(l);
         setSets(l.sets);
-        setActive(l.activeSet);
       },
       (e: unknown) => setError(String(e)),
     );
@@ -79,10 +77,15 @@ export function SetEditor() {
       return;
     }
     try {
-      const saved = await api.saveLibrary({ ...lib, sets, activeSet: active });
+      // Fresh copy: the popover may have changed the active set or palette since this loaded.
+      const fresh = await api.getLibrary();
+      // Deleting the last set leaves activeSet dangling on purpose: Rust refuses and says why.
+      const activeSet = sets.some((s) => s.id === fresh.activeSet)
+        ? fresh.activeSet
+        : (sets[0]?.id ?? fresh.activeSet);
+      const saved = await api.saveLibrary({ ...fresh, sets, activeSet });
       setLib(saved);
       setSets(saved.sets);
-      setActive(saved.activeSet);
       setSel((s) => Math.min(s, saved.sets.length - 1));
       setError("");
     } catch (e) {
@@ -129,8 +132,6 @@ export function SetEditor() {
                   const rest = sets.filter((_, i) => i !== sel);
                   setSets(rest);
                   setSel(Math.max(0, sel - 1));
-                  // Deleting the last set leaves activeSet dangling on purpose: Rust refuses and says why.
-                  if (current.id === active && rest[0]) setActive(rest[0].id);
                 }}
                 class={btn}
               >

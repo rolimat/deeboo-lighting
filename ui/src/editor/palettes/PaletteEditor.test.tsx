@@ -8,6 +8,12 @@ import { api } from "../api";
 import { PaletteEditor } from "./PaletteEditor";
 
 const hsv = (h: number) => ({ h, s: 1000, v: 1000 });
+const ms = {
+  sequences: ["generated" as const],
+  palettes: [2],
+  order: "inOrder" as const,
+  interval: { bars: 2 },
+};
 const lib = (): Library => ({
   schemaVersion: 1,
   shape: { pieces: [] },
@@ -16,7 +22,15 @@ const lib = (): Library => ({
     [2, { name: "Other", principal: hsv(10), contraste: hsv(20), suave: hsv(30) }],
   ],
   sequences: [],
-  sets: [],
+  sets: [
+    {
+      id: 1,
+      name: "Club",
+      rhythm: ms,
+      calm: ms,
+      buildup: ms,
+    },
+  ],
   activeSet: 1,
   activePalette: 1,
 });
@@ -85,4 +99,23 @@ it("delete_palette_in_use_is_refused", async () => {
   await click(button("Delete palette"));
   await click(button("Save"));
   expect(root.textContent).toContain("palette 2 is used by set 1");
+});
+
+it("save_keeps_the_popovers_choices_and_clears_a_deleted_active_palette", async () => {
+  vi.mocked(api.getLibrary).mockResolvedValue({ ...lib(), activeSet: 5, activePalette: 1 });
+  await click(button("Delete palette")); // "Test" (id 1) is not used by any set
+  await click(button("Save"));
+  const sent = vi.mocked(api.saveLibrary).mock.calls[0]?.[0];
+  expect(sent?.activeSet).toBe(5);
+  expect(sent?.activePalette).toBeNull();
+  expect(sent?.palettes.map(([id]) => id)).toEqual([2]);
+});
+
+it("delete_is_disabled_while_a_set_uses_the_palette", async () => {
+  await click(button("Other"));
+  expect(button("Delete palette").hasAttribute("disabled")).toBe(true);
+  expect(root.textContent).toContain("Used by set Club \u2014 remove it there first.");
+  await click(button("Test"));
+  expect(button("Delete palette").hasAttribute("disabled")).toBe(false);
+  expect(root.textContent).not.toContain("Used by set");
 });
