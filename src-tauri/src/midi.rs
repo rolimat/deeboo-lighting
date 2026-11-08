@@ -98,6 +98,15 @@ impl MidiPort for MidiIn {
         self.source.as_ref().map(|(n, _)| n.clone())
     }
 
+    fn source_available(&self, name: &str) -> bool {
+        MidiInput::new(CLIENT).is_ok_and(|input| {
+            input
+                .ports()
+                .iter()
+                .any(|p| input.port_name(p).is_ok_and(|n| n == name))
+        })
+    }
+
     fn reconnect(&mut self, source: Option<&str>) {
         self.source = None;
         if let Some(name) = source {

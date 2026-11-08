@@ -33,6 +33,8 @@ pub enum Input {
 /// What the engine needs from the MIDI input; a fake in tests.
 pub trait MidiPort {
     fn connected_source(&self) -> Option<String>;
+    /// Whether the OS lists a MIDI source called `name` right now (the connection may be stale).
+    fn source_available(&self, name: &str) -> bool;
     fn reconnect(&mut self, source: Option<&str>);
     /// Messages lost because the engine fell behind.
     fn dropped(&self) -> u64;
@@ -191,6 +193,8 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     tray: Option<TrayLink>,
     play_start_us: Option<u64>,
     tray_due: Option<u64>,
+    /// The OS listed the configured source at the last check (popover show or settings change).
+    source_present: bool,
 }
 
 /// Paints the menu bar: called with the previous and the new view, only when they differ.
@@ -224,6 +228,10 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             StripStatus::NotConfigured
         };
         let last = snapshot(&engine);
+        let source_present = settings
+            .midi_source
+            .as_deref()
+            .is_none_or(|n| midi.source_available(n));
         let mut core = Self {
             engine,
             midi,
@@ -241,6 +249,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             tray: None,
             play_start_us: None,
             tray_due: None,
+            source_present,
         };
         core.replan(now_us);
         core
@@ -331,7 +340,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
 
     fn midi_ok(&self) -> bool {
         self.settings.midi_source.is_none()
-            || self.settings.midi_source == self.midi.connected_source()
+            || (self.source_present && self.settings.midi_source == self.midi.connected_source())
     }
 
     fn update_tray(&mut self, now_us: u64) {
@@ -392,10 +401,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             Input::Settings(new) => self.apply_settings(new, now_us),
             Input::PopoverShown => {
                 log::debug!("MIDI messages dropped so far: {}", self.midi.dropped());
-                let wanted = self.settings.midi_source.clone();
-                if needs_reconnect(wanted.as_deref(), self.midi.connected_source().as_deref()) {
-                    self.midi.reconnect(wanted.as_deref());
-                }
+                self.check_midi_source();
                 self.publisher.touch();
             }
             Input::StripState(s) => {
@@ -413,6 +419,22 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         true
     }
 
+    /// midir keeps its connection object after the `CoreMIDI` endpoint vanishes, so ask the OS.
+    /// A stopped clock reconnects anyway: a recreated endpoint leaves a connection that is silent.
+    fn check_midi_source(&mut self) {
+        let Some(wanted) = self.settings.midi_source.clone() else {
+            return;
+        };
+        self.source_present = self.midi.source_available(&wanted);
+        let connected = self.midi.connected_source();
+        if !self.source_present
+            || !self.last.playing
+            || needs_reconnect(Some(&wanted), connected.as_deref())
+        {
+            self.midi.reconnect(Some(&wanted));
+        }
+    }
+
     fn apply_settings(&mut self, new: Settings, now_us: u64) {
         let mut cmds = Vec::new();
         let mut apply = |c: UiCommand| cmds.extend(self.engine.command(now_us, c));
@@ -425,8 +447,13 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         if new.lead_ms != self.settings.lead_ms {
             apply(UiCommand::LeadMs(new.lead_ms));
         }
-        if new.midi_source != self.settings.midi_source {
+        let source_changed = new.midi_source != self.settings.midi_source;
+        if source_changed {
             self.midi.reconnect(new.midi_source.as_deref());
+            self.source_present = new
+                .midi_source
+                .as_deref()
+                .is_none_or(|n| self.midi.source_available(n));
         }
         if new.audio_input != self.settings.audio_input && self.capture != Capture::Closed {
             // Reopened on the new input by `sync_capture`.
@@ -579,18 +606,27 @@ mod tests {
     #[derive(Default)]
     struct FakeMidi {
         reconnects: Rc<RefCell<Vec<Option<String>>>>,
+        /// What the connection object still holds, like midir after the endpoint vanished.
         present: Option<String>,
+        /// What `CoreMIDI` lists.
+        ports: Rc<RefCell<Vec<String>>>,
     }
 
     impl MidiPort for FakeMidi {
         fn connected_source(&self) -> Option<String> {
             self.present.clone()
         }
+        fn source_available(&self, name: &str) -> bool {
+            self.ports.borrow().iter().any(|p| p == name)
+        }
         fn dropped(&self) -> u64 {
             0
         }
         fn reconnect(&mut self, source: Option<&str>) {
             self.reconnects.borrow_mut().push(source.map(String::from));
+            self.present = source
+                .filter(|n| self.source_available(n))
+                .map(String::from);
         }
     }
 
@@ -739,6 +775,8 @@ mod tests {
         assert!(matches!(rx.try_recv(), Ok(StripMsg::Connect)));
     }
 
+    const SOURCE: &str = "Deeboo Clock Sync Out";
+
     #[test]
     fn reconnects_missing_source_on_popover_show() {
         assert!(needs_reconnect(Some("A"), None));
@@ -747,15 +785,38 @@ mod tests {
         assert!(!needs_reconnect(None, None));
         let (mut c, _rx, _) = core(false);
         let calls = Rc::clone(&c.midi.reconnects);
+        let ports = Rc::clone(&c.midi.ports);
+        ports.borrow_mut().push(SOURCE.into());
         c.handle(Input::PopoverShown, 0);
-        assert_eq!(
-            *calls.borrow(),
-            vec![Some("Deeboo Clock Sync Out".to_string())]
-        );
-        // Already connected: no second attempt.
-        c.midi.present = Some("Deeboo Clock Sync Out".into());
-        c.handle(Input::PopoverShown, 1);
+        assert_eq!(*calls.borrow(), vec![Some(SOURCE.to_string())]);
+        assert!(c.status().midi.ok);
+        // Connected and playing: left alone.
+        let midi = |at_us, status| Input::Midi(MidiEvent { at_us, status });
+        c.handle(midi(1, 0xFA), 1);
+        c.handle(midi(2, 0xF8), 2);
+        assert!(c.status().playing);
+        c.handle(Input::PopoverShown, 3);
         assert_eq!(calls.borrow().len(), 1);
+    }
+
+    #[test]
+    fn lost_source_turns_red_and_reconnects_when_back() {
+        let (mut c, _rx, _) = core(false);
+        let calls = Rc::clone(&c.midi.reconnects);
+        let ports = Rc::clone(&c.midi.ports);
+        ports.borrow_mut().push(SOURCE.into());
+        c.handle(Input::PopoverShown, 0);
+        assert!(c.status().midi.ok);
+        // The endpoint vanishes; the stale connection object still reports the name.
+        ports.borrow_mut().clear();
+        assert_eq!(c.midi.connected_source().as_deref(), Some(SOURCE));
+        c.handle(Input::PopoverShown, 1);
+        assert!(!c.status().midi.ok, "dot red while the source is gone");
+        // It comes back: the next show connects again (stopped clock reconnects anyway).
+        ports.borrow_mut().push(SOURCE.into());
+        c.handle(Input::PopoverShown, 2);
+        assert!(c.status().midi.ok);
+        assert_eq!(calls.borrow().len(), 3);
     }
 
     #[test]
