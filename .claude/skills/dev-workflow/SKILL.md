@@ -19,6 +19,8 @@ Spec §10: [docs/superpowers/specs/2026-11-06-deeboo-lighting-design.md](../../.
 | `just test` | `cargo test --workspace`; Vitest when `ui/package.json` exists |
 | `just precommit` (`check`) | gitleaks on staged changes, then fmt-check + lint + test |
 | `just perf-core` | release-mode perf budget test (10 min of audio in < 3 s); CI Linux job runs it |
+| `just perf [SECONDS=60]` | macOS only: samples CPU/RSS of the `deeboo-lighting` process (launches the release bundle if not running) and prints mean/max beside the 13.1 targets; reports, never fails |
+| `just log-scan <file>` | exit 1 and line numbers (never the text) if a log holds a secret shape; fixtures in `scripts/tests/log-scan`, run by `just test` |
 | `just clean-cache` | host only: frees rebuildable caches (`cargo clean`, the Docker `target` volume, Docker build cache); run after each plan merge or when the disk is low |
 | `just ui-dist` / `ui-deps` | build `ui/dist` (needed by `tauri::generate_context!`) / install `ui/node_modules` when empty |
 | `just dmg` | macOS only: release build, ad-hoc signed DMG in `target/release/bundle/dmg/` |

@@ -42,6 +42,7 @@ test:
     [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} test
     if [ -f ui/package.json ]; then just ui-dist; fi
     cargo test --locked --workspace
+    scripts/tests/log-scan.sh
     if [ -f ui/package.json ]; then npm --prefix ui test -- --run; fi
 
 # Performance budget (spec 13.1): 10 min of audio analysed in < 3 s, release build.
@@ -50,6 +51,17 @@ perf-core:
     set -euo pipefail
     [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} perf-core
     cargo test --locked --release -p light-core --test perf -- --ignored --nocapture
+
+# macOS: samples CPU/RSS of the running app (launches the release bundle if needed) against the 13.1 targets; reports only.
+perf SECONDS="60":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ "$(uname)" = Darwin ] || { echo "just perf runs on the macOS host only" >&2; exit 1; }
+    scripts/perf.sh {{SECONDS}}
+
+# Fails (exit 1, line numbers only) if a session log holds a secret shape.
+log-scan FILE:
+    scripts/log-scan.sh {{FILE}}
 
 # Frees build caches (host target/, the Docker target volume, Docker build cache); all rebuildable.
 clean-cache:
