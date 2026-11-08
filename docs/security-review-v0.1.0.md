@@ -175,6 +175,19 @@ runtime: only `@tauri-apps/api`", but the editor ships Preact by the recorded Pl
 
 **Fix.** Update the comments, and the skill line to "`@tauri-apps/api` and `preact` (pinned)".
 
+## Resolution
+
+| Finding | Status | Commit | Notes |
+|---|---|---|---|
+| F1 | Partly fixed, rest accepted | `9b39d33` | Strip file read/serialise buffers and parsed key are `Zeroizing`; no JSON `Value` copy of the key. Accepted residual: `tuya-cloud` URL, header and response `String`s (tokens), the revoke `Value`, `hash_key` result, and copies inside `rustuya` and `ureq`. Reading process memory is out of scope (malware as the user). |
+| F2 | Fixed | `38856ef` | A cancel during the device list makes the remaining list requests fail fast (only the revoke goes out); `QUIT_WAIT` is 22 s (one in-flight request + revoke), returning at once when the run ends. Test `quit_during_the_device_list_skips_the_rest_and_revokes`. |
+| F3 | Fixed | `5cc7df8` | Named-field values accept any non-space, non-delimiter character; `log-scan.sh <log> [strip.json]` also greps the real key as a fixed string. Trade-off: prose such as `token: expired` now hits (line numbers only). A bare punctuated key with no strip file argument still has no shape to match. |
+| F4 | Fixed, schema version deferred | `be271d7` | 64 KiB cap (oversized file kept as `.bad`), parse errors logged as kind and position only. `schemaVersion` not added: the UI exchanges `Settings` verbatim and `deny_unknown_fields` needs a coordinated UI change. |
+| F5 | Fixed | `b33b5d3` | Proptests for settings, library and strip file loaders: arbitrary bytes never panic or load invalid content; valid values round-trip. They passed first time (no bug found). |
+| F6 | Fixed | `b321259` | `release.yml` has a `checks` job (`just precommit` + `just perf-core` in Docker, same as CI); `build` needs it. SHA pins and least privilege kept; actionlint 1.7.12 clean. A tag ruleset limiting who can create `v*` tags is a repository setting still to enable. |
+| F7 | Accepted | n/a | TLS is verified end to end; a proxy sees host names and timing only, and a Finder launch has no proxy variables. |
+| F8 | Fixed | `4aa0412` | CI comments and the security skill (Preact named). |
+
 ## Notes (confidence below 0.7, or accepted by design)
 
 - **N1 · Session not revoked when the login answer is rejected.** If `poll_login` gets a session whose `endpoint` is
