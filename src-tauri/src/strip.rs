@@ -2,7 +2,6 @@
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::Duration;
 
@@ -10,31 +9,16 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use light_core::paint::{Hsv, PAINT_DP, PaintCommand, decode_segment_count, encode};
 use rustuya::tokio::{Device, Discovered, Discovery, Event, Listener, Version};
-use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use secrecy::ExposeSecret;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::commands::StripStatus;
 use crate::lan::on_local_subnet;
+use crate::strip_store::{self, StripConfig};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Measured: the strip announces itself every ~5 s, but wifi drops some (gaps of 15 s seen).
 const DISCOVERY_WINDOW: Duration = Duration::from_secs(30);
-
-pub struct StripConfig {
-    pub id: String,
-    pub name: String,
-    pub local_key: SecretString,
-    pub segments: u8,
-}
-
-#[derive(Deserialize)]
-struct StripFile {
-    id: String,
-    name: String,
-    local_key: String,
-    segments: Option<u8>,
-}
 
 /// Never carries the key, the address or file contents.
 #[derive(Debug)]
@@ -61,22 +45,6 @@ impl fmt::Display for StripError {
     }
 }
 
-/// Refuses files that are not mode 0600: they hold the strip's local key.
-fn load_strip_file(path: &Path) -> Option<StripConfig> {
-    let mode = std::fs::metadata(path).ok()?.permissions().mode() & 0o777;
-    if mode != 0o600 {
-        log::warn!("strip file ignored: its mode must be 0600");
-        return None;
-    }
-    let file: StripFile = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    Some(StripConfig {
-        id: file.id,
-        name: file.name,
-        local_key: SecretString::from(file.local_key),
-        segments: file.segments.unwrap_or(10),
-    })
-}
-
 /// `<config dir>/strip.json`; debug builds let `DEEBOO_DEV_STRIP` point elsewhere.
 #[must_use]
 pub fn load(config_dir: &Path) -> Option<StripConfig> {
@@ -88,13 +56,15 @@ pub fn load(config_dir: &Path) -> Option<StripConfig> {
         } else {
             given
         };
-        let cfg = load_strip_file(&path);
-        if cfg.is_none() {
-            log::warn!("DEEBOO_DEV_STRIP is set but the strip file is missing or invalid");
-        }
-        return cfg;
+        return load_logged(&path);
     }
-    load_strip_file(&config_dir.join("strip.json"))
+    load_logged(&config_dir.join("strip.json"))
+}
+
+fn load_logged(path: &Path) -> Option<StripConfig> {
+    strip_store::load(path)
+        .inspect_err(|e| log::warn!("strip file ignored: {e}"))
+        .ok()
 }
 
 pub struct Strip {
@@ -463,32 +433,8 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-
-    fn write(dir: &Path, mode: u32) -> std::path::PathBuf {
-        let p = dir.join("strip.json");
-        fs::write(&p, r#"{"id":"abc","name":"dj lights","local_key":"k"}"#).unwrap_or_default();
-        fs::set_permissions(&p, fs::Permissions::from_mode(mode)).unwrap_or_default();
-        p
-    }
-
-    #[test]
-    fn loads_a_0600_file_with_default_segments() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = load_strip_file(&write(dir.path(), 0o600)).unwrap();
-        assert_eq!(
-            (cfg.id.as_str(), cfg.name.as_str(), cfg.segments),
-            ("abc", "dj lights", 10)
-        );
-    }
-
-    #[test]
-    fn refuses_a_file_readable_by_others() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(load_strip_file(&write(dir.path(), 0o644)).is_none());
-    }
 
     /// Fails its second paint, whichever painter makes it.
     struct Fake(Arc<AtomicUsize>);

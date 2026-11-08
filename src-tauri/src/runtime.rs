@@ -17,7 +17,8 @@ use crate::clock::MonoClock;
 use crate::commands::{AppState, AudioStatus, MidiStatus, Status, StripStatus};
 use crate::midi::{MidiEvent, MidiIn, QUEUE};
 use crate::settings::{Settings, sensitivity_params};
-use crate::strip::{self, StripConfig, StripMsg};
+use crate::strip::{self, StripMsg};
+use crate::strip_store::StripConfig;
 use crate::tray::{TrayInput, TrayView, tray_deadline, tray_view};
 
 /// Everything that can wake the engine thread.

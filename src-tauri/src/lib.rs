@@ -12,6 +12,7 @@ mod qr;
 mod runtime;
 mod settings;
 mod strip;
+mod strip_store;
 mod tray;
 #[cfg_attr(not(test), expect(dead_code, reason = "wired to IPC in Plan 4 task 6"))]
 mod wizard;
