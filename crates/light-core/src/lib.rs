@@ -3,6 +3,7 @@ pub mod builtin;
 pub mod clock;
 pub mod detect;
 pub mod engine;
+pub mod generator;
 pub mod groups;
 pub mod library;
 pub mod model;
