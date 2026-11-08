@@ -8,6 +8,8 @@ const MAX_SEGMENTS: usize = 127;
 
 /// Hue 0..=360, saturation and value 0..=1000.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct Hsv {
     pub h: u16,
     pub s: u16,
