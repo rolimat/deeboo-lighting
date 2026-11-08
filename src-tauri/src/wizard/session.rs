@@ -790,6 +790,7 @@ mod tests {
         seen: Mutex<Vec<String>>,
         gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
         in_poll: std::sync::atomic::AtomicBool,
+        released: std::sync::atomic::AtomicBool,
     }
 
     impl Cloud {
@@ -806,8 +807,11 @@ mod tests {
             if u.contains("/qrcode/tokens/") {
                 self.in_poll
                     .store(true, std::sync::atomic::Ordering::SeqCst);
-                if let Some(g) = self.gate.lock().unwrap().as_ref() {
-                    let _ = g.recv_timeout(Duration::from_secs(5));
+                if let Some(g) = self.gate.lock().unwrap().as_ref()
+                    && g.recv_timeout(Duration::from_secs(30)).is_ok()
+                {
+                    self.released
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                 }
                 Ok(serde_json::json!({"success": true, "result": {
                     "access_token": "at-SECRET", "refresh_token": REFRESH, "uid": "u1",
@@ -915,7 +919,9 @@ mod tests {
         );
     }
 
-    #[tokio::test(start_paused = true)]
+    // Real time: a test that blocks a thread on `gate` cannot use paused time, because tokio
+    // does not auto-advance a paused clock while a blocking task runs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn quit_cancels_wizard_and_revokes() {
         let cloud = Arc::new(Cloud::default());
         let (release, gate) = std::sync::mpsc::channel();
@@ -946,6 +952,10 @@ mod tests {
         });
         releaser.await.unwrap();
         quit.await.unwrap();
+        assert!(
+            cloud.released.load(std::sync::atomic::Ordering::SeqCst),
+            "the poll was released by the test, not by its timeout"
+        );
         assert_eq!(
             cloud.count("/terminal/expire"),
             1,
