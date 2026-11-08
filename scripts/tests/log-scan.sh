@@ -8,4 +8,11 @@ rc=0; out=$("$s" "$d/dirty.log") || rc=$?
 want=$(grep -n 'DIRTY' "$d/dirty.log" | cut -d: -f1)
 [ "$out" = "$want" ] || { echo "dirty: lines '$out' != '$want'" >&2; exit 1; }
 "$s" "$d/clean.log" >/dev/null || { echo "clean: expected exit 0" >&2; exit 1; }
+# A bare punctuated key has no shape: found only through the strip file.
+printf '{"id":"a","local_key":"xK#9pQ$2mL!7zR@4"}\n' > "$d/../strip.tmp.json"
+trap 'rm -f "$d/../strip.tmp.json"' EXIT
+printf 'ok line\nsaw xK#9pQ$2mL!7zR@4 here\n' > "$d/../bare.tmp.log"
+trap 'rm -f "$d/../strip.tmp.json" "$d/../bare.tmp.log"' EXIT
+"$s" "$d/../bare.tmp.log" >/dev/null || true
+[ "$("$s" "$d/../bare.tmp.log" "$d/../strip.tmp.json" || true)" = "2" ] || { echo "bare key: line 2 expected" >&2; exit 1; }
 echo "log_scan_fixtures ok"
