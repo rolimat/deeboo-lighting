@@ -26,10 +26,16 @@ pub struct MidiStatus {
     pub ok: bool,
 }
 
-/// Placeholder until the audio capture task.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Live audio: open only while playing with Auto and Lights on.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioStatus {
     pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    /// Peak of the last beat in dBFS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level_db: Option<f32>,
 }
 
 /// What the popover shows; the engine thread publishes it only while the popover is visible.
@@ -69,7 +75,7 @@ impl Status {
                 source: None,
                 ok: true,
             },
-            audio: AudioStatus { ok: false },
+            audio: AudioStatus::default(),
         }
     }
 }

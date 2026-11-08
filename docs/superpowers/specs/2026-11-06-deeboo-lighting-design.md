@@ -408,7 +408,7 @@ crates/light-core/   # Rust puro, determinista, sin I/O: reloj→beat/compás/fr
                      # modelo (secuencias, paletas, sets), generador, diff de escena → órdenes,
                      # planificador con espaciado/descartes, codificación del DP 61,
                      # clasificador de momentos a partir de rasgos de audio por beat.
-src-tauri/           # midir, captura de audio + FFT → rasgos, rustuya, login nube, credenciales,
+src-tauri/           # midir, captura de audio → filtros IIR → rasgos (sin FFT), rustuya, login nube, credenciales,
                      # persistencia, tray, comandos/eventos Tauri.
 ui/                  # popover + ventana editor (forma, rejilla, simulación, paletas, sets, detección).
 tools/detect-probe/  # binario de desarrollo: decodifica una grabación (MP3 o WAV), estima la rejilla de

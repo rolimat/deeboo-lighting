@@ -122,7 +122,6 @@ pub fn save(path: &Path, s: &Settings) -> io::Result<()> {
 
 /// Detector thresholds for a sensitivity: higher means Calm sooner (thresholds drop `s - 5` dB).
 #[must_use]
-#[allow(dead_code)] // built into the detector by the live wiring (Plan 3, Task 9)
 pub fn sensitivity_params(s: u8) -> DetectorParams {
     let d = DetectorParams::default();
     let shift = f32::from(s) - 5.0;

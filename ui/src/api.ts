@@ -19,7 +19,7 @@ export interface Status {
   predicted: boolean;
   lightsOn: boolean;
   midi: { source: string | null; ok: boolean };
-  audio: { ok: boolean };
+  audio: { ok: boolean; device?: string; levelDb?: number };
 }
 
 export interface Settings {

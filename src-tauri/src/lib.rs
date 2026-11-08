@@ -2,6 +2,7 @@
 
 use tauri::{Manager, RunEvent};
 
+mod audio;
 mod clock;
 mod commands;
 mod devices;

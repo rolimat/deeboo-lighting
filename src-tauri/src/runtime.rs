@@ -6,15 +6,17 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::Duration;
 
 use light_core::clock::PhraseBars;
+use light_core::detect::{BandAnalyzer, Moment, MomentDetector};
 use light_core::engine::{Engine, EngineConfig, EngineStatus, UiCommand};
 use light_core::paint::PaintCommand;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
+use crate::audio::{AudioError, AudioIn, RING_SECONDS};
 use crate::clock::MonoClock;
 use crate::commands::{AppState, AudioStatus, MidiStatus, Status, StripStatus};
 use crate::midi::{MidiEvent, MidiIn, QUEUE};
-use crate::settings::Settings;
+use crate::settings::{Settings, sensitivity_params};
 use crate::strip::{self, StripConfig, StripMsg};
 
 /// Everything that can wake the engine thread.
@@ -33,6 +35,74 @@ pub trait MidiPort {
     fn reconnect(&mut self, source: Option<&str>);
     /// Messages lost because the engine fell behind.
     fn dropped(&self) -> u64;
+}
+
+/// What an opened capture reports.
+pub struct AudioInfo {
+    pub rate: u32,
+    pub name: String,
+}
+
+/// What the engine needs from audio capture; a fake in tests.
+pub trait AudioPort {
+    fn open(&mut self, device: Option<&str>) -> Result<AudioInfo, AudioError>;
+    fn close(&mut self);
+    /// Moves what the callback has pushed into `buf`, never past its capacity.
+    fn drain(&mut self, buf: &mut Vec<f32>);
+    /// Samples lost because the engine fell behind.
+    fn overflow(&self) -> u64;
+}
+
+/// The microphone is open only while there is something to follow.
+fn capture_wanted(playing: bool, auto: bool, lights_on: bool) -> bool {
+    playing && auto && lights_on
+}
+
+#[derive(Clone, PartialEq)]
+enum Capture {
+    Closed,
+    Open(String),
+    /// Tried while wanted and failed; retried only after it was unwanted or the input changed.
+    Failed,
+}
+
+/// Band analyser and moment detector for one sample rate.
+struct Detect {
+    rate: u32,
+    bands: BandAnalyzer,
+    moment: MomentDetector,
+}
+
+impl Detect {
+    #[allow(clippy::cast_precision_loss)] // rates are far below 2^24
+    fn new(rate: u32, sensitivity: u8) -> Self {
+        let bands = BandAnalyzer::new(rate);
+        let hop_s = bands.hop_len() as f32 / rate as f32;
+        Self {
+            rate,
+            bands,
+            moment: MomentDetector::new(sensitivity_params(sensitivity), hop_s),
+        }
+    }
+}
+
+/// Runs the beat's audio through the detector: its moment, or `None` without audio.
+fn detect_beat<A: AudioPort>(
+    audio: &mut A,
+    detect: &mut Option<Detect>,
+    buf: &mut Vec<f32>,
+    level_db: &mut Option<f32>,
+) -> Option<Moment> {
+    let d = detect.as_mut()?;
+    buf.clear();
+    audio.drain(buf);
+    if buf.is_empty() {
+        return None;
+    }
+    let peak = buf.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+    *level_db = Some((20.0 * peak.max(1e-6).log10()).round());
+    d.bands.process(buf, &mut |f| d.moment.push(f));
+    Some(d.moment.on_beat().0)
 }
 
 /// The popover gets at most 30 updates per second.
@@ -103,9 +173,14 @@ fn snapshot(engine: &Engine) -> EngineStatus {
 }
 
 /// The thread's state; generic over the MIDI input and the status sink so tests can fake both.
-pub struct Core<M: MidiPort, E: FnMut(&Status)> {
+pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     engine: Engine,
     midi: M,
+    audio: A,
+    capture: Capture,
+    detect: Option<Detect>,
+    buf: Vec<f32>,
+    level_db: Option<f32>,
     settings: Settings,
     strip: StripStatus,
     strip_tx: Option<UnboundedSender<StripMsg>>,
@@ -114,12 +189,13 @@ pub struct Core<M: MidiPort, E: FnMut(&Status)> {
     last: EngineStatus,
 }
 
-impl<M: MidiPort, E: FnMut(&Status)> Core<M, E> {
+impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     pub fn new(
         settings: Settings,
         segments: u8,
         strip_tx: Option<UnboundedSender<StripMsg>>,
         midi: M,
+        audio: A,
         emit: E,
         now_us: u64,
     ) -> Self {
@@ -139,6 +215,11 @@ impl<M: MidiPort, E: FnMut(&Status)> Core<M, E> {
         let mut core = Self {
             engine,
             midi,
+            audio,
+            capture: Capture::Closed,
+            detect: None,
+            buf: Vec::new(),
+            level_db: None,
             settings,
             strip,
             strip_tx,
@@ -185,7 +266,46 @@ impl<M: MidiPort, E: FnMut(&Status)> Core<M, E> {
                 ok: self.settings.midi_source.is_none()
                     || self.settings.midi_source == self.midi.connected_source(),
             },
-            audio: AudioStatus { ok: false },
+            audio: match &self.capture {
+                Capture::Open(name) => AudioStatus {
+                    ok: true,
+                    device: Some(name.clone()),
+                    level_db: self.level_db,
+                },
+                _ => AudioStatus::default(),
+            },
+        }
+    }
+
+    /// Opens or closes the microphone to match the state; runs after every input.
+    fn sync_capture(&mut self) {
+        let s = &self.last;
+        if capture_wanted(s.playing, s.auto, s.lights_on) {
+            if self.capture != Capture::Closed {
+                return;
+            }
+            match self.audio.open(self.settings.audio_input.as_deref()) {
+                Ok(info) => {
+                    if self.detect.as_ref().is_none_or(|d| d.rate != info.rate) {
+                        self.detect = Some(Detect::new(info.rate, self.settings.sensitivity));
+                    }
+                    self.buf = Vec::with_capacity((info.rate * RING_SECONDS) as usize);
+                    self.capture = Capture::Open(info.name);
+                }
+                Err(e) => {
+                    log::warn!("audio not available: {e}");
+                    self.capture = Capture::Failed;
+                }
+            }
+            self.publisher.touch();
+        } else if self.capture != Capture::Closed {
+            if matches!(self.capture, Capture::Open(_)) {
+                log::debug!("audio samples lost so far: {}", self.audio.overflow());
+                self.audio.close();
+            }
+            self.capture = Capture::Closed;
+            self.level_db = None;
+            self.publisher.touch();
         }
     }
 
@@ -197,8 +317,14 @@ impl<M: MidiPort, E: FnMut(&Status)> Core<M, E> {
     pub fn handle(&mut self, input: Input, now_us: u64) -> bool {
         match input {
             Input::Midi(e) => {
-                // The detector is wired in the audio task; until then the moment follows `Auto` rules.
-                let cmds = self.engine.on_midi(e.at_us, e.status, || None);
+                let cmds = self.engine.on_midi(e.at_us, e.status, || {
+                    detect_beat(
+                        &mut self.audio,
+                        &mut self.detect,
+                        &mut self.buf,
+                        &mut self.level_db,
+                    )
+                });
                 self.flush(cmds);
             }
             Input::Ui(cmd) => {
@@ -250,6 +376,19 @@ impl<M: MidiPort, E: FnMut(&Status)> Core<M, E> {
         if new.midi_source != self.settings.midi_source {
             self.midi.reconnect(new.midi_source.as_deref());
         }
+        if new.audio_input != self.settings.audio_input && self.capture != Capture::Closed {
+            // Reopened on the new input by `sync_capture`.
+            self.audio.close();
+            self.capture = Capture::Closed;
+            self.level_db = None;
+        }
+        if let (true, Some(d)) = (
+            new.sensitivity != self.settings.sensitivity,
+            &mut self.detect,
+        ) {
+            let p = sensitivity_params(new.sensitivity);
+            d.moment.set_thresholds(p.calm_kick_db, p.calm_high_db);
+        }
         self.settings = new;
         self.flush(cmds);
         self.publisher.touch();
@@ -278,6 +417,7 @@ impl<M: MidiPort, E: FnMut(&Status)> Core<M, E> {
             self.last = now;
             self.publisher.touch();
         }
+        self.sync_capture();
         if self.publisher.due(now_us) {
             let status = self.status();
             (self.emit)(&status);
@@ -286,10 +426,10 @@ impl<M: MidiPort, E: FnMut(&Status)> Core<M, E> {
 }
 
 /// The loop: block for an input or the next deadline.
-fn run<M: MidiPort, E: FnMut(&Status)>(
+fn run<M: MidiPort, A: AudioPort, E: FnMut(&Status)>(
     rx: &Receiver<Input>,
     clock: &MonoClock,
-    core: &mut Core<M, E>,
+    core: &mut Core<M, A, E>,
     visible: &AtomicBool,
 ) {
     loop {
@@ -350,7 +490,15 @@ pub fn spawn(app: AppHandle, settings: Settings, strip: Option<StripConfig>) -> 
                     }
                 }
             };
-            let mut core = Core::new(settings, segments, strip_tx, midi, emit, clock.now_us());
+            let mut core = Core::new(
+                settings,
+                segments,
+                strip_tx,
+                midi,
+                AudioIn::default(),
+                emit,
+                clock.now_us(),
+            );
             app.state::<AppState>().set_status(core.status());
             run(&rx, &clock, &mut core, &visible);
         });
@@ -363,7 +511,6 @@ pub fn spawn(app: AppHandle, settings: Settings, strip: Option<StripConfig>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use light_core::detect::Moment;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -385,7 +532,37 @@ mod tests {
         }
     }
 
-    type TestCore = Core<FakeMidi, Box<dyn FnMut(&Status)>>;
+    #[derive(Default)]
+    struct FakeAudio {
+        fail: bool,
+        opens: Rc<RefCell<u32>>,
+        closes: Rc<RefCell<u32>>,
+        samples: Vec<f32>,
+    }
+
+    impl AudioPort for FakeAudio {
+        fn open(&mut self, _device: Option<&str>) -> Result<AudioInfo, AudioError> {
+            *self.opens.borrow_mut() += 1;
+            if self.fail {
+                return Err(AudioError::NoDevice);
+            }
+            Ok(AudioInfo {
+                rate: 48_000,
+                name: "Fake mic".into(),
+            })
+        }
+        fn close(&mut self) {
+            *self.closes.borrow_mut() += 1;
+        }
+        fn drain(&mut self, buf: &mut Vec<f32>) {
+            buf.append(&mut self.samples);
+        }
+        fn overflow(&self) -> u64 {
+            0
+        }
+    }
+
+    type TestCore = Core<FakeMidi, FakeAudio, Box<dyn FnMut(&Status)>>;
 
     fn core(
         strip: bool,
@@ -406,6 +583,7 @@ mod tests {
             10,
             strip.then_some(tx),
             FakeMidi::default(),
+            FakeAudio::default(),
             emit,
             0,
         );
@@ -522,5 +700,85 @@ mod tests {
     fn quit_stops_the_loop() {
         let (mut c, _rx, _) = core(false);
         assert!(!c.handle(Input::Quit, 0));
+    }
+
+    fn start(c: &mut TestCore) {
+        let midi = |at_us, status| Input::Midi(MidiEvent { at_us, status });
+        c.handle(midi(0, 0xFA), 0);
+        for i in 1..=48u64 {
+            c.handle(midi(i * 20_000, 0xF8), i * 20_000);
+        }
+    }
+
+    #[test]
+    fn capture_only_while_playing_auto_and_lights() {
+        for playing in [false, true] {
+            for auto in [false, true] {
+                for lights in [false, true] {
+                    assert_eq!(
+                        capture_wanted(playing, auto, lights),
+                        playing && auto && lights
+                    );
+                }
+            }
+        }
+        let (mut c, _rx, _) = core(false);
+        let (opens, closes) = (Rc::clone(&c.audio.opens), Rc::clone(&c.audio.closes));
+        assert_eq!(*opens.borrow(), 0, "closed while stopped");
+        start(&mut c);
+        assert_eq!(*opens.borrow(), 1);
+        assert!(c.status().audio.ok);
+        assert_eq!(c.status().audio.device.as_deref(), Some("Fake mic"));
+        c.handle(Input::Ui(UiCommand::Lights(false)), 2_000_000);
+        assert_eq!(*closes.borrow(), 1);
+        assert!(!c.status().audio.ok);
+    }
+
+    #[test]
+    fn open_failure_reports_no_audio() {
+        let (mut c, _rx, _) = core(false);
+        c.audio.fail = true;
+        let opens = Rc::clone(&c.audio.opens);
+        start(&mut c);
+        assert!(!c.status().audio.ok);
+        assert_eq!(*opens.borrow(), 1, "no retry storm while playing");
+        let mut buf = Vec::new();
+        assert_eq!(
+            detect_beat(&mut c.audio, &mut None, &mut buf, &mut None),
+            None
+        );
+    }
+
+    #[test]
+    fn beat_block_feeds_level_and_detector() {
+        let (mut c, _rx, _) = core(false);
+        start(&mut c);
+        c.audio.samples = vec![0.5; 48_000];
+        for i in 49..=72u64 {
+            let at = i * 20_000;
+            c.handle(
+                Input::Midi(MidiEvent {
+                    at_us: at,
+                    status: 0xF8,
+                }),
+                at,
+            );
+        }
+        assert_eq!(c.level_db, Some(-6.0));
+        assert_eq!(c.status().audio.level_db, Some(-6.0));
+    }
+
+    #[test]
+    fn sensitivity_change_keeps_the_detector() {
+        let (mut c, _rx, _) = core(false);
+        start(&mut c);
+        let before = c.detect.as_ref().map(|d| d.rate);
+        assert_eq!(before, Some(48_000));
+        let new = Settings {
+            sensitivity: 9,
+            ..c.settings.clone()
+        };
+        c.handle(Input::Settings(new), 3_000_000);
+        assert!(c.detect.is_some());
     }
 }
