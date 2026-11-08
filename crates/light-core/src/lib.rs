@@ -4,3 +4,4 @@ pub mod clock;
 pub mod detect;
 pub mod model;
 pub mod paint;
+pub mod scene;
