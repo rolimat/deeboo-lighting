@@ -12,12 +12,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{Receiver, error::TryRecvError};
 use tokio::time::{Instant, timeout};
 use tuya_cloud::{
-    CloudError, QrLogin, Transport, UserCode, list_devices, poll_login, revoke, run_and_revoke,
-    start_login,
+    CloudError, QrLogin, Transport, UserCode, list_devices, poll_login, revoke, start_login,
 };
 
 const POLL_EVERY: Duration = Duration::from_secs(2);
 const LOGIN_WINDOW: Duration = Duration::from_secs(300);
+/// Keys of every listed device sit in memory while the user chooses.
+const CHOOSE_WINDOW: Duration = Duration::from_secs(600);
 
 /// What the UI can tell the running flow. A dropped sender counts as `Cancel` (window closed).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub enum Input {
 pub enum WizardError {
     Cancelled,
     TimedOut,
+    ChooseTimedOut,
     Qr,
     Cloud(CloudError),
 }
@@ -40,6 +42,7 @@ impl std::fmt::Display for WizardError {
         f.write_str(match self {
             Self::Cancelled => "Cancelled.",
             Self::TimedOut => "The QR code expired. Start again.",
+            Self::ChooseTimedOut => "Took too long. Start again.",
             Self::Qr => "Could not build the QR code.",
             Self::Cloud(_) => {
                 "Could not reach Smart Life. Check the User Code and your connection, then try again."
@@ -151,10 +154,19 @@ async fn flow(
 
     let devices = |e| (Step::Devices, e);
     let t = transport.clone();
-    let listed = blocking(move || run_and_revoke(&*t, session, |t, s| list_devices(t, s)))
-        .await
-        .map_err(devices)?;
-    log::debug!("wizard: {} devices listed, session revoked", listed.len());
+    // The session is consumed by revoke whatever happens; a failed revoke must not block the user.
+    let (listed, revoked) = blocking(move || {
+        let listed = list_devices(&*t, &session);
+        let revoked = revoke(&*t, session).is_ok();
+        listed.map(|l| (l, revoked))
+    })
+    .await
+    .map_err(devices)?;
+    if revoked {
+        log::debug!("wizard: {} devices listed, session revoked", listed.len());
+    } else {
+        log::warn!("cloud session could not be revoked; it expires on its own");
+    }
 
     let mut entries: Vec<(DeviceDto, SecretString)> = listed
         .into_iter()
@@ -173,9 +185,13 @@ async fn flow(
         devices: entries.iter().map(|(d, _)| d.clone()).collect(),
     });
     loop {
-        match inputs.recv().await {
+        let input = timeout(CHOOSE_WINDOW, inputs.recv())
+            .await
+            .map_err(|_| devices(WizardError::ChooseTimedOut))?;
+        match input {
             Some(Input::Choose(id)) => {
                 if let Some(i) = entries.iter().position(|(d, _)| d.id == id && d.supported) {
+                    // `entries` drops on return: every other key is wiped (SecretString) right here.
                     return Ok(entries.swap_remove(i));
                 }
             }
@@ -216,6 +232,7 @@ mod tests {
         seen: Mutex<Vec<(Method, String)>>,
         not_yet: AtomicUsize,
         never: bool,
+        fail_revoke: bool,
         on_poll: Mutex<Option<Box<dyn Fn() + Send>>>,
     }
 
@@ -266,6 +283,9 @@ mod tests {
                 );
                 Ok(encrypted_reply(req, REFRESH, &devs))
             } else if u.contains("/terminal/expire") {
+                if self.fail_revoke {
+                    return Err(CloudError::Http(500));
+                }
                 Ok(encrypted_reply(req, REFRESH, "true"))
             } else {
                 Err(CloudError::Network)
@@ -473,5 +493,30 @@ mod tests {
         for s in SECRETS {
             assert!(!logs.contains(s) && !err.contains(s), "{s}");
         }
+    }
+
+    #[test]
+    fn revoke_failure_still_lists_devices_and_drops_session() {
+        let f = Arc::new(Fake {
+            fail_revoke: true,
+            ..Fake::default()
+        });
+        let (out, ev) = drive(&f, &["d1"], |_| {});
+        assert_eq!(out.unwrap().1.expose_secret(), KEY_A);
+        assert_eq!(f.count("/terminal/expire"), 1);
+        assert!(matches!(&ev.lock().unwrap()[1], S::ChooseStrip { .. }));
+        let logs = CAPTURE.0.lock().unwrap().join("\n");
+        assert!(!SECRETS.iter().any(|s| logs.contains(s)));
+    }
+
+    #[test]
+    fn choose_wait_ends_after_10_minutes() {
+        let f = fake();
+        let (out, ev) = drive(&f, &[], |_| {});
+        assert_eq!(out.err(), Some(WizardError::ChooseTimedOut));
+        assert!(matches!(
+            ev.lock().unwrap().last(),
+            Some(S::Failed { step: Step::Devices, message }) if message == "Took too long. Start again."
+        ));
     }
 }
