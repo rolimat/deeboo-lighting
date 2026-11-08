@@ -31,6 +31,8 @@ lint:
     cargo deny check
     hadolint docker/Dockerfile
     scripts/check-agent-docs.sh
+    # gitleaks scans nothing (and passes) when git cannot read the repo: fail closed instead.
+    git rev-parse --is-inside-work-tree >/dev/null
     gitleaks git --no-banner --redact
     if [ -f ui/package.json ]; then npm --prefix ui run lint && npm --prefix ui run typecheck && npm --prefix ui audit --audit-level=high; fi
 
@@ -75,6 +77,7 @@ precommit:
     #!/usr/bin/env bash
     set -euo pipefail
     [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} precommit
+    git rev-parse --is-inside-work-tree >/dev/null
     gitleaks git --pre-commit --staged --no-banner --redact
     just fmt-check
     just lint

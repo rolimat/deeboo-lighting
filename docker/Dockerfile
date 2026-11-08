@@ -53,7 +53,10 @@ RUN fetch() { curl -fsSL -o "$1" "$2" && echo "$3  $1" | sha256sum -c -; } \
  && chmod +x /usr/local/bin/lefthook /usr/local/bin/hadolint \
  && rm -f /tmp/*.tgz
 
-RUN rustup component add rustfmt clippy
+# The bind-mounted repo is owned by the host user, not root: without the safe.directory git
+# refuses it ("dubious ownership") and gitleaks silently scans nothing.
+RUN rustup component add rustfmt clippy \
+    && git config --system --add safe.directory /work
 
 ENV DEEBOO_IN_CONTAINER=1
 WORKDIR /work

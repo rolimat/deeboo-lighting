@@ -55,7 +55,7 @@ Supply chain and repo
       lockfiles committed, `npm ci`; minimal dependencies (UI runtime: only `@tauri-apps/api`).
 - [ ] GitHub Actions pinned by commit SHA, read-only `permissions` by default, publish separate from build,
       no `pull_request_target`, Dependabot on.
-- [ ] `gitleaks` clean (pre-commit and CI). Recordings, labels and dev keys are git-ignored.
+- [ ] `gitleaks` clean (pre-commit and CI) and it actually scanned ("N commits scanned", N > 0 for `just lint`); the recipes fail closed when git cannot read the repo. Recordings, labels and dev keys are git-ignored.
 - [ ] `/security-review` run before each release.
 
 Dev-only key loading via environment variable exists only in debug builds and has no UI.
