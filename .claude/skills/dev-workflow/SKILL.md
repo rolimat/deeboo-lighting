@@ -18,9 +18,11 @@ Spec §10: [docs/superpowers/specs/2026-11-06-deeboo-lighting-design.md](../../.
 | `just lint` | clippy `-D warnings`, `cargo deny`, hadolint, gitleaks, `scripts/check-agent-docs.sh`, UI eslint + typecheck |
 | `just test` | `cargo test --workspace`; Vitest when `ui/package.json` exists |
 | `just precommit` (`check`) | gitleaks on staged changes, then fmt-check + lint + test |
+| `just perf-core` | release-mode perf budget test (10 min of audio in < 3 s); CI Linux job runs it |
 | `just ui-dist` / `ui-deps` | build `ui/dist` (needed by `tauri::generate_context!`) / install `ui/node_modules` when empty |
 | `just dev` | macOS only: `npm --prefix ui run tauri dev` |
 | `just tuya-login` | macOS only: Smart Life QR login, lists devices, saves the strip to `.dev/strip.json` (0600) |
+| `just detect-probe <audio> [--labels f.json] [--timeline] [--bpm N] [--realtime]` | macOS only: runs the detector on an MP3/WAV in the live-app event order (recordings stay in ignored `recordings/`); `--realtime` plays it on the default output |
 | `just ship` | push and wait for the CI run of this exact commit |
 
 ## Rules

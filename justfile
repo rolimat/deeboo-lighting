@@ -42,6 +42,13 @@ test:
     cargo test --locked --workspace
     if [ -f ui/package.json ]; then npm --prefix ui test -- --run; fi
 
+# Performance budget (spec 13.1): 10 min of audio analysed in < 3 s, release build.
+perf-core:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} perf-core
+    cargo test --locked --release -p light-core --test perf -- --ignored --nocapture
+
 # Builds ui/dist: tauri::generate_context! needs it before cargo compiles src-tauri.
 ui-dist: ui-deps
     npm --prefix ui run build
@@ -72,12 +79,13 @@ dev:
     npm --prefix ui run tauri dev
 
 # Smart Life QR login on the macOS host: lists devices, saves the strip to .dev/strip.json (0600).
+[positional-arguments]
 tuya-login *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     [ "$(uname)" = Darwin ] || { echo "just tuya-login runs on the macOS host only" >&2; exit 1; }
     export PATH="$HOME/.cargo/bin:$PATH"
-    cargo run --release -p tuya-login -- {{ARGS}}
+    cargo run --release -p tuya-login -- "$@"
 
 # Push, wait for the GitHub Actions run of this exact commit, fail if it fails.
 ship:
@@ -93,3 +101,12 @@ ship:
     done
     [ -n "$id" ] || { echo "no CI run found for $sha" >&2; exit 1; }
     gh run watch --exit-status "$id"
+
+# Offline detector run on a recording (macOS host, release build): episodes, --timeline, --labels, --bpm, --realtime.
+[positional-arguments]
+detect-probe *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ "$(uname)" = Darwin ] || { echo "just detect-probe runs on the macOS host only" >&2; exit 1; }
+    export PATH="$HOME/.cargo/bin:$PATH"
+    cargo run --release -p detect-probe -- "$@"

@@ -55,6 +55,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - run: docker compose run --rm dev just precommit
+      - run: docker compose run --rm dev just perf-core
 
   macos:
     needs: changes
