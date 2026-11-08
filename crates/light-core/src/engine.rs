@@ -114,7 +114,7 @@ impl Engine {
                 self.cfg.phrase = p;
                 self.clock.set_phrase(p);
             }
-            UiCommand::LeadMs(ms) => self.cfg.lead_us = u64::from(ms) * 1000,
+            UiCommand::LeadMs(ms) => self.cfg.lead_us = u64::from(ms.min(500)) * 1000,
         }
         self.sched.due(now_us)
     }
@@ -152,7 +152,18 @@ impl Engine {
             self.control.applied()
         } else {
             self.last_beat_us = Some(at);
-            self.control.next(pos, self.cfg.phrase, detect())
+            // The control decides for the next beat; Build-up and the drop apply from a bar start.
+            let next_beat = self.clock.position_after(self.clock.position_after(pos));
+            let decided = self.control.next(next_beat, self.cfg.phrase, detect());
+            let shown = self.playing.map_or(decided, |p| p.moment);
+            let build_change =
+                decided != shown && (decided == Moment::BuildUp || shown == Moment::BuildUp);
+            // Hold the old moment until the half pulse right before that bar start.
+            if build_change && next_beat.is_bar_start() {
+                shown
+            } else {
+                decided
+            }
         };
         let sequence = builtin::sequence(moment, self.cfg.segments);
         let restart =
