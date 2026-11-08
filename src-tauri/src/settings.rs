@@ -90,13 +90,23 @@ pub fn load(path: &Path) -> Settings {
             Ok(()) => s,
             Err(e) => {
                 log::warn!("settings invalid, using defaults: {e}");
+                keep_aside(path);
                 Settings::default()
             }
         },
         Err(e) => {
             log::warn!("settings corrupt, using defaults: {e}");
+            keep_aside(path);
             Settings::default()
         }
+    }
+}
+
+/// Spec §12: an invalid file is copied to `<name>.bad` so the next save never loses the user's data.
+fn keep_aside(path: &Path) {
+    let bad = path.with_extension("json.bad");
+    if let Err(e) = std::fs::copy(path, &bad) {
+        log::warn!("cannot keep a copy of the invalid settings: {e}");
     }
 }
 
@@ -131,6 +141,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("settings.json");
         (dir, p)
+    }
+
+    #[test]
+    fn invalid_file_is_kept_aside_before_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, b"{not json").unwrap();
+        assert_eq!(load(&path), Settings::default());
+        let kept = dir.path().join("settings.json.bad");
+        assert_eq!(std::fs::read(&kept).unwrap(), b"{not json");
     }
 
     #[test]
