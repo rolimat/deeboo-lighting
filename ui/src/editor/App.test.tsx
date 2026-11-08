@@ -3,7 +3,12 @@ import { act } from "preact/test-utils";
 import { render } from "preact";
 
 vi.mock("./api", () => ({
-  api: { getStatus: vi.fn(), onWizard: vi.fn(async () => () => {}), wizardCancel: vi.fn() },
+  api: {
+    getStatus: vi.fn(),
+    getLibrary: vi.fn(async () => ({ shape: { pieces: [] } })),
+    onWizard: vi.fn(async () => () => {}),
+    wizardCancel: vi.fn(),
+  },
 }));
 import { api } from "./api";
 import { App } from "./App";

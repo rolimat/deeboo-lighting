@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-identify-segment"
+description = "Enables the identify_segment command without any pre-configured scope."
+commands.allow = ["identify_segment"]
+
+[[permission]]
+identifier = "deny-identify-segment"
+description = "Denies the identify_segment command without any pre-configured scope."
+commands.deny = ["identify_segment"]

@@ -497,6 +497,23 @@ pub async fn strip_identify(state: tauri::State<'_, AppState>, segment: u8) -> R
     state.wizard.identify(segment).await
 }
 
+/// The strip must be connected and `segment` (1-based) one of its segments.
+fn identify_check(strip: &StripStatus, segment: u8) -> Result<(), String> {
+    match strip {
+        StripStatus::Connected { segments, .. } if (1..=*segments).contains(&segment) => Ok(()),
+        StripStatus::Connected { .. } => Err("No such segment.".into()),
+        _ => Err("Strip not connected.".into()),
+    }
+}
+
+/// Flashes one segment through the app's own strip connection (the shape editor, after pairing).
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn identify_segment(state: tauri::State<'_, AppState>, segment: u8) -> Result<(), String> {
+    identify_check(&lock(&state.status).strip, segment)?;
+    state.send(Input::Identify(segment))
+}
+
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
 pub fn wizard_save(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
@@ -575,8 +592,25 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 18);
+        assert_eq!(commands.len(), 19);
         assert_eq!(granted, commands);
+    }
+
+    #[test]
+    fn identify_check_needs_a_connected_strip_and_a_segment_in_range() {
+        let on = StripStatus::Connected {
+            name: "dj".into(),
+            segments: 10,
+        };
+        assert_eq!(identify_check(&on, 1), Ok(()));
+        assert_eq!(identify_check(&on, 10), Ok(()));
+        for bad in [0, 11] {
+            assert_eq!(identify_check(&on, bad), Err("No such segment.".into()));
+        }
+        assert_eq!(
+            identify_check(&StripStatus::Connecting, 1),
+            Err("Strip not connected.".into())
+        );
     }
 
     fn lib_state() -> (tempfile::TempDir, AppState) {

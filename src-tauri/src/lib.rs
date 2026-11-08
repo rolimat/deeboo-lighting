@@ -55,6 +55,7 @@ pub fn run() -> tauri::Result<()> {
             commands::wizard_retry,
             commands::wizard_cancel,
             commands::strip_identify,
+            commands::identify_segment,
             commands::wizard_save
         ])
         .on_window_event(|window, event| {

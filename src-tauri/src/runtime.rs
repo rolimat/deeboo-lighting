@@ -30,6 +30,8 @@ pub enum Input {
     /// The editor saved the library (already validated and persisted).
     Library(Box<Library>),
     PopoverShown,
+    /// The editor asks to flash one segment (1-based) so the user can tell which piece it is.
+    Identify(u8),
     StripState(StripStatus),
     /// The wizard saved a new strip file: reconnect with it.
     StripChanged(StripConfig),
@@ -115,6 +117,11 @@ fn detect_beat<A: AudioPort>(
     d.bands.process(buf, &mut |f| d.moment.push(f));
     Some(d.moment.on_beat().0)
 }
+
+/// How long an identify flash stays before the scene is repainted.
+const IDENTIFY_FLASH_US: u64 = 1_200_000;
+/// A new identify inside this window is dropped: the strip loses back-to-back messages.
+const IDENTIFY_GATE_US: u64 = 300_000;
 
 /// The popover gets at most 30 updates per second.
 const MIN_PUBLISH_GAP_US: u64 = 33_333;
@@ -220,6 +227,8 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     strip_paused: bool,
     /// The saved library: kept to rebuild the engine's look after a segment-count change.
     library: Option<Library>,
+    /// When the last identify flash started; the scene is repainted `IDENTIFY_FLASH_US` later.
+    identify_at: Option<u64>,
 }
 
 /// Paints the menu bar: called with the previous and the new view, only when they differ.
@@ -272,6 +281,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             source_present,
             strip_paused: false,
             library: None,
+            identify_at: None,
         };
         core.replan(now_us);
         core
@@ -434,6 +444,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 self.check_midi_source();
                 self.publisher.touch();
             }
+            Input::Identify(segment) => self.identify(segment, now_us),
             Input::StripState(_) if self.strip_paused => {
                 // A report from before the pause: the task will say so again after the resume.
             }
@@ -467,6 +478,19 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         }
         self.after(now_us);
         true
+    }
+
+    fn identify(&mut self, segment: u8, now_us: u64) {
+        let ready = matches!(self.strip, StripStatus::Connected { .. })
+            && (1..=self.segments).contains(&segment)
+            && self
+                .identify_at
+                .is_none_or(|t| now_us >= t + IDENTIFY_GATE_US);
+        let Some(tx) = self.strip_tx.as_ref().filter(|_| ready) else {
+            return;
+        };
+        let _ = tx.send(StripMsg::Identify(segment));
+        self.identify_at = Some(now_us);
     }
 
     /// Re-pairing: the strip task reconnects; the scene is resent when it reports `Connected`.
@@ -553,6 +577,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             self.engine.next_deadline_us(),
             self.publisher.deadline(),
             self.tray_due,
+            self.identify_at.map(|t| t + IDENTIFY_FLASH_US),
         ]
         .into_iter()
         .flatten()
@@ -569,6 +594,15 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         if self.engine.next_deadline_us().is_some_and(|d| d <= now_us) {
             let cmds = self.engine.on_deadline(now_us);
             self.flush(cmds);
+        }
+        if self
+            .identify_at
+            .is_some_and(|t| t + IDENTIFY_FLASH_US <= now_us)
+        {
+            // The flash overwrote the scene: forget what was sent so the plan repaints all of it.
+            self.identify_at = None;
+            self.engine.strip_reconnected();
+            self.replan(now_us);
         }
         let now = snapshot(&self.engine);
         if now != self.last {
@@ -904,6 +938,42 @@ mod tests {
         c.handle(Input::Library(Box::new(lib.clone())), 1_000);
         assert_eq!(c.library, Some(lib));
         assert_eq!(c.status().selection.set, "Club");
+    }
+
+    #[test]
+    fn identify_flashes_one_segment_then_restores_the_scene() {
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::StripState(connected()), 1_000);
+        let _ = painted(&mut c, &mut rx);
+        c.handle(Input::Identify(3), 2_000_000);
+        assert!(matches!(rx.try_recv(), Ok(StripMsg::Identify(3))));
+        assert_eq!(c.deadline(), Some(2_000_000 + IDENTIFY_FLASH_US));
+        // Too soon after the last one: dropped, the strip loses back-to-back messages.
+        c.handle(Input::Identify(4), 2_100_000);
+        assert!(rx.try_recv().is_err());
+        c.tick(2_000_000 + IDENTIFY_FLASH_US);
+        assert!(
+            !painted(&mut c, &mut rx).is_empty(),
+            "full scene repainted after the flash"
+        );
+        assert_eq!(c.deadline(), None);
+    }
+
+    #[test]
+    fn identify_is_ignored_off_strip_or_out_of_range() {
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::Identify(3), 1_000);
+        assert!(rx.try_recv().is_err(), "not connected yet");
+        c.handle(Input::StripState(connected()), 2_000);
+        let _ = painted(&mut c, &mut rx);
+        for bad in [0, 11, 255] {
+            c.handle(Input::Identify(bad), 3_000_000);
+        }
+        assert!(rx.try_recv().is_err());
+        c.handle(Input::StripPause(true), 4_000_000);
+        let _ = rx.try_recv();
+        c.handle(Input::Identify(3), 5_000_000);
+        assert!(rx.try_recv().is_err(), "paused");
     }
 
     #[test]

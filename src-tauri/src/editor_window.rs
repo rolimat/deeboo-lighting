@@ -120,6 +120,7 @@ mod tests {
                 "allow-wizard-retry",
                 "allow-wizard-cancel",
                 "allow-strip-identify",
+                "allow-identify-segment",
                 "allow-wizard-save",
                 "core:event:allow-listen",
                 "core:event:allow-unlisten"

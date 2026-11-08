@@ -97,6 +97,8 @@ export const api = {
   wizardRetry: (): Promise<void> => invoke("wizard_retry"),
   wizardCancel: (): Promise<void> => invoke("wizard_cancel"),
   stripIdentify: (segment: number): Promise<void> => invoke("strip_identify", { segment }),
+  /** Flashes a segment (1-based) through the app's own strip connection; rejects with a short message. */
+  identifySegment: (segment: number): Promise<void> => invoke("identify_segment", { segment }),
   wizardSave: (): Promise<void> => invoke("wizard_save"),
   onWizard: (cb: (state: WizardState) => void): Promise<UnlistenFn> =>
     listen<WizardState>("wizard", (e) => cb(e.payload)),
