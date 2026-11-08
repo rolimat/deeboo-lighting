@@ -65,6 +65,9 @@ struct Rotation {
     lib: Library,
     groups: Groups,
     rots: [Rotator; 3],
+    /// Library ids of what plays now (`None`: generated or built-in), to refresh edited data.
+    shown_pal: Option<u32>,
+    seq_ids: [Option<u32>; 3],
 }
 
 const MOMENTS: [Moment; 3] = [Moment::Rhythm, Moment::Calm, Moment::BuildUp];
@@ -122,6 +125,11 @@ impl Look {
         let rot = Rotation {
             lib: lib.clone(),
             groups: groups(&lib.shape),
+            shown_pal: lib.current_palette_id(),
+            seq_ids: rots.each_ref().map(|r| match r.current() {
+                Some(SeqRef::Id(id)) => Some(id),
+                _ => None,
+            }),
             rots,
         };
         let seqs = MOMENTS.map(|m| {
@@ -146,17 +154,35 @@ impl Look {
         let old = &self.rot.as_ref()?.lib;
         let same = lib.segments() == segments
             && old.current_set() == lib.current_set()
-            && old.sequences == lib.sequences
             && old.shape == lib.shape;
         if !same {
             return None;
         }
         let mut look = self.clone();
         let r = look.rot.as_mut()?;
-        if old.active_palette != lib.active_palette {
+        if old.active_palette == lib.active_palette {
+            // Edited colours of the palette on show.
+            if let Some((_, p)) = r
+                .shown_pal
+                .and_then(|id| lib.palettes.iter().find(|(i, _)| *i == id))
+            {
+                look.palette = p.clone();
+            }
+        } else {
             look.palette = lib.current_palette();
+            r.shown_pal = lib.current_palette_id();
             for rot in &mut r.rots {
                 rot.sync_palette(lib.current_palette_id());
+            }
+        }
+        // Edited steps of a playing library sequence (same id).
+        for (i, id) in r.seq_ids.iter().enumerate() {
+            let fresh = lib
+                .sequences
+                .iter()
+                .find(|(x, q)| Some(*x) == *id && q.validate(segments).is_ok());
+            if let Some((_, q)) = fresh {
+                look.seqs[i] = q.clone();
             }
         }
         r.lib = lib.clone();
@@ -396,10 +422,15 @@ impl Engine {
             match c {
                 Choice::Sequence(sr) => {
                     self.look.seqs[i] = resolve_seq(r, &mut self.generator, moment, sr, n);
+                    r.seq_ids[i] = match sr {
+                        SeqRef::Id(id) => Some(id),
+                        SeqRef::Generated => None,
+                    };
                 }
                 Choice::Palette(id) => {
                     if let Some((_, p)) = r.lib.palettes.iter().find(|(x, _)| *x == id) {
                         self.look.palette = p.clone();
+                        r.shown_pal = Some(id);
                     }
                 }
             }

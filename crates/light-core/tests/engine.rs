@@ -717,3 +717,47 @@ fn only_the_pinned_palette_changing_keeps_the_sequence() {
     assert_eq!(hue_sends(&a, 100), Vec::<u64>::new());
     assert_ne!(hue_sends(&b, 100), Vec::<u64>::new());
 }
+
+#[test]
+fn edited_shown_palette_shows_from_the_next_bar() {
+    let mut lib = plain(4);
+    let mut p2 = lib.palettes[0].1.clone();
+    p2.principal.h = 100;
+    lib.palettes.push((2, p2));
+    lib.sets[0].rhythm.palettes = vec![1, 2];
+    let mut edited = lib.clone();
+    edited.palettes[0].1.principal.h = 77;
+    edited.palettes[0].1.contraste.h = 77;
+    edited.palettes[0].1.suave.h = 77;
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    s.e.set_library(s.now, &edited);
+    s.beats_of(6, &mut none);
+    assert_ne!(hue_sends(&s, 77), Vec::<u64>::new());
+    // The rotation position is unchanged: the next drop goes to palette 2.
+    s.cmd(UiCommand::Force(BuildUp));
+    s.beats_of(8, &mut none);
+    s.cmd(UiCommand::Force(Rhythm));
+    s.beats_of(8, &mut none);
+    assert_ne!(hue_sends(&s, 100), Vec::<u64>::new());
+}
+
+#[test]
+fn edited_playing_sequence_shows_from_the_next_bar() {
+    use light_core::model::Role;
+    let lib = plain(4);
+    let mut edited = lib.clone();
+    for st in &mut edited.sequences[0].1.steps {
+        st.roles = vec![Role::Contraste; 4];
+    }
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    s.e.set_library(s.now, &edited);
+    s.beats_of(6, &mut none);
+    let got = apply_all(&s.sends, vec![None; 4]);
+    assert_eq!(got, vec![hsv(280, 900, 950); 4]);
+}
