@@ -1,40 +1,25 @@
 //! LAN connection to the strip, its paint commands and the task that sends them (spec §5).
 
 use std::fmt;
-use std::net::IpAddr;
-use std::os::unix::fs::PermissionsExt;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use light_core::paint::{PAINT_DP, PaintCommand, encode};
-use rustuya::tokio::{Device, Discovery};
-use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use light_core::paint::{Hsv, PAINT_DP, PaintCommand, decode_segment_count, encode};
+use rustuya::tokio::{Device, Discovered, Discovery, Event, Listener, TuyaError, Version};
+use secrecy::ExposeSecret;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::commands::StripStatus;
-use crate::lan::is_allowed_lan_ip;
+use crate::lan::on_local_subnet;
+use crate::strip_store::{self, StripConfig};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Measured: the strip announces itself every ~5 s, but wifi drops some (gaps of 15 s seen).
 const DISCOVERY_WINDOW: Duration = Duration::from_secs(30);
-
-pub struct StripConfig {
-    pub id: String,
-    pub name: String,
-    pub local_key: SecretString,
-    pub segments: u8,
-}
-
-#[derive(Deserialize)]
-struct StripFile {
-    id: String,
-    name: String,
-    local_key: String,
-    segments: Option<u8>,
-}
 
 /// Never carries the key, the address or file contents.
 #[derive(Debug)]
@@ -42,8 +27,11 @@ pub enum StripError {
     NotFound,
     ForbiddenAddress,
     Connect,
+    /// The strip answered but rejected the key (decryption or authentication failed).
+    Auth,
     Send,
     Encode,
+    NoSegments,
 }
 
 impl fmt::Display for StripError {
@@ -52,26 +40,12 @@ impl fmt::Display for StripError {
             Self::NotFound => "strip not found on the LAN",
             Self::ForbiddenAddress => "strip address is not on a local private subnet",
             Self::Connect => "cannot connect to the strip",
+            Self::Auth => "the strip rejected the saved key",
             Self::Send => "cannot send to the strip",
             Self::Encode => "cannot encode the paint command",
+            Self::NoSegments => "no paint data received from the strip",
         })
     }
-}
-
-/// Refuses files that are not mode 0600: they hold the strip's local key.
-fn load_strip_file(path: &Path) -> Option<StripConfig> {
-    let mode = std::fs::metadata(path).ok()?.permissions().mode() & 0o777;
-    if mode != 0o600 {
-        log::warn!("strip file ignored: its mode must be 0600");
-        return None;
-    }
-    let file: StripFile = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    Some(StripConfig {
-        id: file.id,
-        name: file.name,
-        local_key: SecretString::from(file.local_key),
-        segments: file.segments.unwrap_or(10),
-    })
 }
 
 /// `<config dir>/strip.json`; debug builds let `DEEBOO_DEV_STRIP` point elsewhere.
@@ -85,45 +59,102 @@ pub fn load(config_dir: &Path) -> Option<StripConfig> {
         } else {
             given
         };
-        let cfg = load_strip_file(&path);
-        if cfg.is_none() {
-            log::warn!("DEEBOO_DEV_STRIP is set but the strip file is missing or invalid");
-        }
-        return cfg;
+        return load_logged(&path);
     }
-    load_strip_file(&config_dir.join("strip.json"))
+    load_logged(&config_dir.join("strip.json"))
+}
+
+fn load_logged(path: &Path) -> Option<StripConfig> {
+    strip_store::load(path)
+        .inspect_err(|e| log::warn!("strip file ignored: {e}"))
+        .ok()
 }
 
 pub struct Strip {
     device: Device,
 }
 
-impl Strip {
-    /// # Errors
-    /// Fails if the strip is not found, sits outside the local subnets, or does not connect.
-    pub async fn connect(cfg: &StripConfig) -> Result<Self, StripError> {
-        let disco = Discovery::new().map_err(|e| {
-            log::debug!("discovery init failed: {e}");
-            StripError::NotFound
-        })?;
-        let info = disco.find(&cfg.id, DISCOVERY_WINDOW).await.map_err(|e| {
-            log::debug!("discovery failed: {e}");
-            StripError::NotFound
-        })?;
-        if !on_local_subnet(info.ip) {
-            return Err(StripError::ForbiddenAddress);
-        }
+/// What a connection attempt needs from the network (real: discovery and rustuya; tests: a script).
+trait Link {
+    type Conn;
+    /// Whether the saved address is allowed on the Mac's subnets and answers.
+    fn hint(&self, ip: Ipv4Addr) -> impl Future<Output = bool> + Send;
+    /// Finds the strip by ID through discovery.
+    fn find(&self, id: &str) -> impl Future<Output = Result<Found, StripError>> + Send;
+    /// `version` is `None` when unknown (the saved-address path).
+    fn dial(
+        &self,
+        cfg: &StripConfig,
+        ip: Ipv4Addr,
+        version: Option<Version>,
+    ) -> impl Future<Output = Result<Self::Conn, StripError>> + Send;
+}
+
+/// The saved address is only a hint: another Tuya device may hold it now, and its refusal of our key
+/// says nothing about ours. Only the device found by ID can fail with `Auth`.
+async fn connect_in<L: Link>(link: &L, cfg: &StripConfig) -> Result<L::Conn, StripError> {
+    if let Some(ip) = cfg.last_ip
+        && link.hint(ip).await
+        && let Ok(conn) = link.dial(cfg, ip, None).await
+    {
+        return Ok(conn);
+    }
+    let found = link.find(&cfg.id).await?;
+    let version = (found.version != Version::Auto).then_some(found.version);
+    link.dial(cfg, found.ip, version).await
+}
+
+struct RealLink;
+
+impl Link for RealLink {
+    type Conn = Device;
+
+    async fn hint(&self, ip: Ipv4Addr) -> bool {
+        on_local_subnet(ip) && tcp_reachable(ip).await
+    }
+
+    async fn find(&self, id: &str) -> Result<Found, StripError> {
+        find_by_id(id, None, DISCOVERY_WINDOW).await
+    }
+
+    async fn dial(
+        &self,
+        cfg: &StripConfig,
+        ip: Ipv4Addr,
+        version: Option<Version>,
+    ) -> Result<Device, StripError> {
         let key = cfg.local_key.expose_secret().as_bytes().to_vec();
-        let mut builder = Device::builder(cfg.id.clone(), key).address(info.ip.to_string());
-        if let Some(v) = info.version {
+        let mut builder = Device::builder(cfg.id.clone(), key).address(ip.to_string());
+        if let Some(v) = version {
             builder = builder.version(v);
         }
         let device = builder.connect().map_err(|_| StripError::Connect)?;
-        device
-            .wait_connected(TIMEOUT)
+        if let Err(e) = device.wait_connected(TIMEOUT).await {
+            device.close().await;
+            return Err(match e {
+                TuyaError::Core(c) if c.is_auth_failure() => StripError::Auth,
+                _ => StripError::Connect,
+            });
+        }
+        Ok(device)
+    }
+}
+
+impl Strip {
+    /// # Errors
+    /// `NotFound` if discovery misses the ID, `Auth` if the strip rejects the key, `Connect` otherwise.
+    pub async fn connect(cfg: &StripConfig) -> Result<Self, StripError> {
+        connect_in(&RealLink, cfg)
             .await
-            .map_err(|_| StripError::Connect)?;
-        Ok(Self { device })
+            .map(|device| Self { device })
+    }
+
+    /// Lights `segment` white on an otherwise dark strip so the user can see which it is.
+    ///
+    /// # Errors
+    /// Fails if the segment is outside the strip or a message cannot be sent.
+    pub async fn identify(&self, segment: u8, segments: u8) -> Result<(), StripError> {
+        identify_via(self, segment, segments).await
     }
 
     /// # Errors
@@ -137,18 +168,208 @@ impl Strip {
     }
 }
 
-fn on_local_subnet(ip: IpAddr) -> bool {
-    let IpAddr::V4(ip) = ip else { return false };
-    if_addrs::get_if_addrs().is_ok_and(|ifaces| {
-        ifaces.iter().any(|i| match &i.addr {
-            if_addrs::IfAddr::V4(a) => is_allowed_lan_ip(
-                ip,
-                a.ip,
-                u8::try_from(u32::from(a.netmask).leading_ones()).unwrap_or(0),
-            ),
-            if_addrs::IfAddr::V6(_) => false,
+/// Gap between messages: the strip loses back-to-back ones (spec §5.3).
+pub(crate) const MESSAGE_GAP: Duration = Duration::from_millis(125);
+const MAX_SEGMENTS: u8 = 60;
+const MAX_FRAME: usize = 4096;
+const TUYA_PORT: u16 = 6668;
+
+/// Where the strip answered; `version` is `Auto` when it was not announced.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Found {
+    pub ip: Ipv4Addr,
+    pub version: Version,
+}
+
+pub struct Announcement {
+    pub id: String,
+    pub ip: IpAddr,
+    pub version: Option<Version>,
+}
+
+/// Source of discovery announcements (real: rustuya; tests: a script).
+trait Announcements {
+    fn next(&mut self) -> impl Future<Output = Option<Announcement>> + Send;
+    fn reachable(&self, ip: Ipv4Addr) -> impl Future<Output = bool> + Send;
+}
+
+async fn find_in(
+    src: &mut impl Announcements,
+    id: &str,
+    last_ip: Option<Ipv4Addr>,
+    window: Duration,
+    allowed: impl Fn(Ipv4Addr) -> bool,
+) -> Result<Found, StripError> {
+    // The saved address is only a hint: it must still be allowed and answer.
+    if let Some(ip) = last_ip
+        && allowed(ip)
+        && src.reachable(ip).await
+    {
+        return Ok(Found {
+            ip,
+            version: Version::Auto,
+        });
+    }
+    let wait = async {
+        while let Some(a) = src.next().await {
+            if let IpAddr::V4(ip) = a.ip
+                && a.id == id
+                && allowed(ip)
+            {
+                return Some(Found {
+                    ip,
+                    version: a.version.unwrap_or(Version::Auto),
+                });
+            }
+        }
+        None
+    };
+    tokio::time::timeout(window, wait)
+        .await
+        .ok()
+        .flatten()
+        .ok_or(StripError::NotFound)
+}
+
+/// The strip's segment count from a status frame (`{"dps":{"61":"<base64>"}}`), if it holds one.
+fn segments_from_frame(payload: &[u8]) -> Option<u8> {
+    if payload.len() > MAX_FRAME {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    let dps = v.get("dps").or_else(|| v.get("data")?.get("dps"))?;
+    let raw = STANDARD.decode(dps.get("61")?.as_str()?).ok()?;
+    decode_segment_count(&raw)
+        .ok()
+        .filter(|n| *n <= MAX_SEGMENTS)
+}
+
+/// Source of status frames (real: the device listener; tests: a script).
+trait Frames {
+    fn next(&mut self) -> impl Future<Output = Option<Vec<u8>>> + Send;
+}
+
+async fn listen_in(frames: &mut impl Frames, window: Duration) -> Result<u8, StripError> {
+    let wait = async {
+        while let Some(f) = frames.next().await {
+            if let Some(n) = segments_from_frame(&f) {
+                return Some(n);
+            }
+        }
+        None
+    };
+    tokio::time::timeout(window, wait)
+        .await
+        .ok()
+        .flatten()
+        .ok_or(StripError::NoSegments)
+}
+
+/// Eraser on every segment, then white on `segment` (spec §6.7.5).
+async fn identify_via<P: Painter>(p: &P, segment: u8, segments: u8) -> Result<(), StripError> {
+    let all = PaintCommand::Eraser {
+        segments: (1..=segments).collect(),
+    };
+    let one = PaintCommand::Pencil {
+        color: Hsv {
+            h: 0,
+            s: 0,
+            v: 1000,
+        },
+        segments: vec![segment],
+    };
+    // Validate both before sending anything.
+    encode(segments, &one).map_err(|_| StripError::Encode)?;
+    p.paint(segments, &all).await?;
+    tokio::time::sleep(MESSAGE_GAP).await;
+    p.paint(segments, &one).await
+}
+
+struct Disco {
+    disco: Discovery,
+    stream: Discovered,
+}
+
+impl Announcements for Disco {
+    async fn next(&mut self) -> Option<Announcement> {
+        let i = self.stream.recv().await.ok()?;
+        Some(Announcement {
+            id: i.id,
+            ip: i.ip,
+            version: i.version,
         })
-    })
+    }
+
+    async fn reachable(&self, ip: Ipv4Addr) -> bool {
+        let _ = &self.disco;
+        tcp_reachable(ip).await
+    }
+}
+
+async fn tcp_reachable(ip: Ipv4Addr) -> bool {
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::TcpStream::connect((ip, TUYA_PORT)),
+    )
+    .await
+    .is_ok_and(|r| r.is_ok())
+}
+
+struct DeviceFrames(Listener);
+
+impl Frames for DeviceFrames {
+    async fn next(&mut self) -> Option<Vec<u8>> {
+        loop {
+            if let Event::Frame(m) = self.0.recv().await? {
+                return Some(m.payload);
+            }
+        }
+    }
+}
+
+/// Finds the strip with this ID on the Mac's own subnet.
+///
+/// # Errors
+/// `NotFound` if nothing valid answers within `window`.
+pub async fn find_by_id(
+    id: &str,
+    last_ip: Option<Ipv4Addr>,
+    window: Duration,
+) -> Result<Found, StripError> {
+    let disco = Discovery::new().map_err(|e| {
+        log::debug!("discovery init failed: {e}");
+        StripError::NotFound
+    })?;
+    let stream = disco.discovered();
+    disco.request_scan();
+    let mut src = Disco { disco, stream };
+    find_in(&mut src, id, last_ip, window, on_local_subnet).await
+}
+
+/// Connects and waits for the first valid DP 61 frame (the user paints in Smart Life).
+///
+/// # Errors
+/// `ForbiddenAddress`, `Connect`, or `NoSegments` when nothing valid arrives within `window`.
+pub async fn listen_segment_count(
+    cfg: &StripConfig,
+    ip: Ipv4Addr,
+    window: Duration,
+) -> Result<u8, StripError> {
+    if !on_local_subnet(ip) {
+        return Err(StripError::ForbiddenAddress);
+    }
+    let key = cfg.local_key.expose_secret().as_bytes().to_vec();
+    let device = Device::builder(cfg.id.clone(), key)
+        .address(ip.to_string())
+        .connect()
+        .map_err(|_| StripError::Connect)?;
+    let mut frames = DeviceFrames(device.listener());
+    let r = match device.wait_connected(TIMEOUT).await {
+        Ok(()) => listen_in(&mut frames, window).await,
+        Err(_) => Err(StripError::Connect),
+    };
+    device.close().await;
+    r
 }
 
 /// What the strip task needs from a connected strip.
@@ -171,42 +392,118 @@ impl Painter for Strip {
 }
 
 /// From the engine to the strip task.
-#[derive(Debug)]
 pub enum StripMsg {
     Paint(PaintCommand),
     /// Try again after an error; ignored while connected.
     Connect,
+    /// A new strip file: drop the connection and connect with this config.
+    Configure(StripConfig),
+    /// `true`: drop the connection and stay away (the wizard needs the strip, which accepts one
+    /// LAN client); `false`: connect again.
+    Pause(bool),
 }
 
-/// Connects, then paints each command as it arrives. After a paint error it reports
-/// `StripStatus::Error` and drops commands until a `Connect` brings the strip back.
+/// The status a failed connection shows: a rejected key and a missing ID get their own.
+fn status_of(e: &StripError) -> StripStatus {
+    match e {
+        StripError::Auth => StripStatus::KeyInvalid,
+        StripError::NotFound => StripStatus::NotFound,
+        _ => StripStatus::Error,
+    }
+}
+
+/// What matters while there is no connection; paints and retries meanwhile are stale and dropped.
+enum Control {
+    Configure(StripConfig),
+    Pause(bool),
+}
+
+async fn next_control(rx: &mut UnboundedReceiver<StripMsg>) -> Option<Control> {
+    loop {
+        match rx.recv().await? {
+            StripMsg::Configure(c) => return Some(Control::Configure(c)),
+            StripMsg::Pause(p) => return Some(Control::Pause(p)),
+            StripMsg::Paint(_) | StripMsg::Connect => {}
+        }
+    }
+}
+
+/// Connects, then paints each command as it arrives. A failure reports its status
+/// (`StripStatus::{Error, NotFound, KeyInvalid}`) and drops commands until a `Connect` retries;
+/// a `Configure` at any moment, even mid-connection, starts over with the new config.
 pub async fn run<P, Fut>(
-    name: String,
-    segments: u8,
-    mut connect: impl FnMut() -> Fut,
+    initial: Option<StripConfig>,
+    mut connect: impl FnMut(Arc<StripConfig>) -> Fut,
     mut rx: UnboundedReceiver<StripMsg>,
     report: impl Fn(StripStatus),
 ) where
     P: Painter,
     Fut: Future<Output = Result<P, StripError>>,
 {
+    let mut cfg = initial.map(Arc::new);
     let mut painter = None;
-    loop {
+    let mut paused = false;
+    'connect: loop {
+        // Paused: no connection and no reports; only a new config (kept) or the resume matter.
+        while paused {
+            match next_control(&mut rx).await {
+                Some(Control::Configure(new)) => cfg = Some(Arc::new(new)),
+                Some(Control::Pause(p)) => paused = p,
+                None => return,
+            }
+        }
+        let Some(c) = cfg.clone() else {
+            report(StripStatus::NotConfigured);
+            match next_control(&mut rx).await {
+                Some(Control::Configure(new)) => cfg = Some(Arc::new(new)),
+                Some(Control::Pause(p)) => paused = p,
+                None => return,
+            }
+            continue;
+        };
         if painter.is_none() {
             report(StripStatus::Connecting);
-            match connect().await {
-                Ok(p) => {
-                    // Whatever queued up while connecting is stale; the engine repaints on `Connected`.
-                    while rx.try_recv().is_ok() {}
+            let attempt = tokio::select! {
+                r = connect(c.clone()) => Ok(r),
+                new = next_control(&mut rx) => Err(new),
+            };
+            match attempt {
+                Err(None) => return,
+                Err(Some(Control::Configure(new))) => {
+                    cfg = Some(Arc::new(new));
+                    continue;
+                }
+                Err(Some(Control::Pause(p))) => {
+                    paused = p;
+                    continue;
+                }
+                Ok(Ok(p)) => {
+                    // Whatever queued up while connecting is stale (the engine repaints on
+                    // `Connected`), except a newer config.
+                    let mut newer = None;
+                    while let Ok(m) = rx.try_recv() {
+                        match m {
+                            StripMsg::Configure(new) => newer = Some(new),
+                            StripMsg::Pause(p) => paused = p,
+                            StripMsg::Paint(_) | StripMsg::Connect => {}
+                        }
+                    }
+                    let restart = newer.is_some() || paused;
+                    if let Some(new) = newer {
+                        cfg = Some(Arc::new(new));
+                    }
+                    if restart {
+                        continue;
+                    }
                     painter = Some(p);
                     report(StripStatus::Connected {
-                        name: name.clone(),
-                        segments,
+                        name: c.name.clone(),
+                        segments: c.segments,
                     });
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     log::error!("strip connection failed: {e}");
-                    report(StripStatus::Error);
+                    report(status_of(&e));
                 }
             }
         }
@@ -214,31 +511,42 @@ pub async fn run<P, Fut>(
         loop {
             let Some(msg) = rx.recv().await else { return };
             match (&painter, msg) {
+                (_, StripMsg::Configure(new)) => {
+                    cfg = Some(Arc::new(new));
+                    painter = None;
+                    continue 'connect;
+                }
+                (Some(_), StripMsg::Pause(false)) => {}
+                // Dropping the painter closes the connection.
+                (_, StripMsg::Pause(p)) => {
+                    paused = p;
+                    painter = None;
+                    continue 'connect;
+                }
                 (Some(p), StripMsg::Paint(cmd)) => {
-                    if let Err(e) = p.paint(segments, &cmd).await {
+                    if let Err(e) = p.paint(c.segments, &cmd).await {
                         log::warn!("strip paint failed: {e}");
                         report(StripStatus::Error);
                         painter = None;
                     }
                 }
-                (None, StripMsg::Connect) => break,
+                (None, StripMsg::Connect) => continue 'connect,
                 _ => {}
             }
         }
     }
 }
 
-/// Starts the strip task on the async runtime.
+/// Starts the strip task on the async runtime; it idles until a config arrives if there is none.
 pub fn spawn(
-    cfg: StripConfig,
+    cfg: Option<StripConfig>,
     rx: UnboundedReceiver<StripMsg>,
     report: impl Fn(StripStatus) + Send + 'static,
 ) {
     tauri::async_runtime::spawn(async move {
         run(
-            cfg.name.clone(),
-            cfg.segments,
-            || Strip::connect(&cfg),
+            cfg,
+            |c: Arc<StripConfig>| async move { Strip::connect(&c).await },
             rx,
             report,
         )
@@ -249,32 +557,8 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-
-    fn write(dir: &Path, mode: u32) -> std::path::PathBuf {
-        let p = dir.join("strip.json");
-        fs::write(&p, r#"{"id":"abc","name":"dj lights","local_key":"k"}"#).unwrap_or_default();
-        fs::set_permissions(&p, fs::Permissions::from_mode(mode)).unwrap_or_default();
-        p
-    }
-
-    #[test]
-    fn loads_a_0600_file_with_default_segments() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = load_strip_file(&write(dir.path(), 0o600)).unwrap();
-        assert_eq!(
-            (cfg.id.as_str(), cfg.name.as_str(), cfg.segments),
-            ("abc", "dj lights", 10)
-        );
-    }
-
-    #[test]
-    fn refuses_a_file_readable_by_others() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(load_strip_file(&write(dir.path(), 0o644)).is_none());
-    }
 
     /// Fails its second paint, whichever painter makes it.
     struct Fake(Arc<AtomicUsize>);
@@ -318,9 +602,8 @@ mod tests {
         };
         tauri::async_runtime::block_on(async move {
             let task = tokio::spawn(run(
-                "dj".into(),
-                10,
-                move || {
+                Some(cfg("dj", None)),
+                move |_| {
                     let a = Arc::clone(&a);
                     async move { Ok(Fake(a)) }
                 },
@@ -353,5 +636,544 @@ mod tests {
             ]
         );
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    // --- finding the strip and learning its segments (fakes, simulated time) ---
+
+    fn paused<F: Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .map_or_else(|_| unreachable!("runtime builds"), |rt| rt.block_on(f))
+    }
+
+    const MAC: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 5);
+    const STRIP: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 50);
+
+    fn allowed(ip: Ipv4Addr) -> bool {
+        crate::lan::is_allowed_lan_ip(ip, MAC, 24)
+    }
+
+    fn ann(id: &str, ip: [u8; 4]) -> Announcement {
+        Announcement {
+            id: id.into(),
+            ip: IpAddr::V4(Ipv4Addr::from(ip)),
+            version: Some(Version::V3_3),
+        }
+    }
+
+    struct FakeAnn {
+        queue: Vec<Announcement>,
+        reachable: bool,
+        probed: Mutex<Vec<Ipv4Addr>>,
+    }
+
+    impl FakeAnn {
+        fn new(queue: Vec<Announcement>, reachable: bool) -> Self {
+            Self {
+                queue,
+                reachable,
+                probed: Mutex::default(),
+            }
+        }
+    }
+
+    impl Announcements for FakeAnn {
+        async fn next(&mut self) -> Option<Announcement> {
+            if self.queue.is_empty() {
+                std::future::pending::<()>().await;
+            }
+            Some(self.queue.remove(0))
+        }
+
+        fn reachable(&self, ip: Ipv4Addr) -> impl Future<Output = bool> + Send {
+            self.probed
+                .lock()
+                .map(|mut p| p.push(ip))
+                .unwrap_or_default();
+            std::future::ready(self.reachable)
+        }
+    }
+
+    const WINDOW: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn discovery_ignores_other_ids_and_foreign_ips() {
+        let mut src = FakeAnn::new(
+            vec![
+                ann("other", [192, 168, 1, 60]),
+                ann("mine", [8, 8, 8, 8]),
+                ann("mine", [192, 168, 2, 50]),
+                ann("mine", [192, 168, 1, 50]),
+            ],
+            false,
+        );
+        let found = paused(find_in(&mut src, "mine", None, WINDOW, allowed));
+        assert_eq!(
+            found.ok(),
+            Some(Found {
+                ip: STRIP,
+                version: Version::V3_3
+            })
+        );
+    }
+
+    #[test]
+    fn discovery_with_only_wrong_answers_times_out() {
+        let mut src = FakeAnn::new(
+            vec![ann("other", [192, 168, 1, 60]), ann("mine", [8, 8, 8, 8])],
+            false,
+        );
+        let r = paused(find_in(&mut src, "mine", None, WINDOW, allowed));
+        assert!(matches!(r, Err(StripError::NotFound)));
+    }
+
+    #[test]
+    fn last_ip_tried_first_and_rechecked() {
+        // Reachable and allowed: used without waiting for discovery.
+        let mut src = FakeAnn::new(vec![], true);
+        let r = paused(find_in(&mut src, "mine", Some(STRIP), WINDOW, allowed));
+        assert_eq!(r.ok().map(|f| f.ip), Some(STRIP));
+        // Foreign saved address: never probed, discovery decides.
+        let mut src = FakeAnn::new(vec![ann("mine", [192, 168, 1, 51])], true);
+        let r = paused(find_in(
+            &mut src,
+            "mine",
+            Some(Ipv4Addr::new(8, 8, 8, 8)),
+            WINDOW,
+            allowed,
+        ));
+        assert_eq!(r.ok().map(|f| f.ip), Some(Ipv4Addr::new(192, 168, 1, 51)));
+        assert!(src.probed.lock().unwrap().is_empty());
+        // Saved address that does not answer: falls back to discovery.
+        let mut src = FakeAnn::new(vec![ann("mine", [192, 168, 1, 52])], false);
+        let r = paused(find_in(&mut src, "mine", Some(STRIP), WINDOW, allowed));
+        assert_eq!(r.ok().map(|f| f.ip), Some(Ipv4Addr::new(192, 168, 1, 52)));
+    }
+
+    fn frame(dp61: &[u8]) -> Vec<u8> {
+        format!(r#"{{"dps":{{"61":"{}"}}}}"#, STANDARD.encode(dp61)).into_bytes()
+    }
+
+    struct FakeFrames(Vec<Vec<u8>>);
+
+    impl Frames for FakeFrames {
+        async fn next(&mut self) -> Option<Vec<u8>> {
+            if self.0.is_empty() {
+                std::future::pending::<()>().await;
+            }
+            Some(self.0.remove(0))
+        }
+    }
+
+    #[test]
+    fn segment_listen_ignores_bad_payloads_and_times_out() {
+        let bad = vec![
+            b"not json".to_vec(),
+            br#"{"dps":{"20":true}}"#.to_vec(),
+            frame(&[0x00, 0x01]),
+            frame(&[0x01, 0x01, 0x00, 0x0a]),
+            frame(&[0x00, 0x01, 0x00, 0x00]),
+            frame(&[0x00, 0x01, 0x00, 61]),
+            br#"{"dps":{"61":"!!!"}}"#.to_vec(),
+        ];
+        let mut only_bad = FakeFrames(bad.clone());
+        let r = paused(listen_in(&mut only_bad, Duration::from_secs(90)));
+        assert!(matches!(r, Err(StripError::NoSegments)));
+        let mut good = bad;
+        good.push(frame(&[0x00, 0x02, 0x00, 0x0a, 0x01]));
+        let mut mixed = FakeFrames(good);
+        assert_eq!(
+            paused(listen_in(&mut mixed, Duration::from_secs(90))).ok(),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn frame_with_nested_dps_is_read() {
+        let raw = format!(
+            r#"{{"data":{{"dps":{{"61":"{}"}}}}}}"#,
+            STANDARD.encode([0, 1, 0, 60])
+        );
+        assert_eq!(segments_from_frame(raw.as_bytes()), Some(60));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn arbitrary_frames_never_panic(raw in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..6000)) {
+            if let Some(n) = segments_from_frame(&raw) {
+                proptest::prop_assert!((1..=60).contains(&n));
+            }
+        }
+
+        #[test]
+        fn arbitrary_dp61_payloads_stay_in_range(dp in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..300)) {
+            if let Some(n) = segments_from_frame(&frame(&dp)) {
+                proptest::prop_assert!((1..=60).contains(&n));
+            }
+        }
+    }
+
+    struct Recorder(Mutex<Vec<(tokio::time::Instant, Vec<u8>)>>);
+
+    impl Painter for Recorder {
+        fn paint(
+            &self,
+            segments: u8,
+            cmd: &PaintCommand,
+        ) -> impl Future<Output = Result<(), StripError>> + Send {
+            let bytes = encode(segments, cmd).map_err(|_| StripError::Encode);
+            let r = bytes.map(|b| {
+                self.0
+                    .lock()
+                    .map(|mut v| v.push((tokio::time::Instant::now(), b)))
+                    .unwrap_or_default();
+            });
+            std::future::ready(r)
+        }
+    }
+
+    fn hex(b: &[u8]) -> String {
+        b.iter().fold(String::new(), |mut acc, x| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{x:02x}");
+            acc
+        })
+    }
+
+    #[test]
+    fn identify_sends_eraser_then_pencil_with_gap() {
+        let rec = Recorder(Mutex::default());
+        assert!(paused(identify_via(&rec, 3, 10)).is_ok());
+        let sent = rec.0.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(
+            hex(&sent[0].1),
+            "0001000a020000000000008a0102030405060708090a"
+        );
+        assert_eq!(hex(&sent[1].1), "0001000a010000000003e88103");
+        assert!(sent[1].0 - sent[0].0 >= Duration::from_millis(125));
+    }
+
+    #[test]
+    fn identify_rejects_a_segment_outside_the_strip() {
+        let rec = Recorder(Mutex::default());
+        assert!(matches!(
+            paused(identify_via(&rec, 11, 10)),
+            Err(StripError::Encode)
+        ));
+        assert!(
+            rec.0.lock().unwrap().is_empty(),
+            "nothing reached the strip"
+        );
+    }
+
+    // --- reconnecting, classification and the stale-address fallback ---
+
+    fn cfg(name: &str, last_ip: Option<Ipv4Addr>) -> StripConfig {
+        StripConfig {
+            id: "bf1234".into(),
+            name: name.into(),
+            local_key: secrecy::SecretString::from("0123456789abcdef"),
+            segments: 10,
+            last_ip,
+        }
+    }
+
+    type Reports = Arc<Mutex<Vec<StripStatus>>>;
+
+    /// Runs the task until `rx` closes; `script` feeds it messages and `connect` decides each outcome.
+    fn drive_task(
+        initial: Option<StripConfig>,
+        connect: impl FnMut(
+            Arc<StripConfig>,
+        )
+            -> std::pin::Pin<Box<dyn Future<Output = Result<Fake, StripError>> + Send>>,
+        script: impl AsyncFnOnce(&tokio::sync::mpsc::UnboundedSender<StripMsg>, &Reports),
+    ) -> Vec<StripStatus> {
+        let log: Reports = Arc::default();
+        let l = Arc::clone(&log);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        paused(async {
+            let task = run(initial, connect, rx, move |s| {
+                l.lock().map(|mut v| v.push(s)).unwrap_or_default();
+            });
+            let feed = async {
+                script(&tx, &log).await;
+                drop(tx);
+            };
+            tokio::join!(task, feed);
+        });
+        log.lock().map(|l| l.clone()).unwrap_or_default()
+    }
+
+    fn ok_fake(
+        _: Arc<StripConfig>,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<Fake, StripError>> + Send>> {
+        Box::pin(async { Ok(Fake(Arc::new(AtomicUsize::new(0)))) })
+    }
+
+    async fn settle() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    #[test]
+    fn auth_failure_marks_key_invalid() {
+        let r = drive_task(
+            Some(cfg("dj", None)),
+            |_| Box::pin(async { Err(StripError::Auth) }),
+            async |_, _| settle().await,
+        );
+        assert_eq!(r, vec![StripStatus::Connecting, StripStatus::KeyInvalid]);
+    }
+
+    #[test]
+    fn missing_id_marks_not_found() {
+        let r = drive_task(
+            Some(cfg("dj", None)),
+            |_| Box::pin(async { Err(StripError::NotFound) }),
+            async |tx, _| {
+                settle().await;
+                // Retrying asks again; a connection refused is a plain error.
+                tx.send(StripMsg::Connect).unwrap_or_default();
+                settle().await;
+            },
+        );
+        assert_eq!(
+            r,
+            vec![
+                StripStatus::Connecting,
+                StripStatus::NotFound,
+                StripStatus::Connecting,
+                StripStatus::NotFound
+            ]
+        );
+        assert_eq!(status_of(&StripError::Connect), StripStatus::Error);
+    }
+
+    #[test]
+    fn configure_connects_a_strip_that_was_not_configured_and_replaces_a_connected_one() {
+        let connected = |n: &str| StripStatus::Connected {
+            name: n.into(),
+            segments: 10,
+        };
+        let r = drive_task(None, ok_fake, async |tx, _| {
+            settle().await;
+            tx.send(StripMsg::Configure(cfg("one", None)))
+                .unwrap_or_default();
+            settle().await;
+            tx.send(StripMsg::Configure(cfg("two", None)))
+                .unwrap_or_default();
+            settle().await;
+        });
+        assert_eq!(
+            r,
+            vec![
+                StripStatus::NotConfigured,
+                StripStatus::Connecting,
+                connected("one"),
+                StripStatus::Connecting,
+                connected("two")
+            ]
+        );
+    }
+
+    #[test]
+    fn configure_wins_over_a_connection_attempt_in_flight() {
+        let r = drive_task(
+            Some(cfg("old", None)),
+            |c| {
+                if c.name == "old" {
+                    Box::pin(std::future::pending())
+                } else {
+                    Box::pin(async { Ok(Fake(Arc::new(AtomicUsize::new(0)))) })
+                }
+            },
+            async |tx, _| {
+                settle().await;
+                tx.send(StripMsg::Configure(cfg("new", None)))
+                    .unwrap_or_default();
+                settle().await;
+            },
+        );
+        assert_eq!(
+            r.last(),
+            Some(&StripStatus::Connected {
+                name: "new".into(),
+                segments: 10
+            })
+        );
+    }
+
+    #[test]
+    fn pause_drops_the_connection_and_resume_connects_with_the_latest_config() {
+        let dialled = Arc::new(Mutex::new(Vec::<String>::new()));
+        let d = Arc::clone(&dialled);
+        let connected = |n: &str| StripStatus::Connected {
+            name: n.into(),
+            segments: 10,
+        };
+        let r = drive_task(
+            Some(cfg("old", None)),
+            move |c| {
+                d.lock().unwrap().push(c.name.clone());
+                Box::pin(async { Ok(Fake(Arc::new(AtomicUsize::new(0)))) })
+            },
+            async |tx, _| {
+                settle().await;
+                tx.send(StripMsg::Pause(true)).unwrap_or_default();
+                settle().await;
+                // While paused nothing dials: retries and paints are stale, a new config is kept.
+                tx.send(StripMsg::Connect).unwrap_or_default();
+                tx.send(StripMsg::Configure(cfg("new", None)))
+                    .unwrap_or_default();
+                settle().await;
+                tx.send(StripMsg::Pause(false)).unwrap_or_default();
+                settle().await;
+            },
+        );
+        assert_eq!(*dialled.lock().unwrap(), ["old", "new"]);
+        assert_eq!(
+            r,
+            vec![
+                StripStatus::Connecting,
+                connected("old"),
+                StripStatus::Connecting,
+                connected("new")
+            ]
+        );
+    }
+
+    #[test]
+    fn pause_wins_over_a_connection_attempt_in_flight() {
+        let dials = Arc::new(AtomicUsize::new(0));
+        let d = Arc::clone(&dials);
+        let r = drive_task(
+            Some(cfg("dj", None)),
+            move |_| {
+                if d.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Box::pin(std::future::pending())
+                } else {
+                    Box::pin(async { Ok(Fake(Arc::new(AtomicUsize::new(0)))) })
+                }
+            },
+            async |tx, _| {
+                settle().await;
+                tx.send(StripMsg::Pause(true)).unwrap_or_default();
+                settle().await;
+                assert_eq!(
+                    dials.load(Ordering::SeqCst),
+                    1,
+                    "no second dial while paused"
+                );
+                tx.send(StripMsg::Pause(false)).unwrap_or_default();
+                settle().await;
+            },
+        );
+        assert!(matches!(r.last(), Some(StripStatus::Connected { .. })));
+    }
+
+    struct FakeLink {
+        hint_ok: bool,
+        /// Addresses whose device rejects the key.
+        reject: Vec<Ipv4Addr>,
+        found: Result<Ipv4Addr, ()>,
+        dials: Mutex<Vec<Ipv4Addr>>,
+    }
+
+    impl FakeLink {
+        fn new(hint_ok: bool, reject: &[Ipv4Addr], found: Result<Ipv4Addr, ()>) -> Self {
+            Self {
+                hint_ok,
+                reject: reject.to_vec(),
+                found,
+                dials: Mutex::default(),
+            }
+        }
+    }
+
+    impl Link for FakeLink {
+        type Conn = Ipv4Addr;
+
+        fn hint(&self, _: Ipv4Addr) -> impl Future<Output = bool> + Send {
+            std::future::ready(self.hint_ok)
+        }
+
+        fn find(&self, _: &str) -> impl Future<Output = Result<Found, StripError>> + Send {
+            std::future::ready(
+                self.found
+                    .map(|ip| Found {
+                        ip,
+                        version: Version::Auto,
+                    })
+                    .map_err(|()| StripError::NotFound),
+            )
+        }
+
+        fn dial(
+            &self,
+            _: &StripConfig,
+            ip: Ipv4Addr,
+            _: Option<Version>,
+        ) -> impl Future<Output = Result<Ipv4Addr, StripError>> + Send {
+            self.dials
+                .lock()
+                .map(|mut d| d.push(ip))
+                .unwrap_or_default();
+            std::future::ready(if self.reject.contains(&ip) {
+                Err(StripError::Auth)
+            } else {
+                Ok(ip)
+            })
+        }
+    }
+
+    const STALE: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 77);
+
+    #[test]
+    fn stale_last_ip_falls_back_to_discovery() {
+        // Another Tuya device answers on the saved address and refuses our key.
+        let link = FakeLink::new(true, &[STALE], Ok(STRIP));
+        let r = paused(connect_in(&link, &cfg("dj", Some(STALE))));
+        assert_eq!(r.ok(), Some(STRIP));
+        assert_eq!(*link.dials.lock().unwrap(), [STALE, STRIP]);
+    }
+
+    #[test]
+    fn only_the_device_found_by_id_can_fail_the_key() {
+        let link = FakeLink::new(true, &[STALE, STRIP], Ok(STRIP));
+        let r = paused(connect_in(&link, &cfg("dj", Some(STALE))));
+        assert!(matches!(r, Err(StripError::Auth)));
+        assert_eq!(*link.dials.lock().unwrap(), [STALE, STRIP]);
+        // A rejected key on the saved address alone, with the strip not announcing: not found.
+        let link = FakeLink::new(true, &[STALE], Err(()));
+        let r = paused(connect_in(&link, &cfg("dj", Some(STALE))));
+        assert!(matches!(r, Err(StripError::NotFound)));
+    }
+
+    #[test]
+    fn unreachable_or_missing_hint_goes_straight_to_discovery() {
+        let link = FakeLink::new(false, &[], Ok(STRIP));
+        assert_eq!(
+            paused(connect_in(&link, &cfg("dj", Some(STALE)))).ok(),
+            Some(STRIP)
+        );
+        assert_eq!(*link.dials.lock().unwrap(), [STRIP]);
+        let link = FakeLink::new(true, &[], Ok(STRIP));
+        assert_eq!(
+            paused(connect_in(&link, &cfg("dj", None))).ok(),
+            Some(STRIP)
+        );
+        assert_eq!(*link.dials.lock().unwrap(), [STRIP]);
+    }
+
+    #[test]
+    fn a_good_saved_address_is_used_without_discovery() {
+        let link = FakeLink::new(true, &[], Err(()));
+        assert_eq!(
+            paused(connect_in(&link, &cfg("dj", Some(STALE)))).ok(),
+            Some(STALE)
+        );
     }
 }

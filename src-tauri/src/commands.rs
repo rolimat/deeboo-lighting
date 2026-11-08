@@ -7,17 +7,30 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use light_core::detect::Moment;
 use light_core::engine::UiCommand;
 use serde::{Deserialize, Serialize};
+use tauri::{Emitter, Manager};
 
 use crate::runtime::{Input, RuntimeHandle};
+
 use crate::settings::{self, Settings};
+use crate::wizard::session::{Emit, RealLan, Wizard};
+
+/// The most the app waits at exit for the wizard to revoke its cloud session.
+const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StripStatus {
     NotConfigured,
     Connecting,
-    Connected { name: String, segments: u8 },
+    Connected {
+        name: String,
+        segments: u8,
+    },
     Error,
+    /// The strip refused the saved key (re-added in Smart Life): pair again.
+    KeyInvalid,
+    /// Discovery did not see the strip's ID.
+    NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -131,6 +144,7 @@ pub struct AppState {
     runtime: Mutex<Option<RuntimeHandle>>,
     /// Read by the engine thread: status goes out only while this is true.
     visible: Arc<AtomicBool>,
+    wizard: Wizard,
 }
 
 impl Default for AppState {
@@ -141,6 +155,7 @@ impl Default for AppState {
             settings_path: Mutex::new(None),
             runtime: Mutex::new(None),
             visible: Arc::new(AtomicBool::new(false)),
+            wizard: Wizard::default(),
         }
     }
 }
@@ -195,6 +210,21 @@ impl AppState {
         })
     }
 
+    /// Tells the engine to pause or resume its strip connection. A pause that got lost would leave
+    /// the strip offline, so a full queue hands it to a short-lived thread, like `report_strip`.
+    fn send_strip_pause(&self, pause: bool) {
+        let Some(tx) = lock(&self.runtime).as_ref().map(|h| h.tx.clone()) else {
+            return;
+        };
+        if let Err(TrySendError::Full(input)) = tx.try_send(Input::StripPause(pause)) {
+            let _ = std::thread::Builder::new()
+                .name("strip-pause".into())
+                .spawn(move || {
+                    let _ = tx.send(input);
+                });
+        }
+    }
+
     /// Called by the tray when the popover shows or hides.
     pub fn set_popover_visible(&self, visible: bool) {
         self.visible.store(visible, Ordering::Relaxed);
@@ -203,7 +233,21 @@ impl AppState {
         }
     }
 
-    pub fn quit(&self) {
+    /// `strip.json` next to the settings file.
+    fn strip_path(&self) -> Result<std::path::PathBuf, String> {
+        let path = lock(&self.settings_path).clone();
+        path.and_then(|p| p.parent().map(|d| d.join("strip.json")))
+            .ok_or_else(|| "settings unavailable".to_string())
+    }
+
+    /// Editor window closed: revoke and forget whatever the wizard holds.
+    pub fn editor_closed(&self, emit: &Emit) {
+        self.wizard.cancel(emit);
+    }
+
+    /// App exit: a running wizard is cancelled (its cloud session revoked) before the engine stops.
+    pub fn quit(&self, emit: &Emit) {
+        self.wizard.shutdown(emit, QUIT_WAIT);
         let _ = self.send(Input::Quit);
     }
 }
@@ -257,6 +301,76 @@ pub fn ui_command(state: tauri::State<'_, AppState>, cmd: UiCommandDto) -> Resul
     state.send(Input::Ui(cmd.into()))
 }
 
+/// Pushes wizard states to the editor window only.
+pub fn wizard_emit(app: &tauri::AppHandle) -> Emit {
+    let app = app.clone();
+    Arc::new(move |state| {
+        if let Err(e) = app.emit_to("editor", "wizard", &state) {
+            log::debug!("wizard event not delivered: {e}");
+        }
+    })
+}
+
+/// The User Code is validated here (`UserCode::parse`) and never logged or echoed.
+#[tauri::command]
+pub async fn wizard_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    user_code: String,
+) -> Result<(), String> {
+    let code = tuya_cloud::UserCode::parse(&user_code).map_err(|_| {
+        "Enter the User Code from Smart Life (letters and digits only).".to_string()
+    })?;
+    let handle = app.clone();
+    let pause: Arc<dyn Fn(bool) + Send + Sync> =
+        Arc::new(move |p| handle.state::<AppState>().send_strip_pause(p));
+    state.wizard.start(
+        Arc::new(RealLan(pause)),
+        Arc::new(tuya_cloud::UreqTransport::new()),
+        code,
+        wizard_emit(&app),
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri deserialises owned arguments
+pub fn wizard_choose(state: tauri::State<'_, AppState>, device_id: String) -> Result<(), String> {
+    state.wizard.choose(&device_id)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
+pub fn wizard_retry(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+    state.wizard.retry(&wizard_emit(&app));
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
+pub fn wizard_cancel(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+    state.wizard.cancel(&wizard_emit(&app));
+}
+
+/// `segment` is 1-based and checked against the strip's segment count.
+#[tauri::command]
+pub async fn strip_identify(state: tauri::State<'_, AppState>, segment: u8) -> Result<(), String> {
+    state.wizard.identify(segment).await
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
+pub fn wizard_save(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    // `Saved` goes out only once the engine has the new strip; if it cannot take the news now, the
+    // file is safe on disk and a restart still picks it up.
+    state
+        .wizard
+        .save(&state.strip_path()?, &wizard_emit(&app), |cfg| {
+            state.send(Input::StripChanged(cfg)).map_err(|e| {
+                log::warn!("strip saved but not reloaded: {e}");
+                "Saved. Restart the app to use the new strip.".to_string()
+            })
+        })
+}
+
 /// The settings view's Quit button; `RunEvent::Exit` then stops the engine.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
@@ -300,20 +414,27 @@ mod tests {
             .step_by(2)
             .map(|c| format!("allow-{}", c.replace('_', "-")))
             .collect();
-        // The popover capability grants exactly those commands (plus event listening).
-        let cap: serde_json::Value =
-            serde_json::from_str(include_str!("../capabilities/popover.json")).unwrap_or_default();
-        let mut granted: Vec<String> = cap["permissions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v.as_str())
-            .filter(|p| p.starts_with("allow-"))
-            .map(String::from)
-            .collect();
-        commands.sort();
+        // The popover and editor capabilities together grant exactly those commands.
+        let mut granted: Vec<String> = Vec::new();
+        for cap in [
+            include_str!("../capabilities/popover.json"),
+            include_str!("../capabilities/editor.json"),
+        ] {
+            let cap: serde_json::Value = serde_json::from_str(cap).unwrap_or_default();
+            granted.extend(
+                cap["permissions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str())
+                    .filter(|p| p.starts_with("allow-"))
+                    .map(String::from),
+            );
+        }
         granted.sort();
-        assert_eq!(commands.len(), 7);
+        granted.dedup();
+        commands.sort();
+        assert_eq!(commands.len(), 14);
         assert_eq!(granted, commands);
     }
 

@@ -18,7 +18,7 @@ just ship        # push and wait for the CI run of this exact commit
 
 # Architecture
 
-- macOS menu bar app: Tauri 2 + Rust; syncs Tuya LED strips to MIDI clock. UI in TypeScript + Vite, plain CSS.
+- macOS menu bar app: Tauri 2 + Rust; syncs Tuya LED strips to MIDI clock. UI in TypeScript + Vite: popover plain CSS, editor Preact + Tailwind.
 - `crates/light-core/`: pure, deterministic, no I/O, simulated time. Clock to beat/bar/phrase, moment state
   machine, model (sequences, palettes, sets), generator, scene diff to commands, scheduler with spacing/drops,
   DP 61 encoding, moment classifier from per-beat audio features.

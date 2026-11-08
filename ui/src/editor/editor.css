@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #1c1d24;
+  --color-card: #262833;
+  --color-border: #33364a;
+  --color-text: #eee;
+  --color-dim: #8a8da0;
+  --color-green: #2fb36b;
+  --color-red: #e5484d;
+  --radius-card: 12px;
+}
+
+body {
+  @apply bg-bg text-text;
+}

@@ -1,6 +1,6 @@
 use tauri_build::{AppManifest, Attributes};
 
-/// Every command the popover may call; the capability lists exactly these (see `commands` tests).
+/// Every command the app exposes; the popover and editor capabilities together list exactly these (see `commands` tests).
 const COMMANDS: &[&str] = &[
     "get_status",
     "get_settings",
@@ -9,6 +9,13 @@ const COMMANDS: &[&str] = &[
     "list_audio_inputs",
     "ui_command",
     "quit",
+    "open_editor",
+    "wizard_start",
+    "wizard_choose",
+    "wizard_retry",
+    "wizard_cancel",
+    "strip_identify",
+    "wizard_save",
 ];
 
 fn main() {

@@ -6,19 +6,33 @@ mod audio;
 mod clock;
 mod commands;
 mod devices;
+mod editor_window;
 mod lan;
 mod midi;
+mod qr;
 mod runtime;
 mod settings;
 mod strip;
+mod strip_store;
 mod tray;
+
+mod wizard;
+
+/// Env-driven logger; the network stacks stay at `warn` even with `RUST_LOG=trace`, so
+/// cloud request details can never reach the log.
+fn logger() -> env_logger::Builder {
+    let mut b = env_logger::Builder::from_default_env();
+    b.filter_module("ureq", log::LevelFilter::Warn)
+        .filter_module("rustls", log::LevelFilter::Warn);
+    b
+}
 
 /// Starts the tray app.
 ///
 /// # Errors
 /// Returns the Tauri error if the runtime fails to start.
 pub fn run() -> tauri::Result<()> {
-    env_logger::init();
+    logger().init();
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
         .manage(commands::AppState::default())
@@ -29,8 +43,23 @@ pub fn run() -> tauri::Result<()> {
             commands::list_midi_sources,
             commands::list_audio_inputs,
             commands::ui_command,
-            commands::quit
+            commands::quit,
+            editor_window::open_editor,
+            commands::wizard_start,
+            commands::wizard_choose,
+            commands::wizard_retry,
+            commands::wizard_cancel,
+            commands::strip_identify,
+            commands::wizard_save
         ])
+        .on_window_event(|window, event| {
+            // Closing the editor mid-wizard must revoke the cloud session and drop the key.
+            if window.label() == "editor" && matches!(event, tauri::WindowEvent::Destroyed) {
+                let app = window.app_handle();
+                app.state::<commands::AppState>()
+                    .editor_closed(&commands::wizard_emit(app));
+            }
+        })
         .setup(|app| {
             tray::setup(app)?;
             let dir = app.path().app_config_dir()?;
@@ -43,8 +72,33 @@ pub fn run() -> tauri::Result<()> {
         .build(tauri::generate_context!())?
         .run(|app, event| {
             if let RunEvent::Exit = event {
-                app.state::<commands::AppState>().quit();
+                app.state::<commands::AppState>()
+                    .quit(&commands::wizard_emit(app));
             }
         });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use log::{Level, Record};
+
+    fn allowed(target: &str, level: Level) -> bool {
+        let log = super::logger().build();
+        log.matches(&Record::builder().target(target).level(level).build())
+    }
+
+    #[test]
+    fn log_filter_caps_ureq_and_rustls() {
+        for t in [
+            "ureq",
+            "ureq::unversioned::transport",
+            "rustls",
+            "rustls::client",
+        ] {
+            assert!(!allowed(t, Level::Info), "{t} info");
+            assert!(!allowed(t, Level::Debug), "{t} debug");
+            assert!(allowed(t, Level::Warn), "{t} warn");
+        }
+    }
 }

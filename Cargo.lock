@@ -964,6 +964,8 @@ dependencies = [
  "light-core",
  "log",
  "midir",
+ "proptest",
+ "qrcode",
  "rtrb",
  "rustuya",
  "secrecy",
@@ -974,6 +976,7 @@ dependencies = [
  "tauri-plugin-positioner",
  "tempfile",
  "tokio",
+ "tuya-cloud",
 ]
 
 [[package]]

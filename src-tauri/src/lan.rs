@@ -16,6 +16,20 @@ pub fn is_allowed_lan_ip(ip: Ipv4Addr, iface: Ipv4Addr, prefix_len: u8) -> bool 
     ip & mask == iface & mask && (prefix_len > 30 || (ip & !mask != 0 && ip | mask != u32::MAX))
 }
 
+/// Whether `ip` is allowed on any of the Mac's own IPv4 interfaces.
+pub fn on_local_subnet(ip: Ipv4Addr) -> bool {
+    if_addrs::get_if_addrs().is_ok_and(|ifaces| {
+        ifaces.iter().any(|i| match &i.addr {
+            if_addrs::IfAddr::V4(a) => is_allowed_lan_ip(
+                ip,
+                a.ip,
+                u8::try_from(u32::from(a.netmask).leading_ones()).unwrap_or(0),
+            ),
+            if_addrs::IfAddr::V6(_) => false,
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

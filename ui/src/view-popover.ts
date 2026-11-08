@@ -1,25 +1,12 @@
 import { api, type MomentName, type Status } from "./api";
 import { el, glyphButton } from "./dom";
-import { mountSettings, queueSave } from "./view-settings";
+import { mountSettings, queueSave, stripText } from "./view-settings";
 
 const MOMENTS: [MomentName, string][] = [
   ["rhythm", "Rhythm"],
   ["calm", "Calm"],
   ["buildUp", "Build-up"],
 ];
-
-function stripText(strip: Status["strip"]): string {
-  switch (strip.kind) {
-    case "notConfigured":
-      return "not connected";
-    case "connecting":
-      return "connecting…";
-    case "connected":
-      return `${strip.name} (${strip.segments} segments)`;
-    case "error":
-      return "connection error";
-  }
-}
 
 /** Writes only on change, so text under the pointer is never rewritten. */
 function setText(n: HTMLElement, t: string): void {
@@ -114,6 +101,11 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
   // Status
   const midi = statusRow("midi");
   const strip = statusRow("strip");
+  const reconnect = el("button", "row-action", "Reconnect…");
+  reconnect.setAttribute("aria-label", "Reconnect strip");
+  reconnect.hidden = true;
+  reconnect.onclick = () => void run(api.openEditor("strip"));
+  strip.row.append(reconnect);
   const audio = statusRow("audio");
   const levelFill = el("span", "level-fill");
   const level = el("span", "level");
@@ -125,6 +117,7 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
   const main = el("div", "view-main");
   main.append(tempo, lights, moment, brightness, statusCard);
 
+  let stripStatus: Status["strip"] = { kind: "notConfigured" };
   const settings = mountSettings(() => {
     settings.node.hidden = true;
     main.hidden = false;
@@ -133,7 +126,7 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
   gear.onclick = () => {
     main.hidden = true;
     settings.node.hidden = false;
-    settings.open();
+    settings.open(stripStatus);
   };
 
   root.replaceChildren(header, main, settings.node, error);
@@ -157,10 +150,13 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
       setText(midi.label, `MIDI · ${s.midi.source ?? "Deeboo Lighting In"}`);
       dot(midi.dot, s.midi.ok ? "ok" : "bad");
       setText(strip.label, `Strip · ${stripText(s.strip)}`);
+      stripStatus = s.strip;
+      const k = s.strip.kind;
       dot(
         strip.dot,
-        s.strip.kind === "connected" ? "ok" : s.strip.kind === "error" ? "bad" : "off",
+        k === "connected" ? "ok" : k === "notConfigured" || k === "connecting" ? "off" : "bad",
       );
+      reconnect.hidden = k !== "keyInvalid" && k !== "notFound";
       const a = s.audio;
       setText(audio.label, `Audio · ${a.ok ? (a.device ?? "on") : a.device ? "no access" : "off"}`);
       dot(audio.dot, a.ok ? "ok" : a.device ? "bad" : "off");

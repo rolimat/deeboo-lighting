@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-strip-identify"
+description = "Enables the strip_identify command without any pre-configured scope."
+commands.allow = ["strip_identify"]
+
+[[permission]]
+identifier = "deny-strip-identify"
+description = "Denies the strip_identify command without any pre-configured scope."
+commands.deny = ["strip_identify"]

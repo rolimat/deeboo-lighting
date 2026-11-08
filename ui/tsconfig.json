@@ -5,6 +5,8 @@
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "noEmit": true,
