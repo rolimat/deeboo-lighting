@@ -56,6 +56,8 @@ pub struct Engine {
     playing: Option<Playing>,
     pos: Option<Position>,
     last_beat_us: Option<u64>,
+    /// The strip may not show the current step: plan it again on the next pulse.
+    resend: bool,
 }
 
 impl Engine {
@@ -70,6 +72,7 @@ impl Engine {
             playing: None,
             pos: None,
             last_beat_us: None,
+            resend: false,
         }
     }
 
@@ -103,6 +106,7 @@ impl Engine {
             }
             UiCommand::Lights(true) => {
                 self.cfg.lights_on = true;
+                self.resend = true;
                 if !self.clock.running() {
                     self.plan_rest(now_us);
                 }
@@ -144,69 +148,71 @@ impl Engine {
 
     pub fn strip_reconnected(&mut self) {
         self.sched.forget_sent();
+        self.resend = true;
     }
 
+    /// Plans the scene for the position after `pos`, shown half a pulse-pair later. A moment change
+    /// decided now reaches the strip from the next beat: the beat pulse plans its own second half
+    /// with the moment already shown, the half pulse plans the next beat with the new one.
     fn pulse(&mut self, at: u64, pos: Position, detect: impl FnOnce() -> Option<Moment>) {
         self.pos = Some(pos);
+        let shown = self.control.applied();
+        if !pos.half {
+            self.last_beat_us = Some(at);
+            let next_beat = self.clock.position_after(self.clock.position_after(pos));
+            self.control.next(next_beat, self.cfg.phrase, detect());
+        }
         let moment = if pos.half {
             self.control.applied()
         } else {
-            self.last_beat_us = Some(at);
-            // The control decides for the next beat; Build-up and the drop apply from a bar start.
-            let next_beat = self.clock.position_after(self.clock.position_after(pos));
-            let decided = self.control.next(next_beat, self.cfg.phrase, detect());
-            let shown = self.playing.map_or(decided, |p| p.moment);
-            let build_change =
-                decided != shown && (decided == Moment::BuildUp || shown == Moment::BuildUp);
-            // Hold the old moment until the half pulse right before that bar start.
-            if build_change && next_beat.is_bar_start() {
-                shown
-            } else {
-                decided
-            }
+            shown
         };
-        let sequence = builtin::sequence(moment, self.cfg.segments);
-        let restart =
-            (pos.beat == 0 && !pos.half) || self.playing.is_none_or(|p| p.moment != moment);
-        let idx = match self.playing {
-            Some(p) if !restart => {
-                if p.left > 1 {
-                    self.playing = Some(Playing {
-                        left: p.left - 1,
-                        ..p
-                    });
-                    p.idx
-                } else {
-                    let next = (p.idx + 1) % sequence.steps.len().max(1);
-                    let left = sequence.steps.get(next).map_or(1, |s| s.len.half_beats());
-                    self.playing = Some(Playing {
-                        moment,
-                        idx: next,
-                        left,
-                    });
-                    next
-                }
-            }
-            _ => {
-                let left = sequence.steps.first().map_or(1, |s| s.len.half_beats());
-                self.playing = Some(Playing {
-                    moment,
-                    idx: 0,
-                    left,
-                });
-                0
-            }
+        let start = pos.beat == 0 && !pos.half;
+        // Beat 1 cannot be announced: its step goes out now and the next position is counted too.
+        // shortcut: a half-beat first step is skipped on Start; only a forced Build-up has one.
+        let first = start.then(|| self.step_scene(moment, true));
+        let (desired, changed) = self.step_scene(moment, false);
+        let ((desired, changed), show_at) = match first {
+            Some(d0) => (d0, at),
+            None => (
+                (desired, changed),
+                at.saturating_add(self.clock.half_period_us().unwrap_or(0)),
+            ),
         };
+        // A step that goes on keeps its pending messages: re-planning would push them back.
         if !self.cfg.lights_on {
             return;
         }
-        let Some(step) = sequence.steps.get(idx) else {
-            return;
+        let resend = std::mem::take(&mut self.resend);
+        if let Some(desired) = desired.filter(|_| changed || resend) {
+            self.sched.plan(at, show_at, self.cfg.lead_us, &desired);
+        }
+    }
+
+    /// Counts one half beat of the sequence for `moment`: that step's scene, and whether it is new.
+    fn step_scene(&mut self, moment: Moment, restart: bool) -> (Option<Vec<Colour>>, bool) {
+        let sequence = builtin::sequence(moment, self.cfg.segments);
+        let first_len = |idx: usize| sequence.steps.get(idx).map_or(1, |s| s.len.half_beats());
+        let (idx, left) = match self.playing {
+            Some(p) if !restart && p.moment == moment => {
+                if p.left > 1 {
+                    (p.idx, p.left - 1)
+                } else {
+                    let next = (p.idx + 1) % sequence.steps.len().max(1);
+                    (next, first_len(next))
+                }
+            }
+            _ => (0, first_len(0)),
         };
-        let desired = self.scene(step.roles.iter().copied());
-        let half = self.clock.half_period_us().unwrap_or(0);
-        self.sched
-            .plan(at, at.saturating_add(half), self.cfg.lead_us, &desired);
+        let changed = self
+            .playing
+            .is_none_or(|p| p.moment != moment || p.idx != idx || restart);
+        self.playing = Some(Playing { moment, idx, left });
+        let scene = sequence
+            .steps
+            .get(idx)
+            .map(|step| self.scene(step.roles.iter().copied()));
+        (scene, changed)
     }
 
     fn stopped(&mut self, now: u64) {

@@ -112,11 +112,53 @@ fn rhythm_steps_are_sent_lead_before_each_beat() {
     let mut s = sim125();
     s.start();
     s.beats_of(3, &mut none);
-    // Beat 1 pulse at T0+480ms plans the step shown at T0+720ms; first message goes LEAD before.
-    let at = T0 + 480_000 + 240_000 - LEAD;
-    assert!(s.sends.iter().any(|(t, _)| *t == at), "{:?}", s.sends);
-    let at2 = T0 + 960_000 + 240_000 - LEAD;
-    assert!(s.sends.iter().any(|(t, _)| *t == at2), "{:?}", s.sends);
+    // Step 1 is shown on beat 1 (second beat) and step 0 again on beat 2: first message LEAD before.
+    for beat in [1, 2] {
+        let at = T0 + beat * 480_000 - LEAD;
+        assert!(
+            s.sends.iter().any(|(t, _)| *t == at),
+            "{beat} {:?}",
+            s.sends
+        );
+    }
+}
+
+#[test]
+fn steps_land_on_beats_after_start_and_after_a_drop() {
+    let mut s = sim125();
+    s.start();
+    // Step 1 is on the Start beat itself.
+    s.beats_of(14, &mut |beat| match beat {
+        4..=9 => Some(Calm),
+        _ => Some(Rhythm),
+    });
+    assert_eq!(s.sends.first().map(|(t, _)| *t), Some(T0));
+    // Calm decided at beat 4 starts on beat 5; Rhythm decided at beat 10 starts on beat 11.
+    // Its colour goes out within a message or two of the lead before the beat (never half a beat early/late).
+    let first_with = |pred: fn(&PaintCommand) -> bool| {
+        let from = T0 + 4 * 480_000;
+        s.sends_in(from, u64::MAX)
+            .into_iter()
+            .find(|(_, c)| pred(c))
+    };
+    let suave =
+        |c: &PaintCommand| matches!(c, PaintCommand::Pencil { color, .. } if color.s == 350);
+    let t = first_with(suave).map(|(t, _)| t).unwrap();
+    assert!(
+        (T0 + 5 * 480_000 - LEAD..T0 + 5 * 480_000 + 250_000).contains(&t),
+        "{t}"
+    );
+    let red = |c: &PaintCommand| matches!(c, PaintCommand::Pencil { color, .. } if color.h == 0 && color.s == 1000);
+    let t = s
+        .sends_in(T0 + 10 * 480_000, u64::MAX)
+        .into_iter()
+        .find(|(_, c)| red(c))
+        .map(|(t, _)| t)
+        .unwrap();
+    assert!(
+        (T0 + 11 * 480_000 - LEAD..T0 + 11 * 480_000 + 250_000).contains(&t),
+        "{t}"
+    );
 }
 
 #[test]
@@ -139,6 +181,7 @@ fn lights_off_erases_and_stays_dark() {
     let mut s = sim125();
     s.start();
     s.beats_of(2, &mut none);
+    s.ticks(12, &mut none); // let step 0 finish going out
     let off_at = s.now;
     s.cmd(UiCommand::Lights(false));
     s.beats_of(4, &mut none);
@@ -253,9 +296,13 @@ fn start_mid_play_restarts_sequence_at_beat_one() {
     assert_eq!(s.e.status().pos.map(|p| p.beat), Some(0));
     s.ticks(7, &mut none);
     let first = s.sends_in(pulse, pulse + 480_000);
+    // Step 1 goes out on the Start pulse itself.
+    assert_eq!(first[0].0, pulse, "{first:?}");
     assert!(
-        matches!(&first[0].1, PaintCommand::Pencil { color, segments }
-        if color.h == 0 && segments == &[1, 2]),
+        first.iter().any(
+            |(_, c)| matches!(c, PaintCommand::Pencil { color, segments }
+            if color.h == 0 && segments == &[1, 2])
+        ),
         "{first:?}"
     );
 }
@@ -351,12 +398,10 @@ fn strip_reconnected_resends_the_full_scene() {
     let from = s.now;
     s.e.strip_reconnected();
     s.ticks(22, &mut none);
-    // Rhythm step 0 (principal, principal, dark, dark), rebuilt on a strip in an unknown state.
+    // Rhythm step 1 (dark, dark, white, white), the next beat's, rebuilt on a strip in an unknown state.
     let got = apply_all(&s.sends_in(from, u64::MAX), vec![hsv(77, 77, 77); 4]);
-    assert_eq!(
-        got,
-        vec![hsv(0, 1000, 1000), hsv(0, 1000, 1000), None, None]
-    );
+    let white = hsv(0, 0, 1000);
+    assert_eq!(got, vec![None, None, white, white]);
 }
 
 #[test]
@@ -368,7 +413,7 @@ fn brightness_applies_from_the_next_step() {
     let at = s.now;
     s.cmd(UiCommand::Brightness(50));
     assert_eq!(s.sends_in(at, at + 1).len(), 0);
-    s.ticks(70, &mut none);
+    s.ticks(84, &mut none);
     let state = apply_all(&s.sends, vec![None; 4]);
     let white = hsv(0, 0, 500);
     assert!(
@@ -408,22 +453,14 @@ fn lead_ms_changes_send_times() {
     s.cmd(UiCommand::LeadMs(300));
     s.start();
     s.beats_of(2, &mut none);
-    // Beat pulse 2 (half-pulse index 2) plans the step for T0 + 2250 ms.
-    assert!(
-        s.sends
-            .iter()
-            .any(|(t, _)| *t == T0 + 1_500_000 + 750_000 - 300_000)
-    );
+    // The half pulse before beat 1 plans its step, sent one lead before T0 + 1500 ms.
+    assert!(s.sends.iter().any(|(t, _)| *t == T0 + 1_500_000 - 300_000));
 
     let mut c = Sim::new(62_500);
     c.cmd(UiCommand::LeadMs(900));
     c.start();
     c.beats_of(2, &mut none);
-    // Clamped to 500 ms: not sent at the pulse itself.
-    assert!(c.sends.iter().all(|(t, _)| *t != T0 + 1_500_000));
-    assert!(
-        c.sends
-            .iter()
-            .any(|(t, _)| *t == T0 + 1_500_000 + 750_000 - 500_000)
-    );
+    // Clamped to 500 ms: not sent at the planning pulse (T0 + 750 ms), but 500 ms before the beat.
+    assert!(c.sends.iter().all(|(t, _)| *t != T0 + 750_000));
+    assert!(c.sends.iter().any(|(t, _)| *t == T0 + 1_500_000 - 500_000));
 }
