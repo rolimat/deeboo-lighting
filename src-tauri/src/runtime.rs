@@ -2,7 +2,7 @@
 //! engine's next deadline, never on a timer of its own (spec §6.1, §13).
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::time::Duration;
 
 use light_core::clock::PhraseBars;
@@ -542,6 +542,19 @@ fn run<M: MidiPort, A: AudioPort, E: FnMut(&Status)>(
     }
 }
 
+/// Called from the strip task (inside Tokio): it must never block on the engine's queue.
+fn report_strip(tx: &SyncSender<Input>, s: StripStatus) {
+    // A state change is rare and must not be lost: a full queue hands it to a short-lived thread.
+    if let Err(TrySendError::Full(input)) = tx.try_send(Input::StripState(s)) {
+        let tx = tx.clone();
+        let _ = std::thread::Builder::new()
+            .name("strip-report".into())
+            .spawn(move || {
+                let _ = tx.send(input);
+            });
+    }
+}
+
 pub struct RuntimeHandle {
     pub tx: SyncSender<Input>,
 }
@@ -554,10 +567,7 @@ pub fn spawn(app: AppHandle, settings: Settings, strip: Option<StripConfig>) -> 
     let strip_tx = strip.map(|cfg| {
         let (stx, srx) = unbounded_channel();
         let engine_tx = tx.clone();
-        strip::spawn(cfg, srx, move |s| {
-            // Rare and small: a blocking send is fine here and never loses a state change.
-            let _ = engine_tx.send(Input::StripState(s));
-        });
+        strip::spawn(cfg, srx, move |s| report_strip(&engine_tx, s));
         stx
     });
     let midi_tx = tx.clone();
@@ -834,6 +844,28 @@ mod tests {
             c.handle(Input::Ui(UiCommand::Brightness(50)), ms * 1_000);
         }
         assert!(!c.status().playing, "500 ms without clock must stop it");
+    }
+
+    #[test]
+    fn full_queue_does_not_block_the_strip_report() {
+        let (tx, rx) = sync_channel(1);
+        tx.send(Input::PopoverShown).unwrap();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let t = tx.clone();
+        std::thread::spawn(move || {
+            report_strip(&t, StripStatus::Error);
+            let _ = done_tx.send(());
+        });
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(500)).is_ok(),
+            "report_strip blocked on a full queue"
+        );
+        // The state change is not lost: it arrives once the engine drains.
+        assert!(matches!(rx.recv(), Ok(Input::PopoverShown)));
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_millis(500)),
+            Ok(Input::StripState(StripStatus::Error))
+        ));
     }
 
     #[test]
