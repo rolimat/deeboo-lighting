@@ -257,7 +257,12 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     watching: bool,
     meter_sink: Option<MeterSink>,
     meter_last_us: Option<u64>,
+    /// Told the strip state on every change, popover visible or not (the editor reads it).
+    strip_sink: Option<StripSink>,
+    strip_told: Option<StripStatus>,
 }
+
+type StripSink = Box<dyn FnMut(&StripStatus)>;
 
 /// Paints the menu bar: called with the previous and the new view, only when they differ.
 type TraySink = Box<dyn FnMut(Option<&TrayView>, &TrayView)>;
@@ -313,6 +318,8 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             watching: false,
             meter_sink: None,
             meter_last_us: None,
+            strip_sink: None,
+            strip_told: None,
         };
         core.replan(now_us);
         core
@@ -403,6 +410,20 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     pub fn set_tray(&mut self, sink: TraySink, now_us: u64) {
         self.tray = Some(TrayLink { sink, shown: None });
         self.update_tray(now_us);
+    }
+
+    pub fn set_strip_sink(&mut self, sink: StripSink) {
+        self.strip_sink = Some(sink);
+        self.tell_strip();
+    }
+
+    fn tell_strip(&mut self) {
+        if let Some(sink) = &mut self.strip_sink
+            && self.strip_told.as_ref() != Some(&self.strip)
+        {
+            sink(&self.strip);
+            self.strip_told = Some(self.strip.clone());
+        }
     }
 
     pub fn set_meters(&mut self, sink: MeterSink) {
@@ -676,6 +697,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             self.last = now;
             self.publisher.touch();
         }
+        self.tell_strip();
         self.sync_capture();
         self.update_tray(now_us);
         if self.publisher.due(now_us) {
@@ -775,6 +797,10 @@ pub fn spawn(
                 emit,
                 clock.now_us(),
             );
+            let strip_app = app.clone();
+            core.set_strip_sink(Box::new(move |s| {
+                strip_app.state::<AppState>().set_strip(s.clone());
+            }));
             let meter_app = app.clone();
             core.set_meters(Box::new(move |e| {
                 if let Err(ee) = meter_app.emit_to("editor", DETECTOR_EVENT, e) {
@@ -892,6 +918,22 @@ mod tests {
             name: "dj".into(),
             segments: 10,
         }
+    }
+
+    #[test]
+    fn strip_changes_reach_the_sink_even_while_the_popover_is_hidden() {
+        let (mut c, _rx, _) = core(true);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let s = Rc::clone(&seen);
+        c.set_visible(false);
+        c.set_strip_sink(Box::new(move |st| s.borrow_mut().push(st.clone())));
+        c.handle(Input::StripState(connected()), 1_000);
+        c.handle(Input::StripState(connected()), 2_000);
+        c.handle(Input::StripState(StripStatus::Error), 3_000);
+        assert_eq!(
+            *seen.borrow(),
+            [StripStatus::Connecting, connected(), StripStatus::Error]
+        );
     }
 
     #[test]

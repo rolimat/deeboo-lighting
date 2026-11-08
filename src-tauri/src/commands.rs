@@ -230,12 +230,14 @@ impl AppState {
         lock(&self.library).clone()
     }
 
-    /// Steps the active set or palette by one, wrapping, and saves it like an editor save.
+    /// Steps the active set or palette by one, wrapping, and saves it like an editor save. One lock
+    /// from read to save: a concurrent editor save cannot be overwritten with a stale copy.
     pub fn select(&self, pick: Pick, delta: i8) -> Result<Selection, String> {
         if delta != 1 && delta != -1 {
             return Err("delta must be -1 or 1".into());
         }
-        let mut lib = self.library();
+        let mut current = lock(&self.library);
+        let mut lib = current.clone();
         let step = |ids: Vec<u32>, cur: Option<u32>| -> Option<u32> {
             let at = cur
                 .and_then(|c| ids.iter().position(|i| *i == c))
@@ -258,18 +260,26 @@ impl AppState {
                 lib.active_palette = step(ids, lib.current_palette_id());
             }
         }
-        self.save_library(lib).map(|l| Selection::of(&l))
+        self.save_into(&mut current, lib).map(|l| Selection::of(&l))
     }
 
     /// Validates, assigns ids to new entries, persists, then swaps. Any failure keeps the previous
     /// library on disk and in memory; messages never echo the input.
-    fn save_library(&self, mut new: Library) -> Result<Library, String> {
+    fn save_library(&self, new: Library) -> Result<Library, String> {
+        let mut current = lock(&self.library);
+        self.save_into(&mut current, new)
+    }
+
+    fn save_into(&self, current: &mut Library, mut new: Library) -> Result<Library, String> {
         let path = lock(&self.library_path)
             .clone()
             .ok_or("library unavailable")?;
+        // A re-paired strip with another segment count: the sequences follow the new shape.
+        if new.segments() != current.segments() {
+            new.resize_segments(new.segments());
+        }
         new.validate().map_err(|e| e.to_string())?;
-        let mut current = lock(&self.library);
-        library_store::assign_ids(&current, &mut new).map_err(str::to_string)?;
+        library_store::assign_ids(current, &mut new).map_err(str::to_string)?;
         library_store::save(&path, &new).map_err(|e| {
             log::warn!("library not saved: {e}");
             "library not saved".to_string()
@@ -307,6 +317,12 @@ impl AppState {
         *lock(&self.status) = s;
     }
 
+    /// The strip state alone, kept current while the popover is hidden (status is published only
+    /// while it shows); the editor decides pairing vs shape from it.
+    pub fn set_strip(&self, strip: StripStatus) {
+        lock(&self.status).strip = strip;
+    }
+
     pub fn visible_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.visible)
     }
@@ -325,15 +341,20 @@ impl AppState {
         })
     }
 
-    /// Tells the engine to pause or resume its strip connection. A pause that got lost would leave
-    /// the strip offline, so a full queue hands it to a short-lived thread, like `report_strip`.
     fn send_strip_pause(&self, pause: bool) {
+        self.deliver(Input::StripPause(pause));
+    }
+
+    /// For news that must not be lost (a pause that got lost would leave the strip offline; a saved
+    /// library the engine never hears of; meters that never stop): a full queue hands the input to
+    /// a short-lived thread, like `report_strip`. Never blocks, never fails.
+    fn deliver(&self, input: Input) {
         let Some(tx) = lock(&self.runtime).as_ref().map(|h| h.tx.clone()) else {
             return;
         };
-        if let Err(TrySendError::Full(input)) = tx.try_send(Input::StripPause(pause)) {
+        if let Err(TrySendError::Full(input)) = tx.try_send(input) {
             let _ = std::thread::Builder::new()
-                .name("strip-pause".into())
+                .name("engine-news".into())
                 .spawn(move || {
                     let _ = tx.send(input);
                 });
@@ -358,7 +379,7 @@ impl AppState {
     /// Editor window closed: revoke and forget whatever the wizard holds.
     pub fn editor_closed(&self, emit: &Emit) {
         self.wizard.cancel(emit);
-        let _ = self.send(Input::DetectionWatch(false));
+        self.deliver(Input::DetectionWatch(false));
     }
 
     /// App exit: a running wizard is cancelled (its cloud session revoked) before the engine stops.
@@ -439,8 +460,15 @@ pub fn select_palette(state: tauri::State<'_, AppState>, delta: i8) -> Result<Se
 
 fn select(state: &AppState, pick: Pick, delta: i8) -> Result<Selection, String> {
     let sel = state.select(pick, delta)?;
-    state.send(Input::Library(Box::new(state.library())))?;
+    // Saved already: an engine that cannot take the news right now gets it a moment later.
+    state.deliver(Input::Library(Box::new(state.library())));
     Ok(sel)
+}
+
+fn save_to(state: &AppState, library: Library) -> Result<Library, String> {
+    let saved = state.save_library(library)?;
+    state.deliver(Input::Library(Box::new(saved.clone())));
+    Ok(saved)
 }
 
 /// Entries whose id the stored library lacks are new; the saved library (with real ids) is returned.
@@ -450,9 +478,7 @@ pub fn save_library(
     state: tauri::State<'_, AppState>,
     library: Library,
 ) -> Result<Library, String> {
-    let saved = state.save_library(library)?;
-    state.send(Input::Library(Box::new(saved.clone())))?;
-    Ok(saved)
+    save_to(&state, library)
 }
 
 /// Messages each step costs to reach from the previous one (the first from the last: it wraps),
@@ -713,6 +739,17 @@ mod tests {
     }
 
     #[test]
+    fn strip_state_is_readable_without_a_status_publish() {
+        let state = AppState::default();
+        let on = StripStatus::Connected {
+            name: "dj".into(),
+            segments: 12,
+        };
+        state.set_strip(on.clone());
+        assert_eq!(lock(&state.status).strip, on);
+    }
+
+    #[test]
     fn identify_check_needs_a_connected_strip_and_a_segment_in_range() {
         let on = StripStatus::Connected {
             name: "dj".into(),
@@ -780,6 +817,69 @@ mod tests {
         assert!(msg.contains("palettes") && !msg.contains("4242"), "{msg}");
         assert_eq!(state.library(), before);
         assert!(!dir.path().join("library.json").exists());
+    }
+
+    #[test]
+    fn saving_a_shape_with_another_piece_count_resizes_the_roles() {
+        use light_core::library::Shape;
+        use light_core::model::Role;
+        let (dir, state) = lib_state();
+        for m in [12u8, 6] {
+            let mut lib = state.library();
+            lib.shape = Shape::row(m);
+            let saved = state.save_library(lib).unwrap();
+            assert_eq!(saved.segments(), m);
+            for (_, q) in &saved.sequences {
+                // The same predicate the engine uses to decide the library fits the strip.
+                assert_eq!(q.validate(m), Ok(()));
+            }
+            if m == 12 {
+                assert_eq!(saved.sequences[0].1.steps[0].roles[10..], [Role::Off; 2]);
+            }
+            assert_eq!(
+                crate::library_store::load(&dir.path().join("library.json"), 10),
+                saved
+            );
+        }
+        // A client that sends wrong-length roles for an unchanged shape is still refused.
+        let mut bad = state.library();
+        bad.sequences[0].1.steps[0].roles.pop();
+        assert!(state.save_library(bad).is_err());
+    }
+
+    fn full_queue() -> (AppState, std::sync::mpsc::Receiver<Input>) {
+        let state = AppState::default();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(Input::PopoverShown).unwrap();
+        state.set_runtime(RuntimeHandle { tx });
+        (state, rx)
+    }
+
+    #[test]
+    fn a_full_queue_still_gets_the_library_and_the_meters_off() {
+        let (state, rx) = full_queue();
+        state.deliver(Input::Library(Box::new(Library::builtin(10))));
+        let emit: Emit = Arc::new(|_| {});
+        state.editor_closed(&emit);
+        assert!(matches!(rx.recv(), Ok(Input::PopoverShown)));
+        let got: Vec<Input> = (0..2)
+            .map(|_| rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap())
+            .collect();
+        assert!(got.iter().any(|i| matches!(i, Input::Library(_))));
+        assert!(
+            got.iter()
+                .any(|i| matches!(i, Input::DetectionWatch(false)))
+        );
+    }
+
+    #[test]
+    fn select_and_save_succeed_when_the_queue_is_full() {
+        let (dir, state) = lib_state();
+        let (full, _rx) = full_queue();
+        *lock(&state.runtime) = lock(&full.runtime).take();
+        assert!(select(&state, Pick::Set, 1).is_ok());
+        assert!(save_to(&state, state.library()).is_ok());
+        drop(dir);
     }
 
     #[test]
