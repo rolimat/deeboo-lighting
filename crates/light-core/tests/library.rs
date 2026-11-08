@@ -5,7 +5,9 @@ use light_core::library::{Interval, Library, Piece, SeqRef, Shape};
 #[test]
 fn builtin_validates_for_1_to_60_segments() {
     for n in 1..=60u8 {
-        assert_eq!(Library::builtin(n).validate(n), Ok(()), "n={n}");
+        let l = Library::builtin(n);
+        assert_eq!(l.validate(), Ok(()), "n={n}");
+        assert_eq!(l.segments(), n);
     }
 }
 
@@ -26,8 +28,8 @@ fn builtin_default_set_uses_spec_intervals() {
     assert_eq!(l.active_set, s.id);
 }
 
-fn fields(l: &Library, n: u8) -> String {
-    l.validate(n).expect_err("must be rejected").field
+fn fields(l: &Library) -> String {
+    l.validate().expect_err("must be rejected").field
 }
 
 type Mutate = Box<dyn Fn(&mut Library)>;
@@ -35,8 +37,7 @@ type Mutate = Box<dyn Fn(&mut Library)>;
 #[test]
 #[allow(clippy::too_many_lines)] // one table
 fn validate_rejects_each_limit() {
-    let n = 8u8;
-    let base = Library::builtin(n);
+    let base = Library::builtin(8);
     let long = "x".repeat(64);
     let cases: Vec<(&str, Mutate)> = vec![
         (
@@ -112,10 +113,23 @@ fn validate_rejects_each_limit() {
             Box::new(|l| l.palettes[0].1.suave.v = 1001),
         ),
         (
-            "shape",
+            "sequences[0].steps[0].roles",
             Box::new(|l| {
                 l.shape.pieces.pop();
             }),
+        ),
+        ("shape", Box::new(|l| l.shape.pieces.clear())),
+        (
+            "shape",
+            Box::new(|l| l.shape.pieces = vec![l.shape.pieces[0]; 61]),
+        ),
+        (
+            "sets[0].rhythm.sequences",
+            Box::new(|l| l.sets[0].rhythm.sequences.clear()),
+        ),
+        (
+            "sets[0].calm.palettes",
+            Box::new(|l| l.sets[0].calm.palettes.clear()),
         ),
         (
             "shape.pieces[0].x",
@@ -163,29 +177,42 @@ fn validate_rejects_each_limit() {
     for (i, (field, mutate)) in cases.iter().enumerate() {
         let mut l = base.clone();
         mutate(&mut l);
-        assert_eq!(fields(&l, n), *field, "case {i}");
+        assert_eq!(fields(&l), *field, "case {i}");
     }
-    assert!(Library::builtin(8).validate(9).is_err(), "segment mismatch");
+}
+
+#[test]
+fn library_for_10_validates_and_reports_10() {
+    let l = Library::builtin(10);
+    assert_eq!(l.validate(), Ok(()));
+    assert_eq!(l.segments(), 10);
+}
+
+#[test]
+fn roles_must_match_shape_not_strip() {
+    let mut l = Library::builtin(10);
+    l.sequences[1].1.steps[0].roles.pop();
+    assert_eq!(fields(&l), "sequences[1].steps[0].roles");
 }
 
 #[test]
 fn set_must_reference_existing_ids() {
     let mut l = Library::builtin(4);
     l.sets[0].calm.sequences.push(SeqRef::Id(999));
-    assert_eq!(fields(&l, 4), "sets[0].calm.sequences");
+    assert_eq!(fields(&l), "sets[0].calm.sequences");
     let mut l = Library::builtin(4);
     l.sets[0].buildup.palettes.push(999);
-    assert_eq!(fields(&l, 4), "sets[0].buildup.palettes");
+    assert_eq!(fields(&l), "sets[0].buildup.palettes");
     let mut l = Library::builtin(4);
     l.sets[0].rhythm.sequences.push(SeqRef::Generated);
-    assert_eq!(l.validate(4), Ok(()));
+    assert_eq!(l.validate(), Ok(()));
 }
 
 #[test]
 fn error_never_echoes_input() {
     let mut l = Library::builtin(4);
     l.palettes[0].1.name = "secret\n".repeat(50);
-    let e = l.validate(4).expect_err("bad name");
+    let e = l.validate().expect_err("bad name");
     assert!(!format!("{e} {e:?}").contains("secret"));
 }
 
@@ -209,4 +236,15 @@ fn serde_round_trip() {
     assert!(json.contains("\"activeSet\""), "{json}");
     let back: Library = serde_json::from_str(&json).expect("de");
     assert_eq!(back, l);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn unknown_fields_are_refused() {
+    let mut v = serde_json::to_value(Library::builtin(4)).expect("ser");
+    v["extra"] = 1.into();
+    assert!(serde_json::from_value::<Library>(v).is_err());
+    let mut v = serde_json::to_value(Library::builtin(4)).expect("ser");
+    v["shape"]["pieces"][0]["extra"] = 1.into();
+    assert!(serde_json::from_value::<Library>(v).is_err());
 }

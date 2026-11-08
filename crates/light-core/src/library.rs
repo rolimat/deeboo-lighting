@@ -15,7 +15,10 @@ pub const GRID: f32 = 64.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct Piece {
     pub x: f32,
     pub y: f32,
@@ -25,7 +28,10 @@ pub struct Piece {
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct Shape {
     pub pieces: Vec<Piece>,
 }
@@ -75,7 +81,10 @@ pub enum SeqRef {
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct MomentSet {
     pub sequences: Vec<SeqRef>,
     pub palettes: Vec<u32>,
@@ -85,7 +94,10 @@ pub struct MomentSet {
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct Set {
     pub id: u32,
     pub name: String,
@@ -96,7 +108,10 @@ pub struct Set {
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+    feature = "serde",
+    serde(rename_all = "camelCase", deny_unknown_fields)
+)]
 pub struct Library {
     pub schema_version: u16,
     pub shape: Shape,
@@ -194,9 +209,17 @@ impl Library {
         }
     }
 
+    /// Segment count the library was built for (the shape's piece count).
+    #[must_use]
+    pub fn segments(&self) -> u8 {
+        u8::try_from(self.shape.pieces.len()).unwrap_or(u8::MAX)
+    }
+
+    /// Independent of the strip's current segment count: a re-paired strip keeps the library.
+    ///
     /// # Errors
     /// The first violated limit, naming the field.
-    pub fn validate(&self, segments: u8) -> Result<(), LibraryError> {
+    pub fn validate(&self) -> Result<(), LibraryError> {
         if self.schema_version != SCHEMA_VERSION {
             return err("schema_version", "is not supported");
         }
@@ -213,8 +236,9 @@ impl Library {
         unique_ids("sequences", self.sequences.iter().map(|(i, _)| i))?;
         unique_ids("sets", self.sets.iter().map(|s| &s.id))?;
 
-        if self.shape.pieces.len() != usize::from(segments) {
-            return err("shape", "must have exactly one piece per segment");
+        let segments = usize::from(self.segments());
+        if !(1..=60).contains(&self.shape.pieces.len()) {
+            return err("shape", "must have 1 to 60 pieces");
         }
         for (i, p) in self.shape.pieces.iter().enumerate() {
             let at = |f: &str| format!("shape.pieces[{i}].{f}");
@@ -241,11 +265,7 @@ impl Library {
             if s.steps.is_empty() || s.steps.len() > MAX_STEPS {
                 return err(format!("sequences[{i}].steps"), "must have 1 to 64 steps");
             }
-            if let Some(j) = s
-                .steps
-                .iter()
-                .position(|st| st.roles.len() != usize::from(segments))
-            {
+            if let Some(j) = s.steps.iter().position(|st| st.roles.len() != segments) {
                 return err(
                     format!("sequences[{i}].steps[{j}].roles"),
                     "must have one role per segment",
@@ -267,6 +287,18 @@ impl Library {
                 let (Interval::Beats(v) | Interval::Bars(v) | Interval::Phrases(v)) = m.interval;
                 if v == 0 {
                     return err(format!("sets[{i}].{n}.interval"), "must be at least 1");
+                }
+                if m.sequences.is_empty() {
+                    return err(
+                        format!("sets[{i}].{n}.sequences"),
+                        "needs at least one sequence",
+                    );
+                }
+                if m.palettes.is_empty() {
+                    return err(
+                        format!("sets[{i}].{n}.palettes"),
+                        "needs at least one palette",
+                    );
                 }
                 if !m.sequences.iter().all(has_seq) {
                     return err(
