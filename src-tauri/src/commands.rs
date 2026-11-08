@@ -4,7 +4,11 @@
 use std::sync::Arc;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use serde::Serialize;
+use light_core::detect::Moment;
+use light_core::engine::UiCommand;
+use serde::{Deserialize, Serialize};
+
+use crate::settings::{self, Settings};
 
 #[cfg(debug_assertions)]
 use crate::strip::Strip;
@@ -34,10 +38,44 @@ pub struct Status {
     pub clock_ticks: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MomentDto {
+    Rhythm,
+    Calm,
+    BuildUp,
+}
+
+/// What the popover can ask of the show; anything else is rejected by serde.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UiCommandDto {
+    Lights { on: bool },
+    Force { moment: MomentDto },
+    Auto,
+}
+
+impl From<UiCommandDto> for UiCommand {
+    fn from(c: UiCommandDto) -> Self {
+        match c {
+            UiCommandDto::Lights { on } => UiCommand::Lights(on),
+            UiCommandDto::Force { moment } => UiCommand::Force(match moment {
+                MomentDto::Rhythm => Moment::Rhythm,
+                MomentDto::Calm => Moment::Calm,
+                MomentDto::BuildUp => Moment::BuildUp,
+            }),
+            UiCommandDto::Auto => UiCommand::Auto,
+        }
+    }
+}
+
 /// Mutable app state shared with the commands.
 pub struct AppState {
     status: Mutex<StripStatus>,
     clock_ticks: Mutex<Option<u64>>,
+    settings: Mutex<Settings>,
+    /// Where the settings file lives; set at startup.
+    settings_path: Mutex<Option<std::path::PathBuf>>,
     #[cfg(debug_assertions)]
     strip: Mutex<Option<Arc<Strip>>>,
     /// Keeps the debug MIDI connections alive for the app's lifetime.
@@ -50,6 +88,8 @@ impl Default for AppState {
         Self {
             status: Mutex::new(StripStatus::NotConfigured),
             clock_ticks: Mutex::new(None),
+            settings: Mutex::new(Settings::default()),
+            settings_path: Mutex::new(None),
             #[cfg(debug_assertions)]
             strip: Mutex::new(None),
             #[cfg(debug_assertions)]
@@ -76,6 +116,25 @@ impl AppState {
     #[cfg(debug_assertions)]
     pub fn set_midi(&self, conns: Vec<midir::MidiInputConnection<()>>) {
         *lock(&self.midi) = conns;
+    }
+
+    /// Loads the settings file (defaults on any problem) and remembers its path.
+    pub fn init_settings(&self, path: std::path::PathBuf) {
+        *lock(&self.settings) = settings::load(&path);
+        *lock(&self.settings_path) = Some(path);
+    }
+
+    fn save_settings(&self, new: Settings) -> Result<Settings, String> {
+        new.validate()?;
+        let path = lock(&self.settings_path)
+            .clone()
+            .ok_or("settings unavailable")?;
+        settings::save(&path, &new).map_err(|e| {
+            log::warn!("settings not saved: {e}");
+            "settings not saved".to_string()
+        })?;
+        *lock(&self.settings) = new.clone();
+        Ok(new)
     }
 
     fn status(&self) -> Status {
@@ -120,6 +179,48 @@ fn emit_status(app: &tauri::AppHandle) {
 #[allow(clippy::needless_pass_by_value)] // tauri::State is passed by value by the macro
 pub fn get_status(state: tauri::State<'_, AppState>) -> Status {
     state.status()
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri::State is passed by value by the macro
+pub fn get_settings(state: tauri::State<'_, AppState>) -> Settings {
+    lock(&state.settings).clone()
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn save_settings(
+    state: tauri::State<'_, AppState>,
+    settings: Settings,
+) -> Result<Settings, String> {
+    state.save_settings(settings)
+}
+
+#[tauri::command]
+pub async fn list_midi_sources() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(crate::devices::midi_sources)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_audio_inputs() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(crate::devices::audio_inputs)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Validated by serde on the way in. The engine consumes it in the live wiring (Plan 3, Task 9);
+/// until then only the lights switch is applied (and persisted), the rest is accepted and dropped.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri::State is passed by value by the macro
+pub fn ui_command(state: tauri::State<'_, AppState>, cmd: UiCommandDto) -> Result<(), String> {
+    if let UiCommandDto::Lights { on } = cmd {
+        let mut s = lock(&state.settings).clone();
+        s.lights_on = on;
+        state.save_settings(s)?;
+    }
+    Ok(())
 }
 
 /// Debug builds only; absent from the release handler list, manifest and capabilities.
@@ -169,5 +270,21 @@ mod tests {
             json(&connected),
             r#"{"strip":{"kind":"connected","name":"dj lights","segments":10},"debug":false,"clockTicks":48}"#
         );
+    }
+
+    #[test]
+    fn ui_command_dto_parses_and_rejects_unknown() {
+        let parse = |j: &str| serde_json::from_str::<UiCommandDto>(j);
+        assert_eq!(
+            parse(r#"{"kind":"lights","on":false}"#).ok(),
+            Some(UiCommandDto::Lights { on: false })
+        );
+        assert_eq!(
+            UiCommand::from(parse(r#"{"kind":"force","moment":"buildUp"}"#).unwrap()),
+            UiCommand::Force(Moment::BuildUp)
+        );
+        assert_eq!(parse(r#"{"kind":"auto"}"#).ok(), Some(UiCommandDto::Auto));
+        assert!(parse(r#"{"kind":"reboot"}"#).is_err());
+        assert!(parse(r#"{"kind":"force","moment":"loud"}"#).is_err());
     }
 }

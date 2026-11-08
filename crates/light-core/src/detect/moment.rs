@@ -275,6 +275,12 @@ impl MomentDetector {
         self.moment
     }
 
+    /// Changes the Calm thresholds live; learned references and state stay.
+    pub fn set_thresholds(&mut self, calm_kick_db: f32, calm_high_db: f32) {
+        self.p.calm_kick_db = calm_kick_db;
+        self.p.calm_high_db = calm_high_db;
+    }
+
     pub fn reset(&mut self) {
         *self = MomentDetector::new(self.p, 0.0);
     }
@@ -582,6 +588,25 @@ mod tests {
     fn groove(n: usize, kick: impl Fn(usize) -> bool, high: impl Fn(usize) -> f32) -> Out {
         let lens = beats(128.0, n);
         drive(&synth(&lens, kick, |_| true, high), &lens)
+    }
+
+    #[test]
+    fn set_thresholds_keeps_learned_references() {
+        let lens = beats(128.0, 24);
+        let sig = synth(&lens, |_| true, |_| true, |_| 0.0);
+        let mut a = BandAnalyzer::new(FS);
+        let mut d = MomentDetector::new(DetectorParams::default(), 0.0058);
+        let mut pos = 0;
+        for &len in &lens {
+            a.process(&sig[pos..pos + len], &mut |f| d.push(f));
+            pos += len;
+            d.on_beat();
+        }
+        let (learned, moment) = (d.kick_hist.buf.len(), d.moment());
+        assert!(learned > 0);
+        d.set_thresholds(10.0, 6.0);
+        assert_eq!((d.p.calm_kick_db, d.p.calm_high_db), (10.0, 6.0));
+        assert_eq!((d.kick_hist.buf.len(), d.moment()), (learned, moment));
     }
 
     #[test]

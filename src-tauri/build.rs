@@ -5,8 +5,24 @@ use tauri_build::{AppManifest, Attributes};
 // first removes the dev-only files a previous debug build left behind.
 
 /// Release manifest: the dev command must never appear here.
-const COMMANDS: &[&str] = &["get_status"];
-const DEV_COMMANDS: &[&str] = &["get_status", "dev_paint_test", "dev_mic_level"];
+const COMMANDS: &[&str] = &[
+    "get_status",
+    "get_settings",
+    "save_settings",
+    "list_midi_sources",
+    "list_audio_inputs",
+    "ui_command",
+];
+const DEV_COMMANDS: &[&str] = &[
+    "get_status",
+    "get_settings",
+    "save_settings",
+    "list_midi_sources",
+    "list_audio_inputs",
+    "ui_command",
+    "dev_paint_test",
+    "dev_mic_level",
+];
 
 fn main() {
     let commands = if std::env::var("PROFILE").as_deref() == Ok("debug") {

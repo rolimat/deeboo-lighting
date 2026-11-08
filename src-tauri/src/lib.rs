@@ -1,15 +1,16 @@
 //! Deeboo Lighting: menu bar app shell and IPC.
 
-#[cfg(debug_assertions)]
 use tauri::Manager;
 
 mod commands;
+mod devices;
 #[cfg(debug_assertions)]
 mod lan;
 #[cfg(debug_assertions)]
 mod mic_probe;
 #[cfg(debug_assertions)]
 mod midi_probe;
+mod settings;
 #[cfg(debug_assertions)]
 mod strip;
 mod tray;
@@ -26,14 +27,28 @@ pub fn run() -> tauri::Result<()> {
     #[cfg(debug_assertions)]
     let builder = builder.invoke_handler(tauri::generate_handler![
         commands::get_status,
+        commands::get_settings,
+        commands::save_settings,
+        commands::list_midi_sources,
+        commands::list_audio_inputs,
+        commands::ui_command,
         commands::dev_paint_test,
         commands::dev_mic_level
     ]);
     #[cfg(not(debug_assertions))]
-    let builder = builder.invoke_handler(tauri::generate_handler![commands::get_status]);
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::get_status,
+        commands::get_settings,
+        commands::save_settings,
+        commands::list_midi_sources,
+        commands::list_audio_inputs,
+        commands::ui_command
+    ]);
     builder
         .setup(|app| {
             tray::setup(app)?;
+            app.state::<commands::AppState>()
+                .init_settings(app.path().app_config_dir()?.join("settings.json"));
             #[cfg(debug_assertions)]
             {
                 // The dev command's permission exists only in debug manifests (build.rs).
