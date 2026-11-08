@@ -110,51 +110,47 @@ fn circle(cx: f32, cy: f32, r: f32, rgb: Rgb) -> impl Fn(f32, f32) -> (Rgb, f32)
     move |x, y| (rgb, (x - cx).hypot(y - cy) - r)
 }
 
-/// Template silhouette of the app icon: 10 LED segments around a vinyl with a hole for the label.
-fn icon_shapes() -> Vec<Shape> {
-    const BLACK: Rgb = [0, 0, 0];
-    let (cx, cy) = (W / 2.0, H / 2.0);
+/// App icon silhouette centred at `(cx, 9)`: 10 LED segments around a vinyl with a hole for the label.
+fn silhouette(cx: f32) -> Vec<Shape> {
+    const GREY: Rgb = [142, 142, 147]; // mid grey: legible on light and dark menu bars
+    let cy = H / 2.0;
     let mut out: Vec<Shape> = Vec::new();
     for i in 0..10_u8 {
         let mid = (f32::from(i) * 36.0 + 18.0).to_radians();
         let pts: Vec<_> = (-2_i8..=2)
             .map(|k| {
                 let a = mid + f32::from(k) * 4.5_f32.to_radians();
-                (cx + 7.4 * a.cos(), cy + 7.4 * a.sin())
+                (cx + 6.6 * a.cos(), cy + 6.6 * a.sin())
             })
             .collect();
-        out.push(Box::new(move |x, y| (BLACK, dist_line(&pts, x, y) - 0.8)));
+        out.push(Box::new(move |x, y| (GREY, dist_line(&pts, x, y) - 0.75)));
     }
-    // Vinyl: annulus 1.7..4.9 px (the hole is the label).
+    // Vinyl: annulus 1.7..4.5 px (the hole is the label).
     out.push(Box::new(move |x, y| {
-        (BLACK, ((x - cx).hypot(y - cy) - 3.3).abs() - 1.6)
+        (GREY, ((x - cx).hypot(y - cy) - 3.1).abs() - 1.4)
     }));
     out
 }
 
 /// Every frame as (file name, PNG bytes).
 fn frames() -> Vec<(String, Vec<u8>)> {
-    const RING: Rgb = [142, 142, 147]; // mid grey: legible on light and dark menu bars
     const BLACK: Rgb = [0, 0, 0]; // template images: only alpha matters
     let mut out = Vec::new();
     for scale in [1, 2] {
         let at = if scale == 1 { "" } else { "@2x" };
-        let ring = |x: f32, y: f32| (RING, ((x - 9.0).hypot(y - 9.0) - 6.2).abs() - 0.8);
-        let icon = icon_shapes();
-        let refs: Vec<&dyn Fn(f32, f32) -> (Rgb, f32)> = icon.iter().map(AsRef::as_ref).collect();
-        out.push((
-            format!("icon{at}.png"),
-            encode(scale, &render(scale, &refs)),
-        ));
+        let icon = silhouette(9.0);
         for (name, rgb) in [
             ("red", [255, 69, 58]),
             ("green-on", [48, 209, 88]),
             ("green-dim", [22, 100, 42]),
         ] {
             let dot = circle(19.5, 9.0, 3.0, rgb);
+            let mut shapes: Vec<&dyn Fn(f32, f32) -> (Rgb, f32)> =
+                icon.iter().map(AsRef::as_ref).collect();
+            shapes.push(&dot);
             out.push((
                 format!("dot-{name}{at}.png"),
-                encode(scale, &render(scale, &[&ring, &dot])),
+                encode(scale, &render(scale, &shapes)),
             ));
         }
         for kind in ["rhythm", "calm", "buildup"] {
@@ -194,7 +190,7 @@ mod tests {
     #[test]
     fn tray_frames_tool_is_deterministic() {
         let a = frames();
-        assert_eq!(a.len(), 2 * (3 + 3 * FRAMES * 2 + 1));
+        assert_eq!(a.len(), 2 * (3 + 3 * FRAMES * 2));
         assert_eq!(a, frames());
         assert!(a.iter().any(|(n, _)| n == "rhythm-7-forced@2x.png"));
     }
@@ -203,10 +199,6 @@ mod tests {
     #[test]
     fn tray_template_is_monochrome() {
         let all = frames();
-        assert!(
-            all.iter().any(|(n, _)| n == "icon@2x.png"),
-            "app icon silhouette missing"
-        );
         for (name, bytes) in all.iter().filter(|(n, _)| !n.starts_with("dot-")) {
             let mut r = png::Decoder::new(std::io::Cursor::new(bytes.as_slice()))
                 .read_info()
@@ -217,11 +209,38 @@ mod tests {
                 buf.chunks(4).all(|p| p[..3] == [0, 0, 0]),
                 "{name} is not black + alpha"
             );
-            assert!(
-                name.starts_with("icon") <= buf.chunks(4).any(|p| p[3] > 0),
-                "{name} is empty"
-            );
+            assert!(buf.chunks(4).any(|p| p[3] > 0), "{name} is empty");
         }
+    }
+
+    fn alpha(bytes: &[u8]) -> Vec<u8> {
+        let mut r = png::Decoder::new(std::io::Cursor::new(bytes))
+            .read_info()
+            .unwrap();
+        let mut buf = vec![0; r.output_buffer_size().unwrap()];
+        r.next_frame(&mut buf).unwrap();
+        buf.chunks(4).map(|p| p[3]).collect()
+    }
+
+    /// The dot frames draw the app icon silhouette (not a plain ring) next to the dot.
+    #[test]
+    fn dot_frames_contain_the_silhouette() {
+        let all = frames();
+        let dot = alpha(
+            &all.iter()
+                .find(|(n, _)| n == "dot-green-on@2x.png")
+                .unwrap()
+                .1,
+        );
+        let shapes = silhouette(9.0);
+        let refs: Vec<&dyn Fn(f32, f32) -> (Rgb, f32)> = shapes.iter().map(AsRef::as_ref).collect();
+        let icon = alpha(&encode(2, &render(2, &refs)));
+        let solid: Vec<_> = (0..icon.len()).filter(|&i| icon[i] == 255).collect();
+        assert!(solid.len() > 100);
+        assert!(
+            solid.iter().all(|&i| dot[i] > 0),
+            "silhouette missing from the dot frame"
+        );
     }
 
     /// Bundle PNGs (written by `tauri icon`) have their nominal sizes; the SVG source ships beside them.
