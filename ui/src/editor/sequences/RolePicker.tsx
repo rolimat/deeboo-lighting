@@ -12,7 +12,7 @@ export const ROLE_LABEL: Record<Role, string> = {
 };
 
 /** HSV (H 0-360, S/V 0-1000) to a CSS colour. */
-function css({ h, s, v }: Hsv): string {
+export function css({ h, s, v }: Hsv): string {
   const sat = s / 1000;
   const val = v / 1000;
   const l = val * (1 - sat / 2);

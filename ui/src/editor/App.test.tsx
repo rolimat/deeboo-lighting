@@ -31,7 +31,7 @@ it("renders_strip_section", async () => {
   const root = document.createElement("div");
   await mount(root);
   const nav = root.querySelector("nav");
-  expect(nav?.textContent).toBe("StripSequences");
+  expect(nav?.textContent).toBe("StripSequencesPalettesSets");
   expect(nav?.querySelector("[aria-current='page']")?.textContent).toBe("Strip");
   expect(root.querySelector("section")?.textContent).toContain("dj lights (10 segments)");
 });

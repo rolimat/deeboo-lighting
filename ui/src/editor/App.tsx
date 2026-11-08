@@ -1,6 +1,8 @@
 import { useEffect, useState } from "preact/hooks";
 import type { StripStatus } from "../api";
 import { api } from "./api";
+import { PaletteEditor } from "./palettes/PaletteEditor";
+import { SetEditor } from "./sets/SetEditor";
 import { SequenceList } from "./sequences/SequenceList";
 import { ShapeEditor } from "./strip/ShapeEditor";
 import { Wizard } from "./strip/Wizard";
@@ -21,14 +23,14 @@ function describe(s: StripStatus | null): string {
 export function App() {
   const [strip, setStrip] = useState<StripStatus | null>(null);
   const [repair, setRepair] = useState(false);
-  const [section, setSection] = useState<"Strip" | "Sequences">("Strip");
+  const [section, setSection] = useState<"Strip" | "Sequences" | "Palettes" | "Sets">("Strip");
   useEffect(() => {
     api.getStatus().then(setStrip, () => setStrip({ kind: "error" }));
   }, []);
   return (
     <div class="flex h-screen">
       <nav class="w-40 space-y-1 border-r border-border p-3" aria-label="Sections">
-        {(["Strip", "Sequences"] as const).map((name) => (
+        {(["Strip", "Sequences", "Palettes", "Sets"] as const).map((name) => (
           <button
             type="button"
             key={name}
@@ -44,6 +46,18 @@ export function App() {
         <section class="min-w-0 flex-1 overflow-auto p-6" aria-label="Sequences">
           <h1 class="mb-4 text-lg">Sequences</h1>
           <SequenceList />
+        </section>
+      )}
+      {section === "Palettes" && (
+        <section class="min-w-0 flex-1 overflow-auto p-6" aria-label="Palettes">
+          <h1 class="mb-4 text-lg">Palettes</h1>
+          <PaletteEditor />
+        </section>
+      )}
+      {section === "Sets" && (
+        <section class="min-w-0 flex-1 overflow-auto p-6" aria-label="Sets">
+          <h1 class="mb-4 text-lg">Sets</h1>
+          <SetEditor />
         </section>
       )}
       {section === "Strip" && (
