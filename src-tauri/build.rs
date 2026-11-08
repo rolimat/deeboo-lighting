@@ -4,6 +4,10 @@ use tauri_build::{AppManifest, Attributes};
 const COMMANDS: &[&str] = &[
     "get_status",
     "get_settings",
+    "get_library",
+    "save_library",
+    "select_set",
+    "select_palette",
     "save_settings",
     "list_midi_sources",
     "list_audio_inputs",
@@ -15,7 +19,11 @@ const COMMANDS: &[&str] = &[
     "wizard_retry",
     "wizard_cancel",
     "strip_identify",
+    "identify_segment",
     "wizard_save",
+    "message_counts",
+    "detection_watch",
+    "set_detection_thresholds",
 ];
 
 fn main() {

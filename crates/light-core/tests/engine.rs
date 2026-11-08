@@ -464,3 +464,79 @@ fn lead_ms_changes_send_times() {
     assert!(c.sends.iter().all(|(t, _)| *t != T0 + 750_000));
     assert!(c.sends.iter().any(|(t, _)| *t == T0 + 1_500_000 - 500_000));
 }
+
+fn lib4(principal_h: u16) -> light_core::library::Library {
+    let mut lib = light_core::library::Library::builtin(4);
+    lib.palettes[0].1.principal.h = principal_h;
+    lib
+}
+
+fn hue_sends(s: &Sim, hue: u16) -> Vec<u64> {
+    s.sends
+        .iter()
+        .filter(|(_, c)| match c {
+            PaintCommand::Bucket(h) => h.h == hue,
+            PaintCommand::Pencil { color, .. } => color.h == hue,
+            PaintCommand::Eraser { .. } => false,
+        })
+        .map(|(t, _)| *t)
+        .collect()
+}
+
+#[test]
+fn library_change_applies_at_next_bar() {
+    let mut s = sim125();
+    s.start();
+    s.beats_of(2, &mut none);
+    let at = s.now;
+    let out = s.e.set_library(at, &lib4(100));
+    assert!(out.is_empty(), "no burst on save: {out:?}");
+    s.beats_of(6, &mut none);
+    // Bar 2 starts one beat after beat 3's pulse; its first message goes out one lead earlier.
+    let t3 = s.beats.get(3).map(|(t, _)| *t).unwrap();
+    let hue100 = hue_sends(&s, 100);
+    // The step before the bar start is the old palette's; nothing new goes out earlier.
+    let first = hue100.first().copied().unwrap();
+    assert!(
+        (t3 + 480_000 - LEAD..t3 + 480_000 + LEAD).contains(&first),
+        "{hue100:?}"
+    );
+}
+
+#[test]
+fn mismatched_segments_fall_back_to_builtin() {
+    let mut s = sim125();
+    // A library built for 10 segments on a 4-segment strip: its sequences are ignored.
+    let mut lib = light_core::library::Library::builtin(10);
+    lib.palettes[0].1.principal.h = 100;
+    s.cmd(UiCommand::Lights(true));
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(4, &mut none);
+    // The built-in Halves sequence for 4 segments, in the library's palette.
+    let pencils: Vec<_> = s
+        .sends
+        .iter()
+        .filter_map(|(_, c)| match c {
+            PaintCommand::Pencil { color, segments } => Some((color.h, segments.clone())),
+            _ => None,
+        })
+        .collect();
+    assert!(pencils.contains(&(100, vec![1, 2])), "{pencils:?}");
+    assert!(pencils.contains(&(0, vec![3, 4])), "{pencils:?}");
+}
+
+#[test]
+fn matching_library_sequence_is_played() {
+    use light_core::model::Role;
+    let mut s = sim125();
+    let mut lib = lib4(100);
+    for st in &mut lib.sequences[0].1.steps {
+        st.roles = vec![Role::Contraste; 4];
+    }
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    let got = apply_all(&s.sends, vec![None; 4]);
+    assert_eq!(got, vec![hsv(240, 1000, 1000); 4]);
+}

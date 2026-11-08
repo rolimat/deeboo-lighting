@@ -8,6 +8,7 @@ mod commands;
 mod devices;
 mod editor_window;
 mod lan;
+mod library_store;
 mod midi;
 mod qr;
 mod runtime;
@@ -39,6 +40,10 @@ pub fn run() -> tauri::Result<()> {
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::get_settings,
+            commands::get_library,
+            commands::save_library,
+            commands::select_set,
+            commands::select_palette,
             commands::save_settings,
             commands::list_midi_sources,
             commands::list_audio_inputs,
@@ -50,7 +55,11 @@ pub fn run() -> tauri::Result<()> {
             commands::wizard_retry,
             commands::wizard_cancel,
             commands::strip_identify,
-            commands::wizard_save
+            commands::identify_segment,
+            commands::wizard_save,
+            commands::message_counts,
+            commands::detection_watch,
+            commands::set_detection_thresholds
         ])
         .on_window_event(|window, event| {
             // Closing the editor mid-wizard must revoke the cloud session and drop the key.
@@ -65,7 +74,19 @@ pub fn run() -> tauri::Result<()> {
             let dir = app.path().app_config_dir()?;
             let state = app.state::<commands::AppState>();
             state.init_settings(dir.join("settings.json"));
-            let handle = runtime::spawn(app.handle().clone(), state.settings(), strip::load(&dir));
+            let strip = strip::load(&dir);
+            state.init_library(
+                dir.join("library.json"),
+                strip
+                    .as_ref()
+                    .map_or(runtime::DEFAULT_SEGMENTS, |c| c.segments),
+            );
+            let handle = runtime::spawn(
+                app.handle().clone(),
+                state.settings(),
+                strip,
+                state.library(),
+            );
             state.set_runtime(handle);
             Ok(())
         })

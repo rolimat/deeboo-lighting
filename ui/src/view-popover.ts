@@ -1,4 +1,4 @@
-import { api, type MomentName, type Status } from "./api";
+import { api, type Hsv, type MomentName, type Selection, type Status } from "./api";
 import { el, glyphButton } from "./dom";
 import { mountSettings, queueSave, stripText } from "./view-settings";
 
@@ -24,6 +24,31 @@ function pressable(label: string, text: string, onClick: () => void): HTMLButton
 function setPressed(b: HTMLElement, on: boolean): void {
   const v = String(on);
   if (b.getAttribute("aria-pressed") !== v) b.setAttribute("aria-pressed", v);
+}
+
+/** CSS colour for a strip colour (H 0-360, S and V 0-1000). */
+function hsvCss({ h, s, v }: Hsv): string {
+  const sat = s / 1000;
+  const val = (v / 1000) * 255;
+  const f = (n: number) => {
+    const k = (n + h / 60) % 6;
+    return Math.round(val * (1 - sat * Math.max(0, Math.min(k, 4 - k, 1))));
+  };
+  return `rgb(${f(5)}, ${f(3)}, ${f(1)})`;
+}
+
+/** `title ◀ name ▶`, for stepping through a list. */
+function stepper(kind: string, title: string, step: (delta: -1 | 1) => void) {
+  const row = el("div", `row row-${kind}`);
+  const name = el("span", "row-text");
+  const prev = el("button", "step", "◀");
+  prev.setAttribute("aria-label", `Previous ${kind}`);
+  prev.onclick = () => step(-1);
+  const next = el("button", "step", "▶");
+  next.setAttribute("aria-label", `Next ${kind}`);
+  next.onclick = () => step(1);
+  row.append(el("span", "field-title", title), prev, name, next);
+  return { row, name };
 }
 
 function statusRow(kind: string) {
@@ -98,6 +123,27 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
   const brightness = el("div", "card field-row");
   brightness.append(el("span", "field-title", "Brightness"), slider);
 
+  // Set and palette
+  const act = (p: Promise<Selection>) => void run(p.then((sel) => showSel(sel)));
+  const setRow = stepper("set", "Set", (d) => act(api.selectSet(d)));
+  const palRow = stepper("palette", "Palette", (d) => act(api.selectPalette(d)));
+  const swatches = [0, 1, 2].map(() => el("span", "swatch"));
+  palRow.row.insertBefore(el("span", "swatches"), palRow.row.lastElementChild);
+  palRow.row.querySelector(".swatches")?.append(...swatches);
+  const showSel = (sel: Selection) => {
+    setText(setRow.name, sel.set);
+    setText(palRow.name, sel.palette.name);
+    swatches.forEach((sw, i) => {
+      const c = hsvCss(sel.palette.colours[i] as Hsv);
+      if (sw.style.backgroundColor !== c) sw.style.backgroundColor = c;
+    });
+  };
+  const openEditor = el("button", "open-editor", "Open editor…");
+  openEditor.setAttribute("aria-label", "Open editor");
+  openEditor.onclick = () => void run(api.openEditor("strip"));
+  const look = el("div", "card look");
+  look.append(setRow.row, palRow.row, openEditor);
+
   // Status
   const midi = statusRow("midi");
   const strip = statusRow("strip");
@@ -115,7 +161,7 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
   statusCard.append(midi.row, strip.row, audio.row);
 
   const main = el("div", "view-main");
-  main.append(tempo, lights, moment, brightness, statusCard);
+  main.append(tempo, lights, moment, look, brightness, statusCard);
 
   let stripStatus: Status["strip"] = { kind: "notConfigured" };
   const settings = mountSettings(() => {
@@ -146,6 +192,7 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
       setPressed(auto, s.auto);
       setText(auto, s.auto ? "Auto ✓" : "Auto");
       predicted.hidden = !s.predicted;
+      showSel(s.selection);
 
       setText(midi.label, `MIDI · ${s.midi.source ?? "Deeboo Lighting In"}`);
       dot(midi.dot, s.midi.ok ? "ok" : "bad");

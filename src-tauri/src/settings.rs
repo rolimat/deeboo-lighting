@@ -2,6 +2,7 @@
 //! The strip's `local_key` never goes through here (spec §12).
 
 use std::io;
+use std::ops::RangeInclusive;
 use std::path::Path;
 
 use light_core::detect::DetectorParams;
@@ -23,7 +24,17 @@ pub struct Settings {
     /// 0..=500.
     pub lead_ms: u16,
     pub lights_on: bool,
+    /// Detection panel: whole dB under the learned level that count as quiet. 8..=30.
+    pub calm_kick_db: u8,
+    /// 6..=24.
+    pub calm_high_db: u8,
+    /// Rise of the bar means of highs that makes a riser. 3..=15.
+    pub riser_db: u8,
 }
+
+pub const CALM_KICK_DB: RangeInclusive<u8> = 8..=30;
+pub const CALM_HIGH_DB: RangeInclusive<u8> = 6..=24;
+pub const RISER_DB: RangeInclusive<u8> = 3..=15;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -35,6 +46,9 @@ impl Default for Settings {
             brightness_pct: 100,
             lead_ms: 100,
             lights_on: true,
+            calm_kick_db: 16,
+            calm_high_db: 12,
+            riser_db: 7,
         }
     }
 }
@@ -68,6 +82,15 @@ impl Settings {
         }
         if self.lead_ms > 500 {
             return Err("lead must be 0 to 500 ms".into());
+        }
+        if !CALM_KICK_DB.contains(&self.calm_kick_db) {
+            return Err("kick threshold must be 8 to 30 dB".into());
+        }
+        if !CALM_HIGH_DB.contains(&self.calm_high_db) {
+            return Err("highs threshold must be 6 to 24 dB".into());
+        }
+        if !RISER_DB.contains(&self.riser_db) {
+            return Err("riser threshold must be 3 to 15 dB".into());
         }
         Ok(())
     }
@@ -123,15 +146,16 @@ pub fn save(path: &Path, s: &Settings) -> io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-/// Detector thresholds for a sensitivity: higher means Calm sooner (thresholds drop `s - 5` dB).
+/// Detector thresholds: the panel sets the base, the popover's sensitivity shifts the calm ones
+/// (higher means Calm sooner: they drop `sensitivity - 5` dB). Riser is not shifted.
 #[must_use]
-pub fn sensitivity_params(s: u8) -> DetectorParams {
-    let d = DetectorParams::default();
-    let shift = f32::from(s) - 5.0;
+pub fn detector_params(s: &Settings) -> DetectorParams {
+    let shift = f32::from(s.sensitivity) - 5.0;
     DetectorParams {
-        calm_kick_db: d.calm_kick_db - shift,
-        calm_high_db: d.calm_high_db - shift,
-        ..d
+        calm_kick_db: f32::from(s.calm_kick_db) - shift,
+        calm_high_db: f32::from(s.calm_high_db) - shift,
+        riser_db: f32::from(s.riser_db),
+        ..DetectorParams::default()
     }
 }
 
@@ -211,11 +235,41 @@ mod tests {
     }
 
     #[test]
+    fn thresholds_default_to_the_detector_and_old_files_load() {
+        let d = DetectorParams::default();
+        let s = Settings::default();
+        assert_eq!(
+            (
+                f32::from(s.calm_kick_db),
+                f32::from(s.calm_high_db),
+                f32::from(s.riser_db)
+            ),
+            (d.calm_kick_db, d.calm_high_db, d.riser_db)
+        );
+        let old: Settings = serde_json::from_str(r#"{"sensitivity":7}"#).unwrap();
+        assert_eq!((old.sensitivity, old.calm_kick_db), (7, 16));
+        let bad = |f: fn(&mut Settings)| {
+            let mut s = Settings::default();
+            f(&mut s);
+            s.validate().is_err()
+        };
+        assert!(bad(|s| s.calm_kick_db = 7) && bad(|s| s.calm_kick_db = 31));
+        assert!(bad(|s| s.calm_high_db = 5) && bad(|s| s.calm_high_db = 25));
+        assert!(bad(|s| s.riser_db = 2) && bad(|s| s.riser_db = 16));
+        assert!(!bad(|s| s.riser_db = 15));
+    }
+
+    #[test]
     fn sensitivity_5_is_default_params() {
         let d = DetectorParams::default();
-        let p = sensitivity_params(5);
+        let st = |sensitivity| Settings {
+            sensitivity,
+            ..Settings::default()
+        };
+        let p = detector_params(&st(5));
+        assert!((p.riser_db - d.riser_db).abs() < 1e-6);
         assert!((p.calm_kick_db - d.calm_kick_db).abs() < 1e-6);
         assert!((p.calm_high_db - d.calm_high_db).abs() < 1e-6);
-        assert!(sensitivity_params(10).calm_kick_db < d.calm_kick_db);
+        assert!(detector_params(&st(10)).calm_kick_db < d.calm_kick_db);
     }
 }

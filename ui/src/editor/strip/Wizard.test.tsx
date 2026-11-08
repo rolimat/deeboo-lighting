@@ -12,6 +12,8 @@ vi.mock("../api", () => ({
     stripIdentify: vi.fn(),
     wizardSave: vi.fn(),
     onWizard: vi.fn(),
+    // The saved step mounts the shape editor, which loads the library.
+    getLibrary: vi.fn(() => new Promise(() => {})),
   },
 }));
 import { api } from "../api";

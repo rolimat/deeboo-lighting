@@ -2,7 +2,8 @@
 use crate::builtin;
 use crate::clock::{ClockEvent, ClockTracker, PhraseBars, Position};
 use crate::detect::Moment;
-use crate::model::{Colour, Palette, Role, resolve};
+use crate::library::{Library, SeqRef};
+use crate::model::{Colour, Palette, Role, Sequence, resolve};
 use crate::moments::MomentControl;
 use crate::paint::PaintCommand;
 use crate::scheduler::Scheduler;
@@ -47,12 +48,67 @@ struct Playing {
     left: u8,
 }
 
+/// What the engine plays: one palette and one sequence per moment (rhythm, calm, build-up).
+#[derive(Clone)]
+struct Look {
+    palette: Palette,
+    seqs: [Sequence; 3],
+}
+
+const MOMENTS: [Moment; 3] = [Moment::Rhythm, Moment::Calm, Moment::BuildUp];
+
+fn slot(m: Moment) -> usize {
+    MOMENTS.iter().position(|x| *x == m).unwrap_or(0)
+}
+
+impl Look {
+    fn builtin(segments: u8) -> Self {
+        Self {
+            palette: builtin::test_palette(),
+            seqs: MOMENTS.map(|m| builtin::sequence(m, segments)),
+        }
+    }
+
+    /// Per moment the active set's first usable sequence, else the built-in one. A library built
+    /// for another segment count plays the built-ins.
+    // shortcut: rotation, Generated and per-drop palettes are plan 6.
+    fn from_library(lib: &Library, segments: u8) -> Self {
+        let fits = lib.segments() == segments;
+        let set = lib.current_set();
+        let seqs = MOMENTS.map(|m| {
+            let ms = set.map(|s| match m {
+                Moment::Rhythm => &s.rhythm,
+                Moment::Calm => &s.calm,
+                Moment::BuildUp => &s.buildup,
+            });
+            ms.filter(|_| fits)
+                .and_then(|ms| {
+                    ms.sequences.iter().find_map(|r| match r {
+                        SeqRef::Id(id) => lib
+                            .sequences
+                            .iter()
+                            .find(|(i, q)| i == id && q.validate(segments).is_ok())
+                            .map(|(_, q)| q.clone()),
+                        SeqRef::Generated => None,
+                    })
+                })
+                .unwrap_or_else(|| builtin::sequence(m, segments))
+        });
+        Self {
+            palette: lib.current_palette(),
+            seqs,
+        }
+    }
+}
+
 pub struct Engine {
     cfg: EngineConfig,
     clock: ClockTracker,
     sched: Scheduler,
     control: MomentControl,
-    palette: Palette,
+    look: Look,
+    /// A saved library waits for the next bar start so no step is cut and nothing bursts.
+    pending: Option<Look>,
     playing: Option<Playing>,
     pos: Option<Position>,
     last_beat_us: Option<u64>,
@@ -68,7 +124,8 @@ impl Engine {
             clock: ClockTracker::new(cfg.phrase),
             sched: Scheduler::new(cfg.segments),
             control: MomentControl::new(),
-            palette: builtin::test_palette(),
+            look: Look::builtin(cfg.segments),
+            pending: None,
             playing: None,
             pos: None,
             last_beat_us: None,
@@ -146,6 +203,21 @@ impl Engine {
         }
     }
 
+    /// A stopped show uses the library at once; a running one from its next bar start.
+    pub fn set_library(&mut self, now_us: u64, lib: &Library) -> Vec<PaintCommand> {
+        let look = Look::from_library(lib, self.cfg.segments);
+        if self.clock.running() {
+            self.pending = Some(look);
+        } else {
+            self.look = look;
+            self.pending = None;
+            if self.cfg.lights_on {
+                self.plan_rest(now_us);
+            }
+        }
+        self.sched.due(now_us)
+    }
+
     pub fn strip_reconnected(&mut self) {
         self.sched.forget_sent();
         self.resend = true;
@@ -168,6 +240,14 @@ impl Engine {
             shown
         };
         let start = pos.beat == 0 && !pos.half;
+        // The step planned on a half pulse of beat 4 is the first of the next bar.
+        if let Some(look) = self
+            .pending
+            .take_if(|_| start || (pos.half && pos.beat_in_bar == 4))
+        {
+            self.look = look;
+            self.playing = None;
+        }
         // Beat 1 cannot be announced: its step goes out now and the next position is counted too.
         // shortcut: a half-beat first step is skipped on Start; only a forced Build-up has one.
         let first = start.then(|| self.step_scene(moment, true));
@@ -191,7 +271,7 @@ impl Engine {
 
     /// Counts one half beat of the sequence for `moment`: that step's scene, and whether it is new.
     fn step_scene(&mut self, moment: Moment, restart: bool) -> (Option<Vec<Colour>>, bool) {
-        let sequence = builtin::sequence(moment, self.cfg.segments);
+        let sequence = &self.look.seqs[slot(moment)];
         let first_len = |idx: usize| sequence.steps.get(idx).map_or(1, |s| s.len.half_beats());
         let (idx, left) = match self.playing {
             Some(p) if !restart && p.moment == moment => {
@@ -235,7 +315,7 @@ impl Engine {
 
     fn scene(&self, roles: impl Iterator<Item = Role>) -> Vec<Colour> {
         roles
-            .map(|r| resolve(r, &self.palette, self.cfg.brightness_pct))
+            .map(|r| resolve(r, &self.look.palette, self.cfg.brightness_pct))
             .collect()
     }
 }

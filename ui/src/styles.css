@@ -238,3 +238,37 @@ select {
   margin-top: 8px;
   color: var(--red);
 }
+
+.look {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.step {
+  padding: 0 6px;
+}
+
+.look .row-text {
+  flex: 1;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swatches {
+  display: flex;
+  gap: 2px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+}
+
+.open-editor {
+  align-self: flex-start;
+}

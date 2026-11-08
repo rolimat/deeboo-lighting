@@ -6,17 +6,18 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync
 use std::time::Duration;
 
 use light_core::clock::PhraseBars;
-use light_core::detect::{BandAnalyzer, Moment, MomentDetector};
+use light_core::detect::{BandAnalyzer, BeatFeatures, DetectorParams, Moment, MomentDetector};
 use light_core::engine::{Engine, EngineConfig, EngineStatus, UiCommand};
+use light_core::library::Library;
 use light_core::paint::PaintCommand;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::audio::{AudioError, AudioIn, RING_SECONDS};
 use crate::clock::MonoClock;
-use crate::commands::{AppState, AudioStatus, MidiStatus, Status, StripStatus};
+use crate::commands::{AppState, AudioStatus, MidiStatus, Selection, Status, StripStatus};
 use crate::midi::{MidiEvent, MidiIn, QUEUE};
-use crate::settings::{Settings, sensitivity_params};
+use crate::settings::{Settings, detector_params};
 use crate::strip::{self, StripMsg};
 use crate::strip_store::StripConfig;
 use crate::tray::{TrayInput, TrayView, tray_deadline, tray_view};
@@ -26,7 +27,13 @@ pub enum Input {
     Midi(MidiEvent),
     Ui(UiCommand),
     Settings(Settings),
+    /// The editor saved the library (already validated and persisted).
+    Library(Box<Library>),
     PopoverShown,
+    /// The editor's Detection section opened (`true`) or closed / the window went away (`false`).
+    DetectionWatch(bool),
+    /// The editor asks to flash one segment (1-based) so the user can tell which piece it is.
+    Identify(u8),
     StripState(StripStatus),
     /// The wizard saved a new strip file: reconnect with it.
     StripChanged(StripConfig),
@@ -83,13 +90,13 @@ struct Detect {
 
 impl Detect {
     #[allow(clippy::cast_precision_loss)] // rates are far below 2^24
-    fn new(rate: u32, sensitivity: u8) -> Self {
+    fn new(rate: u32, params: DetectorParams) -> Self {
         let bands = BandAnalyzer::new(rate);
         let hop_s = bands.hop_len() as f32 / rate as f32;
         Self {
             rate,
             bands,
-            moment: MomentDetector::new(sensitivity_params(sensitivity), hop_s),
+            moment: MomentDetector::new(params, hop_s),
         }
     }
 }
@@ -100,6 +107,7 @@ fn detect_beat<A: AudioPort>(
     detect: &mut Option<Detect>,
     buf: &mut Vec<f32>,
     level_db: &mut Option<f32>,
+    features: &mut Option<(BeatFeatures, Moment)>,
 ) -> Option<Moment> {
     let d = detect.as_mut()?;
     buf.clear();
@@ -110,13 +118,39 @@ fn detect_beat<A: AudioPort>(
     let peak = buf.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
     *level_db = Some((20.0 * peak.max(1e-6).log10()).round());
     d.bands.process(buf, &mut |f| d.moment.push(f));
-    Some(d.moment.on_beat().0)
+    let (moment, f) = d.moment.on_beat();
+    *features = f.map(|f| (f, moment));
+    Some(moment)
 }
+
+/// What the Detection panel draws for one beat; sent only while it is open.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectorEvent {
+    pub kick_db: f32,
+    pub sub_db: f32,
+    pub high_db: f32,
+    pub kick_ref_db: f32,
+    pub sub_ref_db: f32,
+    pub high_ref_db: f32,
+    pub moment: Moment,
+}
+
+type MeterSink = Box<dyn FnMut(&DetectorEvent)>;
+
+/// The editor gets at most 15 detector events per second.
+const MIN_METER_GAP_US: u64 = 66_667;
+const DETECTOR_EVENT: &str = "detector";
+
+/// How long an identify flash stays before the scene is repainted.
+const IDENTIFY_FLASH_US: u64 = 1_200_000;
+/// A new identify inside this window is dropped: the strip loses back-to-back messages.
+const IDENTIFY_GATE_US: u64 = 300_000;
 
 /// The popover gets at most 30 updates per second.
 const MIN_PUBLISH_GAP_US: u64 = 33_333;
 /// Segments of the factory strip, used until a strip file says otherwise.
-const DEFAULT_SEGMENTS: u8 = 10;
+pub const DEFAULT_SEGMENTS: u8 = 10;
 const STATUS_EVENT: &str = "status";
 
 /// Decides when a status update goes to the popover: only while it is visible, coalesced.
@@ -215,7 +249,20 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     source_present: bool,
     /// The wizard holds the strip: the engine keeps running but sends nothing.
     strip_paused: bool,
+    /// The saved library: kept to rebuild the engine's look after a segment-count change.
+    library: Option<Library>,
+    /// When the last identify flash started; the scene is repainted `IDENTIFY_FLASH_US` later.
+    identify_at: Option<u64>,
+    /// The editor's Detection section is open: only then are `detector` events produced.
+    watching: bool,
+    meter_sink: Option<MeterSink>,
+    meter_last_us: Option<u64>,
+    /// Told the strip state on every change, popover visible or not (the editor reads it).
+    strip_sink: Option<StripSink>,
+    strip_told: Option<StripStatus>,
 }
+
+type StripSink = Box<dyn FnMut(&StripStatus)>;
 
 /// Paints the menu bar: called with the previous and the new view, only when they differ.
 type TraySink = Box<dyn FnMut(Option<&TrayView>, &TrayView)>;
@@ -266,6 +313,13 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             tray_due: None,
             source_present,
             strip_paused: false,
+            library: None,
+            identify_at: None,
+            watching: false,
+            meter_sink: None,
+            meter_last_us: None,
+            strip_sink: None,
+            strip_told: None,
         };
         core.replan(now_us);
         core
@@ -313,6 +367,10 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 },
                 _ => AudioStatus::default(),
             },
+            selection: self.library.as_ref().map_or_else(
+                || Selection::of(&Library::builtin(self.segments)),
+                Selection::of,
+            ),
         }
     }
 
@@ -326,7 +384,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             match self.audio.open(self.settings.audio_input.as_deref()) {
                 Ok(info) => {
                     if self.detect.as_ref().is_none_or(|d| d.rate != info.rate) {
-                        self.detect = Some(Detect::new(info.rate, self.settings.sensitivity));
+                        self.detect = Some(Detect::new(info.rate, detector_params(&self.settings)));
                     }
                     self.buf = Vec::with_capacity((info.rate * RING_SECONDS) as usize);
                     self.capture = Capture::Open(info.name);
@@ -352,6 +410,48 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     pub fn set_tray(&mut self, sink: TraySink, now_us: u64) {
         self.tray = Some(TrayLink { sink, shown: None });
         self.update_tray(now_us);
+    }
+
+    pub fn set_strip_sink(&mut self, sink: StripSink) {
+        self.strip_sink = Some(sink);
+        self.tell_strip();
+    }
+
+    fn tell_strip(&mut self) {
+        if let Some(sink) = &mut self.strip_sink
+            && self.strip_told.as_ref() != Some(&self.strip)
+        {
+            sink(&self.strip);
+            self.strip_told = Some(self.strip.clone());
+        }
+    }
+
+    pub fn set_meters(&mut self, sink: MeterSink) {
+        self.meter_sink = Some(sink);
+    }
+
+    /// Sends this beat's features to the editor if it is watching and the rate cap allows.
+    fn meter(&mut self, f: &BeatFeatures, moment: Moment, now_us: u64) {
+        if !self.watching
+            || self
+                .meter_last_us
+                .is_some_and(|t| now_us < t + MIN_METER_GAP_US)
+        {
+            return;
+        }
+        let Some(sink) = &mut self.meter_sink else {
+            return;
+        };
+        self.meter_last_us = Some(now_us);
+        sink(&DetectorEvent {
+            kick_db: f.kick_db,
+            sub_db: f.sub_db,
+            high_db: f.high_db,
+            kick_ref_db: f.kick_ref_db,
+            sub_ref_db: f.sub_ref_db,
+            high_ref_db: f.high_ref_db,
+            moment,
+        });
     }
 
     fn midi_ok(&self) -> bool {
@@ -394,15 +494,20 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     pub fn handle(&mut self, input: Input, now_us: u64) -> bool {
         match input {
             Input::Midi(e) => {
+                let mut features = None;
                 let cmds = self.engine.on_midi(e.at_us, e.status, || {
                     detect_beat(
                         &mut self.audio,
                         &mut self.detect,
                         &mut self.buf,
                         &mut self.level_db,
+                        &mut features,
                     )
                 });
                 self.flush(cmds);
+                if let Some((f, moment)) = features {
+                    self.meter(&f, moment, now_us);
+                }
             }
             Input::Ui(cmd) => {
                 // A rejected key is not retried: only pairing again helps.
@@ -419,11 +524,13 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 self.publisher.touch();
             }
             Input::Settings(new) => self.apply_settings(new, now_us),
+            Input::DetectionWatch(on) => self.watching = on,
             Input::PopoverShown => {
                 log::debug!("MIDI messages dropped so far: {}", self.midi.dropped());
                 self.check_midi_source();
                 self.publisher.touch();
             }
+            Input::Identify(segment) => self.identify(segment, now_us),
             Input::StripState(_) if self.strip_paused => {
                 // A report from before the pause: the task will say so again after the resume.
             }
@@ -436,7 +543,13 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 }
                 self.publisher.touch();
             }
-            Input::StripChanged(cfg) => self.strip_changed(cfg),
+            Input::Library(lib) => {
+                let cmds = self.engine.set_library(now_us, &lib);
+                self.flush(cmds);
+                self.library = Some(*lib);
+                self.publisher.touch();
+            }
+            Input::StripChanged(cfg) => self.strip_changed(cfg, now_us),
             Input::StripPause(pause) => {
                 self.strip_paused = pause;
                 if pause {
@@ -453,9 +566,22 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         true
     }
 
+    fn identify(&mut self, segment: u8, now_us: u64) {
+        let ready = matches!(self.strip, StripStatus::Connected { .. })
+            && (1..=self.segments).contains(&segment)
+            && self
+                .identify_at
+                .is_none_or(|t| now_us >= t + IDENTIFY_GATE_US);
+        let Some(tx) = self.strip_tx.as_ref().filter(|_| ready) else {
+            return;
+        };
+        let _ = tx.send(StripMsg::Identify(segment));
+        self.identify_at = Some(now_us);
+    }
+
     /// Re-pairing: the strip task reconnects; the scene is resent when it reports `Connected`.
     /// A different segment count cannot keep the old plan, so the engine starts over.
-    fn strip_changed(&mut self, cfg: StripConfig) {
+    fn strip_changed(&mut self, cfg: StripConfig, now_us: u64) {
         if cfg.segments != self.segments {
             log::warn!(
                 "segment count changed from {} to {}",
@@ -464,6 +590,11 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             );
             self.segments = cfg.segments;
             self.engine = engine_for(&self.settings, cfg.segments, self.last.lights_on);
+            if let Some(lib) = &self.library {
+                // A fresh engine is not playing: the library (or its fallback) applies at once.
+                let cmds = self.engine.set_library(now_us, lib);
+                self.flush(cmds);
+            }
         }
         self.strip = StripStatus::Connecting;
         if let Some(tx) = &self.strip_tx {
@@ -514,12 +645,14 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             self.capture = Capture::Closed;
             self.level_db = None;
         }
+        let thresholds = |s: &Settings| (s.sensitivity, s.calm_kick_db, s.calm_high_db, s.riser_db);
         if let (true, Some(d)) = (
-            new.sensitivity != self.settings.sensitivity,
+            thresholds(&new) != thresholds(&self.settings),
             &mut self.detect,
         ) {
-            let p = sensitivity_params(new.sensitivity);
-            d.moment.set_thresholds(p.calm_kick_db, p.calm_high_db);
+            let p = detector_params(&new);
+            d.moment
+                .set_thresholds(p.calm_kick_db, p.calm_high_db, p.riser_db);
         }
         self.settings = new;
         self.flush(cmds);
@@ -532,6 +665,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             self.engine.next_deadline_us(),
             self.publisher.deadline(),
             self.tray_due,
+            self.identify_at.map(|t| t + IDENTIFY_FLASH_US),
         ]
         .into_iter()
         .flatten()
@@ -549,11 +683,21 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             let cmds = self.engine.on_deadline(now_us);
             self.flush(cmds);
         }
+        if self
+            .identify_at
+            .is_some_and(|t| t + IDENTIFY_FLASH_US <= now_us)
+        {
+            // The flash overwrote the scene: forget what was sent so the plan repaints all of it.
+            self.identify_at = None;
+            self.engine.strip_reconnected();
+            self.replan(now_us);
+        }
         let now = snapshot(&self.engine);
         if now != self.last {
             self.last = now;
             self.publisher.touch();
         }
+        self.tell_strip();
         self.sync_capture();
         self.update_tray(now_us);
         if self.publisher.due(now_us) {
@@ -613,7 +757,12 @@ pub struct RuntimeHandle {
 }
 
 /// Starts the engine thread (and the strip task when there is a strip).
-pub fn spawn(app: AppHandle, settings: Settings, strip: Option<StripConfig>) -> RuntimeHandle {
+pub fn spawn(
+    app: AppHandle,
+    settings: Settings,
+    strip: Option<StripConfig>,
+    library: Library,
+) -> RuntimeHandle {
     let (tx, rx) = sync_channel(QUEUE);
     let clock = MonoClock::new();
     let segments = strip.as_ref().map_or(DEFAULT_SEGMENTS, |c| c.segments);
@@ -648,6 +797,17 @@ pub fn spawn(app: AppHandle, settings: Settings, strip: Option<StripConfig>) -> 
                 emit,
                 clock.now_us(),
             );
+            let strip_app = app.clone();
+            core.set_strip_sink(Box::new(move |s| {
+                strip_app.state::<AppState>().set_strip(s.clone());
+            }));
+            let meter_app = app.clone();
+            core.set_meters(Box::new(move |e| {
+                if let Err(ee) = meter_app.emit_to("editor", DETECTOR_EVENT, e) {
+                    log::debug!("detector event not delivered: {ee}");
+                }
+            }));
+            core.handle(Input::Library(Box::new(library)), clock.now_us());
             app.state::<AppState>().set_status(core.status());
             let tray_app = app.clone();
             core.set_tray(
@@ -761,6 +921,22 @@ mod tests {
     }
 
     #[test]
+    fn strip_changes_reach_the_sink_even_while_the_popover_is_hidden() {
+        let (mut c, _rx, _) = core(true);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let s = Rc::clone(&seen);
+        c.set_visible(false);
+        c.set_strip_sink(Box::new(move |st| s.borrow_mut().push(st.clone())));
+        c.handle(Input::StripState(connected()), 1_000);
+        c.handle(Input::StripState(connected()), 2_000);
+        c.handle(Input::StripState(StripStatus::Error), 3_000);
+        assert_eq!(
+            *seen.borrow(),
+            [StripStatus::Connecting, connected(), StripStatus::Error]
+        );
+    }
+
+    #[test]
     fn deadline_is_none_when_idle() {
         let (mut c, _rx, _) = core(false);
         c.set_visible(false);
@@ -866,6 +1042,53 @@ mod tests {
             c.tick(d);
         }
         out
+    }
+
+    #[test]
+    fn library_input_reaches_the_popover_status() {
+        let (mut c, _rx, _) = core(false);
+        assert_eq!(c.status().selection.set, "Default");
+        let mut lib = Library::builtin(10);
+        lib.sets[0].name = "Club".into();
+        c.handle(Input::Library(Box::new(lib.clone())), 1_000);
+        assert_eq!(c.library, Some(lib));
+        assert_eq!(c.status().selection.set, "Club");
+    }
+
+    #[test]
+    fn identify_flashes_one_segment_then_restores_the_scene() {
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::StripState(connected()), 1_000);
+        let _ = painted(&mut c, &mut rx);
+        c.handle(Input::Identify(3), 2_000_000);
+        assert!(matches!(rx.try_recv(), Ok(StripMsg::Identify(3))));
+        assert_eq!(c.deadline(), Some(2_000_000 + IDENTIFY_FLASH_US));
+        // Too soon after the last one: dropped, the strip loses back-to-back messages.
+        c.handle(Input::Identify(4), 2_100_000);
+        assert!(rx.try_recv().is_err());
+        c.tick(2_000_000 + IDENTIFY_FLASH_US);
+        assert!(
+            !painted(&mut c, &mut rx).is_empty(),
+            "full scene repainted after the flash"
+        );
+        assert_eq!(c.deadline(), None);
+    }
+
+    #[test]
+    fn identify_is_ignored_off_strip_or_out_of_range() {
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::Identify(3), 1_000);
+        assert!(rx.try_recv().is_err(), "not connected yet");
+        c.handle(Input::StripState(connected()), 2_000);
+        let _ = painted(&mut c, &mut rx);
+        for bad in [0, 11, 255] {
+            c.handle(Input::Identify(bad), 3_000_000);
+        }
+        assert!(rx.try_recv().is_err());
+        c.handle(Input::StripPause(true), 4_000_000);
+        let _ = rx.try_recv();
+        c.handle(Input::Identify(3), 5_000_000);
+        assert!(rx.try_recv().is_err(), "paused");
     }
 
     #[test]
@@ -1082,7 +1305,7 @@ mod tests {
         assert_eq!(*opens.borrow(), 1, "no retry storm while playing");
         let mut buf = Vec::new();
         assert_eq!(
-            detect_beat(&mut c.audio, &mut None, &mut buf, &mut None),
+            detect_beat(&mut c.audio, &mut None, &mut buf, &mut None, &mut None),
             None
         );
     }
@@ -1104,6 +1327,56 @@ mod tests {
         }
         assert_eq!(c.level_db, Some(-6.0));
         assert_eq!(c.status().audio.level_db, Some(-6.0));
+    }
+
+    /// One MIDI clock tick per `step_us` with a loud block of audio before each; returns the events.
+    fn run_ticks(c: &mut TestCore, ticks: std::ops::Range<u64>, step_us: u64) {
+        for i in ticks {
+            let at = i * step_us;
+            c.audio.samples = vec![0.5; 4_800];
+            c.handle(
+                Input::Midi(MidiEvent {
+                    at_us: at,
+                    status: 0xF8,
+                }),
+                at,
+            );
+        }
+    }
+
+    fn meter_core() -> (TestCore, Rc<RefCell<Vec<DetectorEvent>>>) {
+        let (mut c, _rx, _) = core(false);
+        start(&mut c);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let s = Rc::clone(&seen);
+        c.set_meters(Box::new(move |e| s.borrow_mut().push(e.clone())));
+        (c, seen)
+    }
+
+    #[test]
+    fn meters_emit_only_while_detection_open() {
+        let (mut c, seen) = meter_core();
+        run_ticks(&mut c, 49..121, 20_000);
+        assert!(seen.borrow().is_empty(), "not watching: zero events");
+        c.handle(Input::DetectionWatch(true), 2_500_000);
+        run_ticks(&mut c, 121..169, 20_000);
+        let n = seen.borrow().len();
+        assert!(n >= 1, "watching: one event per beat");
+        let e = seen.borrow()[0].clone();
+        assert!(e.kick_db.is_finite() && e.kick_ref_db.is_finite());
+        c.handle(Input::DetectionWatch(false), 3_500_000);
+        run_ticks(&mut c, 169..241, 20_000);
+        assert_eq!(seen.borrow().len(), n, "closed: zero events");
+    }
+
+    #[test]
+    fn meters_are_capped_at_15_hz() {
+        let (mut c, seen) = meter_core();
+        c.handle(Input::DetectionWatch(true), 1_000_000);
+        // Beats 24 ms apart (a 1 ms tick) for about one second.
+        run_ticks(&mut c, 1_000..2_000, 1_000);
+        let n = seen.borrow().len();
+        assert!((10..=16).contains(&n), "{n}");
     }
 
     #[test]

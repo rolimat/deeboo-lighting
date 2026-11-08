@@ -3,6 +3,8 @@ use crate::detect::Moment;
 use crate::paint::Hsv;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum Role {
     Principal,
     Contraste,
@@ -12,6 +14,8 @@ pub enum Role {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct Palette {
     pub name: String,
     pub principal: Hsv,
@@ -20,6 +24,8 @@ pub struct Palette {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum StepLen {
     Half,
     One,
@@ -40,6 +46,8 @@ impl StepLen {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct Step {
     pub len: StepLen,
     pub roles: Vec<Role>,
@@ -56,6 +64,8 @@ pub enum ModelError {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct Sequence {
     pub name: String,
     pub moment: Moment,

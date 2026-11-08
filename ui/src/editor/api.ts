@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { StripStatus, Status } from "../api";
+import type { StripStatus, Status, Settings, MomentName } from "../api";
 
 export interface QrMatrix {
   size: number;
@@ -29,15 +29,104 @@ export type WizardState =
   | { kind: "saved"; device: DeviceDto; segments: number }
   | { kind: "failed"; step: WizardStep; message: string };
 
+export type Interval = { beats: number } | { bars: number } | { phrases: number };
+export type SeqRef = { id: number } | "generated";
+export interface Piece {
+  x: number;
+  y: number;
+  angle: 0 | 90 | 180 | 270;
+  len: 1 | 2 | 3 | 4;
+}
+export interface Hsv {
+  h: number;
+  s: number;
+  v: number;
+}
+export interface Palette {
+  name: string;
+  principal: Hsv;
+  contraste: Hsv;
+  suave: Hsv;
+}
+export interface Step {
+  len: string;
+  roles: string[];
+}
+export interface Sequence {
+  name: string;
+  moment: string;
+  steps: Step[];
+}
+export interface MomentSet {
+  sequences: SeqRef[];
+  palettes: number[];
+  order: "inOrder" | "random" | "fixed";
+  interval: Interval;
+}
+export interface LibrarySet {
+  id: number;
+  name: string;
+  rhythm: MomentSet;
+  calm: MomentSet;
+  buildup: MomentSet;
+}
+/**
+ * Mirrors `light_core::library::Library`. Ids are assigned by Rust: an id the saved library does not
+ * have is a client-side handle for a new entry (use any unused number, e.g. a counter from 1_000_000);
+ * Rust gives it the next free id and rewrites every reference to it. `saveLibrary` returns the
+ * library with the real ids.
+ */
+export interface Library {
+  schemaVersion: 1;
+  shape: { pieces: Piece[] };
+  palettes: [number, Palette][];
+  sequences: [number, Sequence][];
+  sets: LibrarySet[];
+  activeSet: number;
+  activePalette: number | null;
+}
+
+export interface Thresholds {
+  calmKickDb: number;
+  calmHighDb: number;
+  riserDb: number;
+}
+/** Mirrors `DetectorEvent` in `src-tauri/src/runtime.rs`: one beat, band levels in dB. */
+export interface DetectorEvent {
+  kickDb: number;
+  subDb: number;
+  highDb: number;
+  kickRefDb: number;
+  subRefDb: number;
+  highRefDb: number;
+  moment: MomentName;
+}
+
 /** The editor's only door to Rust; components never import `@tauri-apps/api`. */
 export const api = {
   getStatus: async (): Promise<StripStatus> => (await invoke<Status>("get_status")).strip,
+  getLibrary: (): Promise<Library> => invoke("get_library"),
+  /** Rejects with a short message; the previous library is kept. */
+  saveLibrary: (library: Library): Promise<Library> => invoke("save_library", { library }),
+  /** Messages each step costs to reach from the previous one (the first wraps from the last). */
+  messageCounts: (sequence: Sequence, paletteId: number): Promise<number[]> =>
+    invoke("message_counts", { sequence, paletteId }),
   wizardStart: (userCode: string): Promise<void> => invoke("wizard_start", { userCode }),
   wizardChoose: (deviceId: string): Promise<void> => invoke("wizard_choose", { deviceId }),
   wizardRetry: (): Promise<void> => invoke("wizard_retry"),
   wizardCancel: (): Promise<void> => invoke("wizard_cancel"),
   stripIdentify: (segment: number): Promise<void> => invoke("strip_identify", { segment }),
+  /** Flashes a segment (1-based) through the app's own strip connection; rejects with a short message. */
+  identifySegment: (segment: number): Promise<void> => invoke("identify_segment", { segment }),
   wizardSave: (): Promise<void> => invoke("wizard_save"),
+  getSettings: (): Promise<Settings> => invoke("get_settings"),
+  /** The editor's Detection section is open (`true`) or closed: `detector` events flow only while open. */
+  detectionWatch: (on: boolean): Promise<void> => invoke("detection_watch", { on }),
+  /** Whole dB; rejects with a short message when out of range. */
+  setDetectionThresholds: (thresholds: Thresholds): Promise<Settings> =>
+    invoke("set_detection_thresholds", { thresholds }),
+  onDetector: (cb: (e: DetectorEvent) => void): Promise<UnlistenFn> =>
+    listen<DetectorEvent>("detector", (e) => cb(e.payload)),
   onWizard: (cb: (state: WizardState) => void): Promise<UnlistenFn> =>
     listen<WizardState>("wizard", (e) => cb(e.payload)),
 };

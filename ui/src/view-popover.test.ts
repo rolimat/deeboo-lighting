@@ -9,9 +9,11 @@ vi.mock("./api", () => ({
     listAudioInputs: vi.fn(),
     quit: vi.fn(),
     openEditor: vi.fn(),
+    selectSet: vi.fn(),
+    selectPalette: vi.fn(),
   },
 }));
-import { api, type Settings, type Status } from "./api";
+import { api, type Selection, type Settings, type Status } from "./api";
 import { mountPopover } from "./view-popover";
 
 const settings: Settings = {
@@ -22,6 +24,9 @@ const settings: Settings = {
   brightnessPct: 80,
   leadMs: 0,
   lightsOn: true,
+  calmKickDb: 16,
+  calmHighDb: 12,
+  riserDb: 7,
 };
 const base: Status = {
   strip: { kind: "notConfigured" },
@@ -36,6 +41,17 @@ const base: Status = {
   lightsOn: true,
   midi: { source: null, ok: true },
   audio: { ok: false },
+  selection: {
+    set: "Default",
+    palette: {
+      name: "Test",
+      colours: [
+        { h: 0, s: 1000, v: 1000 },
+        { h: 240, s: 1000, v: 1000 },
+        { h: 120, s: 350, v: 1000 },
+      ],
+    },
+  },
 };
 const st = (p: Partial<Status>): Status => ({ ...base, ...p });
 
@@ -250,6 +266,15 @@ it("copy_is_english", async () => {
       "Build-up",
       "Auto ✓",
       "drop predicted",
+      "Set",
+      "◀",
+      "Default",
+      "▶",
+      "Palette",
+      "◀",
+      "Test",
+      "▶",
+      "Open editor…",
       "Brightness",
       "MIDI · Deeboo Lighting In",
       "Strip · not connected",
@@ -275,4 +300,48 @@ it("copy_is_english", async () => {
       "Quit",
     ]
   `);
+});
+
+it("set_and_palette_rows_cycle", async () => {
+  const next: Selection = {
+    set: "Club",
+    palette: {
+      name: "Sunset",
+      colours: [
+        { h: 30, s: 1000, v: 1000 },
+        { h: 200, s: 500, v: 800 },
+        { h: 0, s: 0, v: 1000 },
+      ],
+    },
+  };
+  vi.mocked(api.selectSet).mockResolvedValue(next);
+  vi.mocked(api.selectPalette).mockResolvedValue(next);
+  view.update(base);
+  expect(text(".row-set .row-text")).toBe("Default");
+  expect(text(".row-palette .row-text")).toBe("Test");
+  const sw = [...root.querySelectorAll<HTMLElement>(".swatch")];
+  expect(sw.map((x) => x.style.backgroundColor)).toEqual([
+    "rgb(255, 0, 0)",
+    "rgb(0, 0, 255)",
+    "rgb(166, 255, 166)",
+  ]);
+  byLabel("Next set").click();
+  expect(api.selectSet).toHaveBeenCalledWith(1);
+  byLabel("Previous set").click();
+  expect(api.selectSet).toHaveBeenCalledWith(-1);
+  byLabel("Next palette").click();
+  expect(api.selectPalette).toHaveBeenCalledWith(1);
+  byLabel("Previous palette").click();
+  expect(api.selectPalette).toHaveBeenCalledWith(-1);
+  // The command's answer repaints at once; the next status push says the same.
+  await flush();
+  expect(text(".row-set .row-text")).toBe("Club");
+  expect(text(".row-palette .row-text")).toBe("Sunset");
+});
+
+it("open_editor_button", () => {
+  const b = byLabel("Open editor");
+  expect(b.textContent).toBe("Open editor…");
+  b.click();
+  expect(api.openEditor).toHaveBeenCalledWith("strip");
 });

@@ -5,6 +5,7 @@ import { StepChoose } from "./StepChoose";
 import { StepIdentify } from "./StepIdentify";
 import { StepSearch } from "./StepSearch";
 import { StepSegments } from "./StepSegments";
+import { ShapeEditor } from "./ShapeEditor";
 import { StepUserCode } from "./StepUserCode";
 
 /** Fire and forget: a rejected command must not crash the view; Rust re-emits the real state. */
@@ -83,7 +84,12 @@ function Step({ state }: { state: WizardState }) {
         />
       );
     case "saved":
-      return <p>{`Connected: ${state.device.name} (${state.segments} segments).`}</p>;
+      return (
+        <div class="space-y-4">
+          <p>{`Connected: ${state.device.name} (${state.segments} segments).`}</p>
+          <ShapeEditor segments={state.segments} />
+        </div>
+      );
     case "failed":
       return (
         <div class="space-y-3">

@@ -27,6 +27,11 @@ Real MIDI, audio and the strip are never used in automated tests; they are the m
 ## Performance test
 Analysing 10 min of synthetic 48 kHz audio must take < 1 s on one thread (spec §13). Run it in CI with a x3 margin.
 
+## Generated fixtures
+`ui/src/editor/sequences/player-fixture.json` is what the real engine shows (UI simulation must match). The Rust test
+`crates/light-core/tests/player_fixture.rs` fails on drift; regenerate with
+`UPDATE_FIXTURES=1 cargo test -p light-core --test player_fixture` (in Docker) and commit the JSON.
+
 ## Naming
 `snake_case_behaviour` stating the outcome, e.g. `pencil_red_on_odd_segments_matches_fixture`,
 `second_command_is_never_concatenated`. One behaviour per test.

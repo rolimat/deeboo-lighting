@@ -401,6 +401,8 @@ pub enum StripMsg {
     /// `true`: drop the connection and stay away (the wizard needs the strip, which accepts one
     /// LAN client); `false`: connect again.
     Pause(bool),
+    /// Flash one segment white (1-based, already checked against the segment count).
+    Identify(u8),
 }
 
 /// The status a failed connection shows: a rejected key and a missing ID get their own.
@@ -423,7 +425,7 @@ async fn next_control(rx: &mut UnboundedReceiver<StripMsg>) -> Option<Control> {
         match rx.recv().await? {
             StripMsg::Configure(c) => return Some(Control::Configure(c)),
             StripMsg::Pause(p) => return Some(Control::Pause(p)),
-            StripMsg::Paint(_) | StripMsg::Connect => {}
+            StripMsg::Paint(_) | StripMsg::Connect | StripMsg::Identify(_) => {}
         }
     }
 }
@@ -485,7 +487,7 @@ pub async fn run<P, Fut>(
                         match m {
                             StripMsg::Configure(new) => newer = Some(new),
                             StripMsg::Pause(p) => paused = p,
-                            StripMsg::Paint(_) | StripMsg::Connect => {}
+                            StripMsg::Paint(_) | StripMsg::Connect | StripMsg::Identify(_) => {}
                         }
                     }
                     let restart = newer.is_some() || paused;
@@ -526,6 +528,13 @@ pub async fn run<P, Fut>(
                 (Some(p), StripMsg::Paint(cmd)) => {
                     if let Err(e) = p.paint(c.segments, &cmd).await {
                         log::warn!("strip paint failed: {e}");
+                        report(StripStatus::Error);
+                        painter = None;
+                    }
+                }
+                (Some(p), StripMsg::Identify(n)) => {
+                    if let Err(e) = identify_via(p, n, c.segments).await {
+                        log::warn!("strip identify failed: {e}");
                         report(StripStatus::Error);
                         painter = None;
                     }

@@ -3,6 +3,8 @@
 use super::bands::HopFrame;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum Moment {
     Rhythm,
     Calm,
@@ -275,10 +277,11 @@ impl MomentDetector {
         self.moment
     }
 
-    /// Changes the Calm thresholds live; learned references and state stay.
-    pub fn set_thresholds(&mut self, calm_kick_db: f32, calm_high_db: f32) {
+    /// Changes the Calm and riser thresholds live; learned references, bar history and state stay.
+    pub fn set_thresholds(&mut self, calm_kick_db: f32, calm_high_db: f32, riser_db: f32) {
         self.p.calm_kick_db = calm_kick_db;
         self.p.calm_high_db = calm_high_db;
+        self.p.riser_db = riser_db;
     }
 
     pub fn reset(&mut self) {
@@ -604,9 +607,28 @@ mod tests {
         }
         let (learned, moment) = (d.kick_hist.buf.len(), d.moment());
         assert!(learned > 0);
-        d.set_thresholds(10.0, 6.0);
+        d.set_thresholds(10.0, 6.0, 5.0);
         assert_eq!((d.p.calm_kick_db, d.p.calm_high_db), (10.0, 6.0));
         assert_eq!((d.kick_hist.buf.len(), d.moment()), (learned, moment));
+    }
+
+    #[test]
+    fn set_thresholds_keeps_history_for_riser() {
+        let lens = beats(128.0, 24);
+        let sig = synth(&lens, |_| true, |_| true, riser_hats(0.0));
+        let mut a = BandAnalyzer::new(FS);
+        let mut d = MomentDetector::new(DetectorParams::default(), 0.0058);
+        let mut pos = 0;
+        for &len in &lens {
+            a.process(&sig[pos..pos + len], &mut |f| d.push(f));
+            pos += len;
+            d.on_beat();
+        }
+        let bars = d.bars.buf.clone();
+        assert_ne!(bars, Vec::<f32>::new());
+        d.set_thresholds(16.0, 12.0, 3.0);
+        assert_eq!(d.p.riser_db, 3.0);
+        assert_eq!(d.bars.buf, bars);
     }
 
     #[test]
