@@ -61,6 +61,9 @@ are short fills or risers inside a break that the three-bar rule does not accept
 - **Stale references.** References learn only in Rhythm. After a track whose kick is much louder, a quieter
   next track can sit more than `near_db` below the old reference and stay in Calm until a jump reaches it.
   The slow return (8 bars) is the safety valve; re-seeding the references there is future work.
+- **Cold start.** A beatless intro (no kick yet) shows Rhythm, the initial state. The first 8 beats that carry
+  features seed the references, so the detector needs about 8 beats of real music before its judgements mean
+  anything. The app should not reset the detector on Stop: it would throw away the learned references.
 - Fitted on one session of one genre at about 125 BPM.
 
 ## Single-song validation (rule set B1)
