@@ -295,6 +295,14 @@ impl AppState {
         Ok(new)
     }
 
+    /// Saves the Detection panel's thresholds (range-checked by `Settings::validate`); the rest of
+    /// the settings stay as they are.
+    fn set_thresholds(&self, t: Thresholds) -> Result<Settings, String> {
+        let mut s = self.settings();
+        (s.calm_kick_db, s.calm_high_db, s.riser_db) = (t.calm_kick_db, t.calm_high_db, t.riser_db);
+        self.save_settings(s)
+    }
+
     pub fn set_status(&self, s: Status) {
         *lock(&self.status) = s;
     }
@@ -350,6 +358,7 @@ impl AppState {
     /// Editor window closed: revoke and forget whatever the wizard holds.
     pub fn editor_closed(&self, emit: &Emit) {
         self.wizard.cancel(emit);
+        let _ = self.send(Input::DetectionWatch(false));
     }
 
     /// App exit: a running wizard is cancelled (its cloud session revoked) before the engine stops.
@@ -380,6 +389,34 @@ pub fn save_settings(
     let saved = state.save_settings(settings)?;
     state.send(Input::Settings(saved.clone()))?;
     Ok(saved)
+}
+
+/// The Detection panel's sliders (whole dB); serde rejects anything that is not an integer.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(clippy::struct_field_names)] // the wire names are the settings keys
+pub struct Thresholds {
+    calm_kick_db: u8,
+    calm_high_db: u8,
+    riser_db: u8,
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn set_detection_thresholds(
+    state: tauri::State<'_, AppState>,
+    thresholds: Thresholds,
+) -> Result<Settings, String> {
+    let saved = state.set_thresholds(thresholds)?;
+    state.send(Input::Settings(saved.clone()))?;
+    Ok(saved)
+}
+
+/// The editor's Detection section is open (`true`) or closed: meters flow only while open.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn detection_watch(state: tauri::State<'_, AppState>, on: bool) -> Result<(), String> {
+    state.send(Input::DetectionWatch(on))
 }
 
 #[tauri::command]
@@ -631,8 +668,48 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 20);
+        assert_eq!(commands.len(), 22);
         assert_eq!(granted, commands);
+    }
+
+    #[test]
+    fn thresholds_validated_and_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let state = AppState::default();
+        state.init_settings(path.clone());
+        let t = |kick, high, riser| Thresholds {
+            calm_kick_db: kick,
+            calm_high_db: high,
+            riser_db: riser,
+        };
+        let saved = state.set_thresholds(t(20, 10, 5)).unwrap();
+        assert_eq!(
+            (saved.calm_kick_db, saved.calm_high_db, saved.riser_db),
+            (20, 10, 5)
+        );
+        assert_eq!(settings::load(&path), saved, "persisted");
+        for bad in [
+            t(7, 12, 7),
+            t(31, 12, 7),
+            t(16, 5, 7),
+            t(16, 25, 7),
+            t(16, 12, 2),
+            t(16, 12, 16),
+        ] {
+            assert!(state.set_thresholds(bad).is_err());
+        }
+        assert_eq!(state.settings(), saved, "a refused value changes nothing");
+        assert!(
+            serde_json::from_str::<Thresholds>(
+                r#"{"calmKickDb":16.5,"calmHighDb":12,"riserDb":7}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<Thresholds>(r#"{"calmKickDb":"x","calmHighDb":12,"riserDb":7}"#)
+                .is_err()
+        );
     }
 
     #[test]

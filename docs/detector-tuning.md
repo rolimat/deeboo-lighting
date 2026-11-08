@@ -40,7 +40,11 @@ A *deficit* is a beat's level minus its reference.
 | Build-up to Rhythm: same drop rule, exempt from `min_state_beats` | `buildup_max_beats` off (removed in B1) | A drop must be immediate; timeouts cost more than they saved. |
 | No change within 4 beats of the last one | `min_state_beats` 4 | Avoids flicker. |
 
-Plan 3 maps a sensitivity setting onto `calm_kick_db` and `calm_high_db`; the rest are fixed.
+The editor's Detection panel stores `calm_kick_db` (8-30), `calm_high_db` (6-24) and `riser_db` (3-15) in
+settings (defaults 16 / 12 / 7, whole dB); the popover's sensitivity then shifts the two calm ones by `5 - s` dB
+(`settings::detector_params`); the rest are fixed. `MomentDetector::set_thresholds` applies all three live and keeps
+the learned references and the riser's bar history. While the panel is open the engine emits the `detector` event
+(per beat, at most 15 Hz) to the editor window; otherwise nothing is emitted.
 
 ## Scores (labels v2, Rust release probe)
 

@@ -113,6 +113,7 @@ mod tests {
             perms,
             [
                 "allow-get-status",
+                "allow-get-settings",
                 "allow-get-library",
                 "allow-save-library",
                 "allow-wizard-start",
@@ -123,6 +124,8 @@ mod tests {
                 "allow-identify-segment",
                 "allow-wizard-save",
                 "allow-message-counts",
+                "allow-detection-watch",
+                "allow-set-detection-thresholds",
                 "core:event:allow-listen",
                 "core:event:allow-unlisten"
             ]

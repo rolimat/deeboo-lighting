@@ -57,7 +57,9 @@ pub fn run() -> tauri::Result<()> {
             commands::strip_identify,
             commands::identify_segment,
             commands::wizard_save,
-            commands::message_counts
+            commands::message_counts,
+            commands::detection_watch,
+            commands::set_detection_thresholds
         ])
         .on_window_event(|window, event| {
             // Closing the editor mid-wizard must revoke the cloud session and drop the key.

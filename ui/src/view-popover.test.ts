@@ -24,6 +24,9 @@ const settings: Settings = {
   brightnessPct: 80,
   leadMs: 0,
   lightsOn: true,
+  calmKickDb: 16,
+  calmHighDb: 12,
+  riserDb: 7,
 };
 const base: Status = {
   strip: { kind: "notConfigured" },

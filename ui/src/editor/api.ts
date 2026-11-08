@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { StripStatus, Status } from "../api";
+import type { StripStatus, Status, Settings, MomentName } from "../api";
 
 export interface QrMatrix {
   size: number;
@@ -86,6 +86,22 @@ export interface Library {
   activePalette: number | null;
 }
 
+export interface Thresholds {
+  calmKickDb: number;
+  calmHighDb: number;
+  riserDb: number;
+}
+/** Mirrors `DetectorEvent` in `src-tauri/src/runtime.rs`: one beat, band levels in dB. */
+export interface DetectorEvent {
+  kickDb: number;
+  subDb: number;
+  highDb: number;
+  kickRefDb: number;
+  subRefDb: number;
+  highRefDb: number;
+  moment: MomentName;
+}
+
 /** The editor's only door to Rust; components never import `@tauri-apps/api`. */
 export const api = {
   getStatus: async (): Promise<StripStatus> => (await invoke<Status>("get_status")).strip,
@@ -103,6 +119,14 @@ export const api = {
   /** Flashes a segment (1-based) through the app's own strip connection; rejects with a short message. */
   identifySegment: (segment: number): Promise<void> => invoke("identify_segment", { segment }),
   wizardSave: (): Promise<void> => invoke("wizard_save"),
+  getSettings: (): Promise<Settings> => invoke("get_settings"),
+  /** The editor's Detection section is open (`true`) or closed: `detector` events flow only while open. */
+  detectionWatch: (on: boolean): Promise<void> => invoke("detection_watch", { on }),
+  /** Whole dB; rejects with a short message when out of range. */
+  setDetectionThresholds: (thresholds: Thresholds): Promise<Settings> =>
+    invoke("set_detection_thresholds", { thresholds }),
+  onDetector: (cb: (e: DetectorEvent) => void): Promise<UnlistenFn> =>
+    listen<DetectorEvent>("detector", (e) => cb(e.payload)),
   onWizard: (cb: (state: WizardState) => void): Promise<UnlistenFn> =>
     listen<WizardState>("wizard", (e) => cb(e.payload)),
 };

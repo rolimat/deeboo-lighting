@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-detection-thresholds"
+description = "Enables the set_detection_thresholds command without any pre-configured scope."
+commands.allow = ["set_detection_thresholds"]
+
+[[permission]]
+identifier = "deny-set-detection-thresholds"
+description = "Denies the set_detection_thresholds command without any pre-configured scope."
+commands.deny = ["set_detection_thresholds"]

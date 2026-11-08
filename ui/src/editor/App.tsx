@@ -5,6 +5,7 @@ import { PaletteEditor } from "./palettes/PaletteEditor";
 import { SetEditor } from "./sets/SetEditor";
 import { SequenceList } from "./sequences/SequenceList";
 import { ShapeEditor } from "./strip/ShapeEditor";
+import { DetectionPanel } from "./detection/DetectionPanel";
 import { Wizard } from "./strip/Wizard";
 
 function describe(s: StripStatus | null): string {
@@ -23,14 +24,16 @@ function describe(s: StripStatus | null): string {
 export function App() {
   const [strip, setStrip] = useState<StripStatus | null>(null);
   const [repair, setRepair] = useState(false);
-  const [section, setSection] = useState<"Strip" | "Sequences" | "Palettes" | "Sets">("Strip");
+  const [section, setSection] = useState<"Strip" | "Sequences" | "Palettes" | "Sets" | "Detection">(
+    "Strip",
+  );
   useEffect(() => {
     api.getStatus().then(setStrip, () => setStrip({ kind: "error" }));
   }, []);
   return (
     <div class="flex h-screen">
       <nav class="w-40 space-y-1 border-r border-border p-3" aria-label="Sections">
-        {(["Strip", "Sequences", "Palettes", "Sets"] as const).map((name) => (
+        {(["Strip", "Sequences", "Palettes", "Sets", "Detection"] as const).map((name) => (
           <button
             type="button"
             key={name}
@@ -58,6 +61,12 @@ export function App() {
         <section class="min-w-0 flex-1 overflow-auto p-6" aria-label="Sets">
           <h1 class="mb-4 text-lg">Sets</h1>
           <SetEditor />
+        </section>
+      )}
+      {section === "Detection" && (
+        <section class="min-w-0 flex-1 overflow-auto p-6" aria-label="Detection">
+          <h1 class="mb-4 text-lg">Detection</h1>
+          <DetectionPanel />
         </section>
       )}
       {section === "Strip" && (

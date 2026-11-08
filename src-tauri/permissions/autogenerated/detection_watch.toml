@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-detection-watch"
+description = "Enables the detection_watch command without any pre-configured scope."
+commands.allow = ["detection_watch"]
+
+[[permission]]
+identifier = "deny-detection-watch"
+description = "Denies the detection_watch command without any pre-configured scope."
+commands.deny = ["detection_watch"]

@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync
 use std::time::Duration;
 
 use light_core::clock::PhraseBars;
-use light_core::detect::{BandAnalyzer, Moment, MomentDetector};
+use light_core::detect::{BandAnalyzer, BeatFeatures, DetectorParams, Moment, MomentDetector};
 use light_core::engine::{Engine, EngineConfig, EngineStatus, UiCommand};
 use light_core::library::Library;
 use light_core::paint::PaintCommand;
@@ -17,7 +17,7 @@ use crate::audio::{AudioError, AudioIn, RING_SECONDS};
 use crate::clock::MonoClock;
 use crate::commands::{AppState, AudioStatus, MidiStatus, Selection, Status, StripStatus};
 use crate::midi::{MidiEvent, MidiIn, QUEUE};
-use crate::settings::{Settings, sensitivity_params};
+use crate::settings::{Settings, detector_params};
 use crate::strip::{self, StripMsg};
 use crate::strip_store::StripConfig;
 use crate::tray::{TrayInput, TrayView, tray_deadline, tray_view};
@@ -30,6 +30,8 @@ pub enum Input {
     /// The editor saved the library (already validated and persisted).
     Library(Box<Library>),
     PopoverShown,
+    /// The editor's Detection section opened (`true`) or closed / the window went away (`false`).
+    DetectionWatch(bool),
     /// The editor asks to flash one segment (1-based) so the user can tell which piece it is.
     Identify(u8),
     StripState(StripStatus),
@@ -88,13 +90,13 @@ struct Detect {
 
 impl Detect {
     #[allow(clippy::cast_precision_loss)] // rates are far below 2^24
-    fn new(rate: u32, sensitivity: u8) -> Self {
+    fn new(rate: u32, params: DetectorParams) -> Self {
         let bands = BandAnalyzer::new(rate);
         let hop_s = bands.hop_len() as f32 / rate as f32;
         Self {
             rate,
             bands,
-            moment: MomentDetector::new(sensitivity_params(sensitivity), hop_s),
+            moment: MomentDetector::new(params, hop_s),
         }
     }
 }
@@ -105,6 +107,7 @@ fn detect_beat<A: AudioPort>(
     detect: &mut Option<Detect>,
     buf: &mut Vec<f32>,
     level_db: &mut Option<f32>,
+    features: &mut Option<(BeatFeatures, Moment)>,
 ) -> Option<Moment> {
     let d = detect.as_mut()?;
     buf.clear();
@@ -115,8 +118,29 @@ fn detect_beat<A: AudioPort>(
     let peak = buf.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
     *level_db = Some((20.0 * peak.max(1e-6).log10()).round());
     d.bands.process(buf, &mut |f| d.moment.push(f));
-    Some(d.moment.on_beat().0)
+    let (moment, f) = d.moment.on_beat();
+    *features = f.map(|f| (f, moment));
+    Some(moment)
 }
+
+/// What the Detection panel draws for one beat; sent only while it is open.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectorEvent {
+    pub kick_db: f32,
+    pub sub_db: f32,
+    pub high_db: f32,
+    pub kick_ref_db: f32,
+    pub sub_ref_db: f32,
+    pub high_ref_db: f32,
+    pub moment: Moment,
+}
+
+type MeterSink = Box<dyn FnMut(&DetectorEvent)>;
+
+/// The editor gets at most 15 detector events per second.
+const MIN_METER_GAP_US: u64 = 66_667;
+const DETECTOR_EVENT: &str = "detector";
 
 /// How long an identify flash stays before the scene is repainted.
 const IDENTIFY_FLASH_US: u64 = 1_200_000;
@@ -229,6 +253,10 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     library: Option<Library>,
     /// When the last identify flash started; the scene is repainted `IDENTIFY_FLASH_US` later.
     identify_at: Option<u64>,
+    /// The editor's Detection section is open: only then are `detector` events produced.
+    watching: bool,
+    meter_sink: Option<MeterSink>,
+    meter_last_us: Option<u64>,
 }
 
 /// Paints the menu bar: called with the previous and the new view, only when they differ.
@@ -282,6 +310,9 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             strip_paused: false,
             library: None,
             identify_at: None,
+            watching: false,
+            meter_sink: None,
+            meter_last_us: None,
         };
         core.replan(now_us);
         core
@@ -346,7 +377,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             match self.audio.open(self.settings.audio_input.as_deref()) {
                 Ok(info) => {
                     if self.detect.as_ref().is_none_or(|d| d.rate != info.rate) {
-                        self.detect = Some(Detect::new(info.rate, self.settings.sensitivity));
+                        self.detect = Some(Detect::new(info.rate, detector_params(&self.settings)));
                     }
                     self.buf = Vec::with_capacity((info.rate * RING_SECONDS) as usize);
                     self.capture = Capture::Open(info.name);
@@ -372,6 +403,34 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     pub fn set_tray(&mut self, sink: TraySink, now_us: u64) {
         self.tray = Some(TrayLink { sink, shown: None });
         self.update_tray(now_us);
+    }
+
+    pub fn set_meters(&mut self, sink: MeterSink) {
+        self.meter_sink = Some(sink);
+    }
+
+    /// Sends this beat's features to the editor if it is watching and the rate cap allows.
+    fn meter(&mut self, f: &BeatFeatures, moment: Moment, now_us: u64) {
+        if !self.watching
+            || self
+                .meter_last_us
+                .is_some_and(|t| now_us < t + MIN_METER_GAP_US)
+        {
+            return;
+        }
+        let Some(sink) = &mut self.meter_sink else {
+            return;
+        };
+        self.meter_last_us = Some(now_us);
+        sink(&DetectorEvent {
+            kick_db: f.kick_db,
+            sub_db: f.sub_db,
+            high_db: f.high_db,
+            kick_ref_db: f.kick_ref_db,
+            sub_ref_db: f.sub_ref_db,
+            high_ref_db: f.high_ref_db,
+            moment,
+        });
     }
 
     fn midi_ok(&self) -> bool {
@@ -414,15 +473,20 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     pub fn handle(&mut self, input: Input, now_us: u64) -> bool {
         match input {
             Input::Midi(e) => {
+                let mut features = None;
                 let cmds = self.engine.on_midi(e.at_us, e.status, || {
                     detect_beat(
                         &mut self.audio,
                         &mut self.detect,
                         &mut self.buf,
                         &mut self.level_db,
+                        &mut features,
                     )
                 });
                 self.flush(cmds);
+                if let Some((f, moment)) = features {
+                    self.meter(&f, moment, now_us);
+                }
             }
             Input::Ui(cmd) => {
                 // A rejected key is not retried: only pairing again helps.
@@ -439,6 +503,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 self.publisher.touch();
             }
             Input::Settings(new) => self.apply_settings(new, now_us),
+            Input::DetectionWatch(on) => self.watching = on,
             Input::PopoverShown => {
                 log::debug!("MIDI messages dropped so far: {}", self.midi.dropped());
                 self.check_midi_source();
@@ -559,12 +624,14 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             self.capture = Capture::Closed;
             self.level_db = None;
         }
+        let thresholds = |s: &Settings| (s.sensitivity, s.calm_kick_db, s.calm_high_db, s.riser_db);
         if let (true, Some(d)) = (
-            new.sensitivity != self.settings.sensitivity,
+            thresholds(&new) != thresholds(&self.settings),
             &mut self.detect,
         ) {
-            let p = sensitivity_params(new.sensitivity);
-            d.moment.set_thresholds(p.calm_kick_db, p.calm_high_db);
+            let p = detector_params(&new);
+            d.moment
+                .set_thresholds(p.calm_kick_db, p.calm_high_db, p.riser_db);
         }
         self.settings = new;
         self.flush(cmds);
@@ -708,6 +775,12 @@ pub fn spawn(
                 emit,
                 clock.now_us(),
             );
+            let meter_app = app.clone();
+            core.set_meters(Box::new(move |e| {
+                if let Err(ee) = meter_app.emit_to("editor", DETECTOR_EVENT, e) {
+                    log::debug!("detector event not delivered: {ee}");
+                }
+            }));
             core.handle(Input::Library(Box::new(library)), clock.now_us());
             app.state::<AppState>().set_status(core.status());
             let tray_app = app.clone();
@@ -1190,7 +1263,7 @@ mod tests {
         assert_eq!(*opens.borrow(), 1, "no retry storm while playing");
         let mut buf = Vec::new();
         assert_eq!(
-            detect_beat(&mut c.audio, &mut None, &mut buf, &mut None),
+            detect_beat(&mut c.audio, &mut None, &mut buf, &mut None, &mut None),
             None
         );
     }
@@ -1212,6 +1285,56 @@ mod tests {
         }
         assert_eq!(c.level_db, Some(-6.0));
         assert_eq!(c.status().audio.level_db, Some(-6.0));
+    }
+
+    /// One MIDI clock tick per `step_us` with a loud block of audio before each; returns the events.
+    fn run_ticks(c: &mut TestCore, ticks: std::ops::Range<u64>, step_us: u64) {
+        for i in ticks {
+            let at = i * step_us;
+            c.audio.samples = vec![0.5; 4_800];
+            c.handle(
+                Input::Midi(MidiEvent {
+                    at_us: at,
+                    status: 0xF8,
+                }),
+                at,
+            );
+        }
+    }
+
+    fn meter_core() -> (TestCore, Rc<RefCell<Vec<DetectorEvent>>>) {
+        let (mut c, _rx, _) = core(false);
+        start(&mut c);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let s = Rc::clone(&seen);
+        c.set_meters(Box::new(move |e| s.borrow_mut().push(e.clone())));
+        (c, seen)
+    }
+
+    #[test]
+    fn meters_emit_only_while_detection_open() {
+        let (mut c, seen) = meter_core();
+        run_ticks(&mut c, 49..121, 20_000);
+        assert!(seen.borrow().is_empty(), "not watching: zero events");
+        c.handle(Input::DetectionWatch(true), 2_500_000);
+        run_ticks(&mut c, 121..169, 20_000);
+        let n = seen.borrow().len();
+        assert!(n >= 1, "watching: one event per beat");
+        let e = seen.borrow()[0].clone();
+        assert!(e.kick_db.is_finite() && e.kick_ref_db.is_finite());
+        c.handle(Input::DetectionWatch(false), 3_500_000);
+        run_ticks(&mut c, 169..241, 20_000);
+        assert_eq!(seen.borrow().len(), n, "closed: zero events");
+    }
+
+    #[test]
+    fn meters_are_capped_at_15_hz() {
+        let (mut c, seen) = meter_core();
+        c.handle(Input::DetectionWatch(true), 1_000_000);
+        // Beats 24 ms apart (a 1 ms tick) for about one second.
+        run_ticks(&mut c, 1_000..2_000, 1_000);
+        let n = seen.borrow().len();
+        assert!((10..=16).contains(&n), "{n}");
     }
 
     #[test]

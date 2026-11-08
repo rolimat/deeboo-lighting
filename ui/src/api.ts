@@ -53,6 +53,10 @@ export interface Settings {
   /** 0 to 500. */
   leadMs: number;
   lightsOn: boolean;
+  /** Detection panel (editor): 8 to 30, 6 to 24, 3 to 15 dB. */
+  calmKickDb: number;
+  calmHighDb: number;
+  riserDb: number;
 }
 
 export type MomentName = "rhythm" | "calm" | "buildUp";
