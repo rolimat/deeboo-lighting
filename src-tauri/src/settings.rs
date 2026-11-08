@@ -1,7 +1,7 @@
 //! Non-secret user settings: one JSON file in the app config dir, written atomically.
 //! The strip's `local_key` never goes through here (spec §12).
 
-use std::io;
+use std::io::{self, Read};
 use std::ops::RangeInclusive;
 use std::path::Path;
 
@@ -9,6 +9,21 @@ use light_core::detect::DetectorParams;
 use serde::{Deserialize, Serialize};
 
 const MAX_NAME: usize = 63;
+/// A real file is under 1 KiB; a bigger one is hand-edited garbage and must not be read whole.
+const MAX_BYTES: u64 = 64 << 10;
+
+/// `serde_json`'s own message echoes the offending value; only its kind and position are safe to log.
+fn describe(e: &serde_json::Error) -> String {
+    format!("{:?} at {}:{}", e.classify(), e.line(), e.column())
+}
+
+fn read_capped(path: &Path) -> io::Result<Option<String>> {
+    let mut text = String::new();
+    std::fs::File::open(path)?
+        .take(MAX_BYTES + 1)
+        .read_to_string(&mut text)?;
+    Ok((text.len() as u64 <= MAX_BYTES).then_some(text))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
@@ -99,8 +114,13 @@ impl Settings {
 /// Defaults on a missing, corrupt or invalid file.
 #[must_use]
 pub fn load(path: &Path) -> Settings {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
+    let text = match read_capped(path) {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            log::warn!("settings too large, using defaults");
+            keep_aside(path);
+            return Settings::default();
+        }
         Err(e) => {
             if e.kind() != io::ErrorKind::NotFound {
                 log::warn!("settings unreadable, using defaults: {e}");
@@ -118,7 +138,7 @@ pub fn load(path: &Path) -> Settings {
             }
         },
         Err(e) => {
-            log::warn!("settings corrupt, using defaults: {e}");
+            log::warn!("settings corrupt, using defaults: {}", describe(&e));
             keep_aside(path);
             Settings::default()
         }
@@ -167,6 +187,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("settings.json");
         (dir, p)
+    }
+
+    #[test]
+    fn oversized_file_is_kept_aside_and_defaults_load() {
+        let (d, p) = tmp();
+        let body = format!(r#"{{"phraseBars":4}}{}"#, " ".repeat(65 * 1024));
+        std::fs::write(&p, body).unwrap();
+        assert_eq!(load(&p), Settings::default());
+        assert!(d.path().join("settings.json.bad").exists());
     }
 
     #[test]
