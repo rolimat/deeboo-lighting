@@ -85,15 +85,20 @@ fn predicted_drop_at_phrase_start_for_4_8_16() {
     }
 }
 
+// The detector needs `rhythm_after_full` (2) full beats to report a drop, and `detect()` at a pulse
+// describes the beat before: a real drop is reported 3 calls after the prediction call.
 #[test]
-fn unconfirmed_prediction_reverts_to_buildup() {
+fn unconfirmed_prediction_reverts_after_the_detector_lag() {
     let mut c = MomentControl::new();
     for b in 4..16 {
         step(&mut c, b, Some(BuildUp));
     }
     assert_eq!(step(&mut c, 16, Some(BuildUp)), Rhythm);
     assert!(c.predicted());
-    assert_eq!(step(&mut c, 17, Some(BuildUp)), BuildUp);
+    assert_eq!(step(&mut c, 17, Some(BuildUp)), Rhythm);
+    assert_eq!(step(&mut c, 18, Some(BuildUp)), Rhythm);
+    assert!(c.predicted());
+    assert_eq!(step(&mut c, 19, Some(BuildUp)), BuildUp);
     assert!(!c.predicted());
     assert_eq!(c.applied(), BuildUp);
 }
@@ -105,9 +110,10 @@ fn confirmed_prediction_stays_rhythm() {
         step(&mut c, b, Some(BuildUp));
     }
     assert_eq!(step(&mut c, 16, Some(BuildUp)), Rhythm);
-    assert_eq!(step(&mut c, 17, Some(Rhythm)), Rhythm);
-    assert!(!c.predicted());
+    assert_eq!(step(&mut c, 17, Some(BuildUp)), Rhythm);
     assert_eq!(step(&mut c, 18, Some(Rhythm)), Rhythm);
+    assert!(!c.predicted());
+    assert_eq!(step(&mut c, 19, Some(Rhythm)), Rhythm);
 }
 
 #[test]

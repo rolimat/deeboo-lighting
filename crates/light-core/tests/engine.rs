@@ -198,8 +198,10 @@ fn drop_prediction_lands_on_phrase_start() {
     assert_eq!(st(14).moment, BuildUp);
     // Decided on the last beat of the phrase, shown from the phrase start.
     assert_eq!((st(15).moment, st(15).predicted), (Rhythm, true));
-    // Still building where the drop was predicted: back to BuildUp.
-    assert_eq!(st(16).moment, BuildUp);
+    // The detector lags: the prediction holds, then reverts when the drop is still not reported.
+    assert_eq!(st(16).moment, Rhythm);
+    assert_eq!(st(17).moment, Rhythm);
+    assert_eq!((st(18).moment, st(18).predicted), (BuildUp, false));
     // The drop's first Rhythm message is scheduled for the phrase start (t15 + 480 ms).
     let t15 = s.beats.get(15).map(|(t, _)| *t).unwrap();
     assert_eq!(
@@ -208,6 +210,35 @@ fn drop_prediction_lands_on_phrase_start() {
             .map(|(t, _)| *t),
         Some(t15 + 480_000 - LEAD)
     );
+}
+
+// Real lag: the drop starts at beat 16; the detector reports it from the call at beat 18.
+#[test]
+fn predicted_drop_holds_through_detector_lag() {
+    let mut s = sim125();
+    s.start();
+    s.beats_of(22, &mut |beat| match beat {
+        4..=17 => Some(BuildUp),
+        _ => Some(Rhythm),
+    });
+    let st = |b: usize| s.beats.get(b).map(|(_, st)| st.clone()).unwrap();
+    assert_eq!(st(14).moment, BuildUp);
+    for b in 15..=21 {
+        assert_eq!(st(b).moment, Rhythm, "beat {b}");
+    }
+    assert!(!st(18).predicted);
+}
+
+#[test]
+fn unconfirmed_prediction_reverts_after_the_lag() {
+    let mut s = sim125();
+    s.start();
+    s.beats_of(22, &mut |beat| (4..=21).contains(&beat).then_some(BuildUp));
+    let st = |b: usize| s.beats.get(b).map(|(_, st)| st.clone()).unwrap();
+    for b in 15..=17 {
+        assert_eq!(st(b).moment, Rhythm, "beat {b}");
+    }
+    assert_eq!(st(18).moment, BuildUp);
 }
 
 #[test]
