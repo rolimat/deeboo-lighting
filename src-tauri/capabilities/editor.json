@@ -5,6 +5,8 @@
   "windows": ["editor"],
   "permissions": [
     "allow-get-status",
+    "allow-get-library",
+    "allow-save-library",
     "allow-wizard-start",
     "allow-wizard-choose",
     "allow-wizard-retry",

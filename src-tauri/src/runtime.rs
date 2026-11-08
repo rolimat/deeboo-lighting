@@ -8,6 +8,7 @@ use std::time::Duration;
 use light_core::clock::PhraseBars;
 use light_core::detect::{BandAnalyzer, Moment, MomentDetector};
 use light_core::engine::{Engine, EngineConfig, EngineStatus, UiCommand};
+use light_core::library::Library;
 use light_core::paint::PaintCommand;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -26,6 +27,8 @@ pub enum Input {
     Midi(MidiEvent),
     Ui(UiCommand),
     Settings(Settings),
+    /// The editor saved the library (already validated and persisted).
+    Library(Box<Library>),
     PopoverShown,
     StripState(StripStatus),
     /// The wizard saved a new strip file: reconnect with it.
@@ -116,7 +119,7 @@ fn detect_beat<A: AudioPort>(
 /// The popover gets at most 30 updates per second.
 const MIN_PUBLISH_GAP_US: u64 = 33_333;
 /// Segments of the factory strip, used until a strip file says otherwise.
-const DEFAULT_SEGMENTS: u8 = 10;
+pub const DEFAULT_SEGMENTS: u8 = 10;
 const STATUS_EVENT: &str = "status";
 
 /// Decides when a status update goes to the popover: only while it is visible, coalesced.
@@ -215,6 +218,9 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     source_present: bool,
     /// The wizard holds the strip: the engine keeps running but sends nothing.
     strip_paused: bool,
+    /// The saved library; the engine starts using it in the next task.
+    #[allow(dead_code)]
+    library: Option<Library>,
 }
 
 /// Paints the menu bar: called with the previous and the new view, only when they differ.
@@ -266,6 +272,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             tray_due: None,
             source_present,
             strip_paused: false,
+            library: None,
         };
         core.replan(now_us);
         core
@@ -436,6 +443,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 }
                 self.publisher.touch();
             }
+            Input::Library(lib) => self.library = Some(*lib),
             Input::StripChanged(cfg) => self.strip_changed(cfg),
             Input::StripPause(pause) => {
                 self.strip_paused = pause;
@@ -866,6 +874,14 @@ mod tests {
             c.tick(d);
         }
         out
+    }
+
+    #[test]
+    fn library_input_is_stored() {
+        let (mut c, _rx, _) = core(false);
+        assert!(c.library.is_none());
+        c.handle(Input::Library(Box::new(Library::builtin(10))), 1_000);
+        assert_eq!(c.library, Some(Library::builtin(10)));
     }
 
     #[test]

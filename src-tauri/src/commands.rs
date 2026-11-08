@@ -11,8 +11,10 @@ use tauri::{Emitter, Manager};
 
 use crate::runtime::{Input, RuntimeHandle};
 
+use crate::library_store;
 use crate::settings::{self, Settings};
 use crate::wizard::session::{Emit, RealLan, Wizard};
+use light_core::library::Library;
 
 /// The most the app waits at exit for the wizard to revoke its cloud session.
 const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -141,6 +143,9 @@ pub struct AppState {
     settings: Mutex<Settings>,
     /// Where the settings file lives; set at startup.
     settings_path: Mutex<Option<std::path::PathBuf>>,
+    library: Mutex<Library>,
+    /// `library.json`; set at startup.
+    library_path: Mutex<Option<std::path::PathBuf>>,
     runtime: Mutex<Option<RuntimeHandle>>,
     /// Read by the engine thread: status goes out only while this is true.
     visible: Arc<AtomicBool>,
@@ -153,6 +158,8 @@ impl Default for AppState {
             status: Mutex::new(Status::initial()),
             settings: Mutex::new(Settings::default()),
             settings_path: Mutex::new(None),
+            library: Mutex::new(Library::builtin(10)),
+            library_path: Mutex::new(None),
             runtime: Mutex::new(None),
             visible: Arc::new(AtomicBool::new(false)),
             wizard: Wizard::default(),
@@ -169,6 +176,33 @@ impl AppState {
     pub fn init_settings(&self, path: std::path::PathBuf) {
         *lock(&self.settings) = settings::load(&path);
         *lock(&self.settings_path) = Some(path);
+    }
+
+    /// Loads the library file (built-ins for `segments` on any problem) and remembers its path.
+    pub fn init_library(&self, path: std::path::PathBuf, segments: u8) {
+        *lock(&self.library) = library_store::load(&path, segments);
+        *lock(&self.library_path) = Some(path);
+    }
+
+    pub fn library(&self) -> Library {
+        lock(&self.library).clone()
+    }
+
+    /// Validates, assigns ids to new entries, persists, then swaps. Any failure keeps the previous
+    /// library on disk and in memory; messages never echo the input.
+    fn save_library(&self, mut new: Library) -> Result<Library, String> {
+        let path = lock(&self.library_path)
+            .clone()
+            .ok_or("library unavailable")?;
+        new.validate().map_err(|e| e.to_string())?;
+        let mut current = lock(&self.library);
+        library_store::assign_ids(&current, &mut new).map_err(str::to_string)?;
+        library_store::save(&path, &new).map_err(|e| {
+            log::warn!("library not saved: {e}");
+            "library not saved".to_string()
+        })?;
+        *current = new.clone();
+        Ok(new)
     }
 
     pub fn settings(&self) -> Settings {
@@ -272,6 +306,24 @@ pub fn save_settings(
 ) -> Result<Settings, String> {
     let saved = state.save_settings(settings)?;
     state.send(Input::Settings(saved.clone()))?;
+    Ok(saved)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri::State is passed by value by the macro
+pub fn get_library(state: tauri::State<'_, AppState>) -> Library {
+    state.library()
+}
+
+/// Entries whose id the stored library lacks are new; the saved library (with real ids) is returned.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn save_library(
+    state: tauri::State<'_, AppState>,
+    library: Library,
+) -> Result<Library, String> {
+    let saved = state.save_library(library)?;
+    state.send(Input::Library(Box::new(saved.clone())))?;
     Ok(saved)
 }
 
@@ -434,8 +486,65 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 14);
+        assert_eq!(commands.len(), 16);
         assert_eq!(granted, commands);
+    }
+
+    fn lib_state() -> (tempfile::TempDir, AppState) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::default();
+        state.init_library(dir.path().join("library.json"), 10);
+        (dir, state)
+    }
+
+    #[test]
+    fn save_library_rejects_invalid_and_keeps_previous() {
+        let (dir, state) = lib_state();
+        let before = state.library();
+        let mut bad = before.clone();
+        bad.sets[0].rhythm.palettes = vec![4242];
+        let msg = state.save_library(bad).unwrap_err();
+        assert!(msg.contains("palettes") && !msg.contains("4242"), "{msg}");
+        assert_eq!(state.library(), before);
+        assert!(!dir.path().join("library.json").exists());
+    }
+
+    #[test]
+    fn new_entries_get_ids_in_rust() {
+        use light_core::library::SeqRef;
+        let (dir, state) = lib_state();
+        let mut lib = state.library();
+        // Ids the stored library does not have are new: the client's number is only a handle.
+        let pal = lib.palettes[0].1.clone();
+        let seq = lib.sequences[0].1.clone();
+        lib.palettes.push((900, pal));
+        lib.sequences.push((901, seq));
+        let mut set = lib.sets[0].clone();
+        set.id = 902;
+        set.rhythm.sequences = vec![SeqRef::Id(901)];
+        set.rhythm.palettes = vec![900];
+        lib.sets.push(set);
+        lib.active_set = 902;
+        lib.active_palette = Some(900);
+
+        let saved = state.save_library(lib).unwrap();
+        assert_eq!(
+            saved.palettes.iter().map(|p| p.0).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert_eq!(
+            saved.sequences.iter().map(|p| p.0).collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
+        assert_eq!(saved.sets[1].id, 2);
+        assert_eq!(saved.sets[1].rhythm.sequences, [SeqRef::Id(4)]);
+        assert_eq!(saved.sets[1].rhythm.palettes, [2]);
+        assert_eq!((saved.active_set, saved.active_palette), (2, Some(2)));
+        assert_eq!(state.library(), saved);
+        assert_eq!(
+            crate::library_store::load(&dir.path().join("library.json"), 10),
+            saved
+        );
     }
 
     #[test]

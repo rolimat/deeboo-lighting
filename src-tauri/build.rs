@@ -4,6 +4,8 @@ use tauri_build::{AppManifest, Attributes};
 const COMMANDS: &[&str] = &[
     "get_status",
     "get_settings",
+    "get_library",
+    "save_library",
     "save_settings",
     "list_midi_sources",
     "list_audio_inputs",

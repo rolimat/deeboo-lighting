@@ -8,6 +8,7 @@ mod commands;
 mod devices;
 mod editor_window;
 mod lan;
+mod library_store;
 mod midi;
 mod qr;
 mod runtime;
@@ -39,6 +40,8 @@ pub fn run() -> tauri::Result<()> {
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::get_settings,
+            commands::get_library,
+            commands::save_library,
             commands::save_settings,
             commands::list_midi_sources,
             commands::list_audio_inputs,
@@ -65,7 +68,14 @@ pub fn run() -> tauri::Result<()> {
             let dir = app.path().app_config_dir()?;
             let state = app.state::<commands::AppState>();
             state.init_settings(dir.join("settings.json"));
-            let handle = runtime::spawn(app.handle().clone(), state.settings(), strip::load(&dir));
+            let strip = strip::load(&dir);
+            state.init_library(
+                dir.join("library.json"),
+                strip
+                    .as_ref()
+                    .map_or(runtime::DEFAULT_SEGMENTS, |c| c.segments),
+            );
+            let handle = runtime::spawn(app.handle().clone(), state.settings(), strip);
             state.set_runtime(handle);
             Ok(())
         })
