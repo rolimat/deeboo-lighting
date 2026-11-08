@@ -8,15 +8,13 @@ mod commands;
 mod devices;
 mod lan;
 mod midi;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed by the wizard in Plan 4 task 2")
-)]
 mod qr;
 mod runtime;
 mod settings;
 mod strip;
 mod tray;
+#[cfg_attr(not(test), expect(dead_code, reason = "wired to IPC in Plan 4 task 6"))]
+mod wizard;
 
 /// Env-driven logger; the network stacks stay at `warn` even with `RUST_LOG=trace`, so
 /// cloud request details can never reach the log.

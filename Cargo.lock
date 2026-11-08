@@ -975,6 +975,7 @@ dependencies = [
  "tauri-plugin-positioner",
  "tempfile",
  "tokio",
+ "tuya-cloud",
 ]
 
 [[package]]

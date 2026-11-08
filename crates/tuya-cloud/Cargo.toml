@@ -8,6 +8,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Fake-cloud helpers for tests of crates that use this one; never enabled in the app.
+test-support = []
+
 [dependencies]
 aes-gcm = "0.10"
 base64 = "0.22"

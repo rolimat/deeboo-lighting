@@ -23,6 +23,7 @@ serde = { version = "1", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
 light-core = { path = "../crates/light-core" }
+tuya-cloud = { path = "../crates/tuya-cloud" }
 rustuya = { version = "0.4", features = ["tokio"] }
 if-addrs = "0.15"
 secrecy = "0.10"
@@ -35,5 +36,7 @@ rtrb = "0.3"
 qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
+tuya-cloud = { path = "../crates/tuya-cloud", features = ["test-support"] }
+tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
 assert_no_alloc = "1"

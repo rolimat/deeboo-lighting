@@ -4,6 +4,9 @@ mod crypto;
 mod login;
 mod transport;
 
+#[cfg(feature = "test-support")]
+pub mod testing;
+
 pub use login::*;
 pub use transport::*;
 
