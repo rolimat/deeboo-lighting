@@ -8,7 +8,8 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 pub struct StripConfig {
     pub id: String,
@@ -91,10 +92,20 @@ struct StripFile {
     version: u8,
     id: String,
     name: String,
-    local_key: String,
+    local_key: Zeroizing<String>,
     #[serde(default = "default_segments")]
     segments: u8,
     #[serde(default)]
+    last_ip: Option<Ipv4Addr>,
+}
+
+#[derive(Serialize)]
+struct StripFileOut<'a> {
+    version: u8,
+    id: &'a str,
+    name: &'a str,
+    local_key: &'a str,
+    segments: u8,
     last_ip: Option<Ipv4Addr>,
 }
 
@@ -109,15 +120,16 @@ pub fn load(path: &Path) -> Result<StripConfig, StoreError> {
     if mode != 0o600 {
         return Err(StoreError::Mode);
     }
-    let f: StripFile = serde_json::from_slice(&fs::read(path).map_err(|_| StoreError::Io)?)
-        .map_err(|_| StoreError::Invalid("format"))?;
+    // The raw bytes hold the key: wiped when dropped, like the parsed copy.
+    let raw = Zeroizing::new(fs::read(path).map_err(|_| StoreError::Io)?);
+    let f: StripFile = serde_json::from_slice(&raw).map_err(|_| StoreError::Invalid("format"))?;
     if f.version != 1 {
         return Err(StoreError::Invalid("version"));
     }
     let cfg = StripConfig {
         id: f.id,
         name: f.name,
-        local_key: SecretString::from(f.local_key),
+        local_key: SecretString::from(f.local_key.as_str()),
         segments: f.segments,
         last_ip: f.last_ip,
     };
@@ -140,15 +152,20 @@ pub fn save(path: &Path, cfg: &StripConfig) -> io::Result<()> {
     };
     let dir = path.parent().ok_or_else(bad)?;
     let name = path.file_name().ok_or_else(bad)?;
-    let json = serde_json::json!({
-        "version": 1,
-        "id": cfg.id,
-        "name": cfg.name,
-        "local_key": cfg.local_key.expose_secret(),
-        "segments": cfg.segments,
-        "last_ip": cfg.last_ip,
-    });
-    let bytes = serde_json::to_vec(&json).map_err(io::Error::other)?;
+    // Borrowed fields, wiped buffer: no other owned copy of the key is made here.
+    let mut bytes = Zeroizing::new(Vec::with_capacity(512));
+    serde_json::to_writer(
+        &mut *bytes,
+        &StripFileOut {
+            version: 1,
+            id: &cfg.id,
+            name: &cfg.name,
+            local_key: cfg.local_key.expose_secret(),
+            segments: cfg.segments,
+            last_ip: cfg.last_ip,
+        },
+    )
+    .map_err(io::Error::other)?;
     DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     let mut tmp_name = name.to_os_string();
     tmp_name.push(".tmp");
