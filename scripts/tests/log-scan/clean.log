@@ -1,0 +1,13 @@
+[2026-11-08T10:00:00Z WARN  deeboo_lighting_lib::midi] virtual MIDI port not created: port busy
+[2026-11-08T10:00:01Z WARN  deeboo_lighting_lib::midi] MIDI source not connected: no source
+[2026-11-08T10:00:02Z WARN  deeboo_lighting_lib::runtime] audio not available: permission denied
+[2026-11-08T10:00:03Z DEBUG deeboo_lighting_lib::runtime] audio samples lost so far: 0
+[2026-11-08T10:00:04Z DEBUG deeboo_lighting_lib::runtime] MIDI messages dropped so far: 3
+[2026-11-08T10:00:05Z WARN  deeboo_lighting_lib::strip] strip file ignored: invalid key
+[2026-11-08T10:00:06Z ERROR deeboo_lighting_lib::strip] strip connection failed: timed out
+[2026-11-08T10:00:07Z WARN  deeboo_lighting_lib::strip] strip paint failed: not connected
+[2026-11-08T10:00:08Z WARN  deeboo_lighting_lib::settings] settings invalid, using defaults: bpm out of range
+[2026-11-08T10:00:09Z WARN  deeboo_lighting_lib::library_store] library invalid, using built-ins: schema version
+[2026-11-08T10:00:10Z DEBUG deeboo_lighting_lib::wizard::session] identify failed: strip offline
+UserCode([REDACTED])
+[2026-11-08T10:00:11Z WARN  deeboo_lighting_lib::wizard::session] strip file not saved: permission denied

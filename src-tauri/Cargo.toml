@@ -27,6 +27,7 @@ tuya-cloud = { path = "../crates/tuya-cloud" }
 rustuya = { version = "0.4", features = ["tokio"] }
 if-addrs = "0.15"
 secrecy = "0.10"
+zeroize = { version = "1", features = ["serde"] }
 base64 = "0.22"
 serde_json = "1"
 tokio = { version = "1", features = ["time", "sync", "rt", "net"] }

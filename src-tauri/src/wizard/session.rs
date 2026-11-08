@@ -790,6 +790,8 @@ mod tests {
         seen: Mutex<Vec<String>>,
         gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
         in_poll: std::sync::atomic::AtomicBool,
+        homes_gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        in_homes: std::sync::atomic::AtomicBool,
         released: std::sync::atomic::AtomicBool,
     }
 
@@ -821,6 +823,11 @@ mod tests {
             } else if u.contains("/qrcode/tokens") {
                 Ok(r#"{"success":true,"result":{"qrcode":"TKN-SECRET"}}"#.into())
             } else if u.contains("/users/homes") {
+                self.in_homes
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                if let Some(g) = self.homes_gate.lock().unwrap().as_ref() {
+                    let _ = g.recv_timeout(Duration::from_secs(30));
+                }
                 Ok(tuya_cloud::testing::encrypted_reply(
                     req,
                     REFRESH,
@@ -960,6 +967,48 @@ mod tests {
             cloud.count("/terminal/expire"),
             1,
             "session revoked before quit returns"
+        );
+        assert_eq!(lock(&w.0).phase, Phase::Idle);
+        assert_eq!(log.lock().unwrap().last(), Some(&WizardState::Idle));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn quit_during_the_device_list_skips_the_rest_and_revokes() {
+        let cloud = Arc::new(Cloud::default());
+        let (release, gate) = std::sync::mpsc::channel();
+        *cloud.homes_gate.lock().unwrap() = Some(gate);
+        let w = Wizard::default();
+        let (emit, log) = recorder();
+        let code = UserCode::parse("abc123").unwrap();
+        w.start(
+            Arc::new(FakeLan::default()),
+            cloud.clone(),
+            code,
+            emit.clone(),
+        )
+        .unwrap();
+        while !cloud.in_homes.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let (w2, e2) = (w.clone(), emit.clone());
+        let quit = tokio::task::spawn_blocking(move || w2.shutdown(&e2, Duration::from_secs(10)));
+        let w3 = w.clone();
+        tokio::task::spawn_blocking(move || {
+            while !lock(&w3.0).cancelled {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            // Let the async side see the cancel before the in-flight request returns.
+            std::thread::sleep(Duration::from_millis(200));
+            release.send(()).unwrap();
+        })
+        .await
+        .unwrap();
+        quit.await.unwrap();
+        assert_eq!(cloud.count("/ha/home/devices"), 0, "no more list requests");
+        assert_eq!(
+            cloud.count("/terminal/expire"),
+            1,
+            "revoked before quit returns"
         );
         assert_eq!(lock(&w.0).phase, Phase::Idle);
         assert_eq!(log.lock().unwrap().last(), Some(&WizardState::Idle));

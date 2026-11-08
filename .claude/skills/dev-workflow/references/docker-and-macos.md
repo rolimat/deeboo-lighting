@@ -1,7 +1,7 @@
 # Docker and macOS
 
 ## Docker
-- `docker/Dockerfile` builds the dev image (Rust toolchain, `just`, `cargo-deny`, `hadolint`, `gitleaks`, `lefthook`); linted by hadolint (`.hadolint.yaml`).
+- `docker/Dockerfile` builds the dev image (Rust toolchain, `just`, `cargo-deny`, `hadolint`, `gitleaks`, `lefthook`); linted by hadolint (`.hadolint.yaml`). It marks `/work` as a git `safe.directory`: the bind-mounted repo belongs to the host user, and without it git refuses the repo and gitleaks scans nothing.
 - `compose.yaml`: service `dev`, image `deeboo-lighting-dev`, repo mounted at `/work`, named volumes for caches and `target/`. `.devcontainer/devcontainer.json` opens the repo in the same image.
 - Toolchain pinned in `rust-toolchain.toml`; change it and the Dockerfile together. Rebuild after Dockerfile changes: `docker compose build dev`.
 - `cargo-deny` config is `deny.toml` (workspace path dependencies allowed; the project is GPL-3.0).

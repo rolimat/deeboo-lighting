@@ -8,11 +8,13 @@ use crate::qr::qr_matrix;
 use crate::wizard::state::{DeviceDto, Step, WizardState};
 use secrecy::SecretString;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{Receiver, error::TryRecvError};
 use tokio::time::{Instant, timeout};
 use tuya_cloud::{
-    CloudError, QrLogin, Transport, UserCode, list_devices, poll_login, revoke, start_login,
+    CloudDevice, CloudError, HttpRequest, QrLogin, Session, Transport, UserCode, list_devices,
+    poll_login, revoke, start_login,
 };
 
 const POLL_EVERY: Duration = Duration::from_secs(2);
@@ -61,6 +63,22 @@ fn now_us() -> u64 {
         .unwrap_or(0)
 }
 
+/// After a cancel only the revoke may still go out: the rest of the device list is skipped, so the
+/// session is closed after at most the one request already in flight.
+struct Abortable {
+    inner: Transp,
+    abort: Arc<AtomicBool>,
+}
+
+impl Transport for Abortable {
+    fn send(&self, req: &HttpRequest) -> Result<String, CloudError> {
+        if self.abort.load(Ordering::SeqCst) && !req.url.contains("/terminal/expire") {
+            return Err(CloudError::Network);
+        }
+        self.inner.send(req)
+    }
+}
+
 async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, CloudError> + Send + 'static,
 ) -> Result<T, WizardError> {
@@ -96,6 +114,47 @@ pub async fn run(
         }
     }
     result.map_err(|(_, e)| e)
+}
+
+/// Lists the devices, then revokes `session`; a cancel meanwhile ends the list early (see `Abortable`).
+async fn list_and_revoke(
+    transport: &Transp,
+    session: Session,
+    inputs: &mut Receiver<Input>,
+) -> Result<(Vec<CloudDevice>, bool), (Step, WizardError)> {
+    let devices = |e| (Step::Devices, e);
+    let abort = Arc::new(AtomicBool::new(false));
+    let t = Abortable {
+        inner: transport.clone(),
+        abort: abort.clone(),
+    };
+    // The session is consumed by revoke whatever happens; a failed revoke must not block the user.
+    let mut job = tokio::task::spawn_blocking(move || {
+        let listed = list_devices(&t, &session);
+        let revoked = revoke(&t, session).is_ok();
+        listed.map(|l| (l, revoked))
+    });
+    let mut cancelled = false;
+    let joined = loop {
+        tokio::select! {
+            r = &mut job => break r,
+            i = inputs.recv(), if !cancelled => {
+                if matches!(i, Some(Input::Cancel) | None) {
+                    cancelled = true;
+                    abort.store(true, Ordering::SeqCst);
+                }
+            }
+        }
+    };
+    let result = joined.map_err(|_| devices(WizardError::Cloud(CloudError::Network)))?;
+    if cancelled {
+        log::debug!(
+            "wizard: cancelled during the device list, revoked={}",
+            result.as_ref().is_ok_and(|r| r.1)
+        );
+        return Err(devices(WizardError::Cancelled));
+    }
+    result.map_err(|e| devices(WizardError::Cloud(e)))
 }
 
 async fn flow(
@@ -153,15 +212,7 @@ async fn flow(
     }
 
     let devices = |e| (Step::Devices, e);
-    let t = transport.clone();
-    // The session is consumed by revoke whatever happens; a failed revoke must not block the user.
-    let (listed, revoked) = blocking(move || {
-        let listed = list_devices(&*t, &session);
-        let revoked = revoke(&*t, session).is_ok();
-        listed.map(|l| (l, revoked))
-    })
-    .await
-    .map_err(devices)?;
+    let (listed, revoked) = list_and_revoke(transport, session, inputs).await?;
     if revoked {
         log::debug!("wizard: {} devices listed, session revoked", listed.len());
     } else {

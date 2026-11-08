@@ -8,7 +8,8 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 pub struct StripConfig {
     pub id: String,
@@ -91,10 +92,20 @@ struct StripFile {
     version: u8,
     id: String,
     name: String,
-    local_key: String,
+    local_key: Zeroizing<String>,
     #[serde(default = "default_segments")]
     segments: u8,
     #[serde(default)]
+    last_ip: Option<Ipv4Addr>,
+}
+
+#[derive(Serialize)]
+struct StripFileOut<'a> {
+    version: u8,
+    id: &'a str,
+    name: &'a str,
+    local_key: &'a str,
+    segments: u8,
     last_ip: Option<Ipv4Addr>,
 }
 
@@ -109,20 +120,44 @@ pub fn load(path: &Path) -> Result<StripConfig, StoreError> {
     if mode != 0o600 {
         return Err(StoreError::Mode);
     }
-    let f: StripFile = serde_json::from_slice(&fs::read(path).map_err(|_| StoreError::Io)?)
-        .map_err(|_| StoreError::Invalid("format"))?;
+    // The raw bytes hold the key: wiped when dropped, like the parsed copy.
+    let raw = Zeroizing::new(fs::read(path).map_err(|_| StoreError::Io)?);
+    let f: StripFile = serde_json::from_slice(&raw).map_err(|_| StoreError::Invalid("format"))?;
     if f.version != 1 {
         return Err(StoreError::Invalid("version"));
     }
     let cfg = StripConfig {
         id: f.id,
         name: f.name,
-        local_key: SecretString::from(f.local_key),
+        local_key: SecretString::from(f.local_key.as_str()),
         segments: f.segments,
         last_ip: f.last_ip,
     };
     cfg.validate()?;
     Ok(cfg)
+}
+
+/// Room for any valid config (name <= 63 chars x 4 bytes, id 64, key 16, ~150 of JSON), so the buffer
+/// never reallocates and leaves an unwiped copy of the key behind.
+const SERIALIZED_CAP: usize = 4096;
+
+/// Borrowed fields, wiped buffer: no other owned copy of the key is made here.
+fn serialize(cfg: &StripConfig) -> io::Result<Zeroizing<Vec<u8>>> {
+    let mut bytes = Zeroizing::new(Vec::with_capacity(SERIALIZED_CAP));
+    serde_json::to_writer(
+        &mut *bytes,
+        &StripFileOut {
+            version: 1,
+            id: &cfg.id,
+            name: &cfg.name,
+            local_key: cfg.local_key.expose_secret(),
+            segments: cfg.segments,
+            last_ip: cfg.last_ip,
+        },
+    )
+    .map_err(io::Error::other)?;
+    debug_assert_eq!(bytes.capacity(), SERIALIZED_CAP);
+    Ok(bytes)
 }
 
 /// Atomic: temp file created 0600, written, fsynced, then renamed over `path`.
@@ -140,15 +175,7 @@ pub fn save(path: &Path, cfg: &StripConfig) -> io::Result<()> {
     };
     let dir = path.parent().ok_or_else(bad)?;
     let name = path.file_name().ok_or_else(bad)?;
-    let json = serde_json::json!({
-        "version": 1,
-        "id": cfg.id,
-        "name": cfg.name,
-        "local_key": cfg.local_key.expose_secret(),
-        "segments": cfg.segments,
-        "last_ip": cfg.last_ip,
-    });
-    let bytes = serde_json::to_vec(&json).map_err(io::Error::other)?;
+    let bytes = serialize(cfg)?;
     DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     let mut tmp_name = name.to_os_string();
     tmp_name.push(".tmp");
@@ -185,6 +212,25 @@ mod tests {
         fs::write(&p, body).unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(m)).unwrap();
         p
+    }
+
+    #[test]
+    fn maximal_config_serialises_without_reallocating() {
+        let cfg = StripConfig {
+            id: "a".repeat(64),
+            name: "\u{1F4A1}".repeat(63),
+            local_key: SecretString::from(KEY),
+            segments: 60,
+            last_ip: Some(Ipv4Addr::new(192, 168, 100, 200)),
+        };
+        cfg.validate().unwrap();
+        let bytes = serialize(&cfg).unwrap();
+        assert_eq!(bytes.capacity(), SERIALIZED_CAP);
+        let q = StripConfig {
+            name: "\"".repeat(63),
+            ..cfg
+        };
+        assert_eq!(serialize(&q).unwrap().capacity(), SERIALIZED_CAP);
     }
 
     #[test]
@@ -303,6 +349,51 @@ mod tests {
                 !s.is_empty() && !s.contains(KEY) && !s.contains("a b"),
                 "{s}"
             );
+        }
+    }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
+            #[test]
+            fn arbitrary_bytes_never_panic_and_are_refused(
+                raw in proptest::collection::vec(any::<u8>(), 0..2048)
+            ) {
+                let d = tempfile::tempdir().unwrap();
+                let p = d.path().join("strip.json");
+                fs::write(&p, &raw).unwrap();
+                fs::set_permissions(&p, fs::Permissions::from_mode(0o600)).unwrap();
+                prop_assert!(load(&p).is_err());
+            }
+
+            #[test]
+            fn valid_strips_round_trip(
+                id in "[a-zA-Z0-9]{1,64}",
+                name in "[ -~]{0,63}",
+                key in "[ -~]{16}",
+                segments in 1u8..=60,
+                ip in proptest::option::of(any::<[u8; 4]>().prop_map(Ipv4Addr::from)),
+            ) {
+                let d = tempfile::tempdir().unwrap();
+                let p = d.path().join("strip.json");
+                let cfg = StripConfig {
+                    id: id.clone(),
+                    name: name.clone(),
+                    local_key: SecretString::from(key.clone()),
+                    segments,
+                    last_ip: ip,
+                };
+                save(&p, &cfg).unwrap();
+                let back = load(&p).unwrap();
+                prop_assert_eq!(
+                    (back.id, back.name, back.local_key.expose_secret().to_owned(), back.segments, back.last_ip),
+                    (id, name, key, segments, ip)
+                );
+            }
         }
     }
 }

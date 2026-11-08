@@ -39,7 +39,11 @@ async function mount(stripSegments?: number) {
     render(<SequenceList stripSegments={stripSegments} />, root);
     await settle();
   });
-  // Effects flush when act ends; the debounced counts call then needs its own window.
+  // The library arrives after the first act, so its render (and the counts effect) flush at the
+  // end of a second one; the debounced counts call then needs a window of its own.
+  await act(async () => {
+    await settle();
+  });
   await act(async () => {
     await settle(300);
   });
@@ -69,8 +73,9 @@ beforeEach(() => {
   vi.mocked(api.saveLibrary).mockImplementation(async (l) => l);
   vi.mocked(api.messageCounts).mockResolvedValue([1, 1]);
 });
-afterEach(() => {
-  render(null, root);
+afterEach(async () => {
+  // act() flushes pending effects and cleanups before jsdom is torn down.
+  await act(async () => render(null, root));
   root.remove();
   vi.clearAllMocks();
 });
