@@ -53,6 +53,44 @@ pub struct AudioStatus {
     pub level_db: Option<f32>,
 }
 
+/// The look the popover names: the active set and the palette in force.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Selection {
+    pub set: String,
+    pub palette: PaletteView,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaletteView {
+    pub name: String,
+    /// Principal, Contraste, Suave.
+    pub colours: [light_core::paint::Hsv; 3],
+}
+
+impl Selection {
+    pub fn of(lib: &Library) -> Self {
+        let p = lib.current_palette();
+        Self {
+            set: lib
+                .current_set()
+                .map_or_else(String::new, |s| s.name.clone()),
+            palette: PaletteView {
+                name: p.name,
+                colours: [p.principal, p.contraste, p.suave],
+            },
+        }
+    }
+}
+
+/// Which list `select` steps through.
+#[derive(Clone, Copy)]
+pub enum Pick {
+    Set,
+    Palette,
+}
+
 /// What the popover shows; the engine thread publishes it only while the popover is visible.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,6 +108,7 @@ pub struct Status {
     pub lights_on: bool,
     pub midi: MidiStatus,
     pub audio: AudioStatus,
+    pub selection: Selection,
 }
 
 impl Status {
@@ -91,6 +130,7 @@ impl Status {
                 ok: true,
             },
             audio: AudioStatus::default(),
+            selection: Selection::of(&Library::builtin(10)),
         }
     }
 }
@@ -186,6 +226,37 @@ impl AppState {
 
     pub fn library(&self) -> Library {
         lock(&self.library).clone()
+    }
+
+    /// Steps the active set or palette by one, wrapping, and saves it like an editor save.
+    pub fn select(&self, pick: Pick, delta: i8) -> Result<Selection, String> {
+        if delta != 1 && delta != -1 {
+            return Err("delta must be -1 or 1".into());
+        }
+        let mut lib = self.library();
+        let step = |ids: Vec<u32>, cur: Option<u32>| -> Option<u32> {
+            let at = cur
+                .and_then(|c| ids.iter().position(|i| *i == c))
+                .unwrap_or(0);
+            let len = ids.len().max(1);
+            let next = if delta > 0 {
+                (at + 1) % len
+            } else {
+                (at + len - 1) % len
+            };
+            ids.get(next).copied()
+        };
+        match pick {
+            Pick::Set => {
+                let ids = lib.sets.iter().map(|s| s.id).collect();
+                lib.active_set = step(ids, Some(lib.active_set)).ok_or("no sets")?;
+            }
+            Pick::Palette => {
+                let ids = lib.palettes.iter().map(|p| p.0).collect();
+                lib.active_palette = step(ids, lib.current_palette_id());
+            }
+        }
+        self.save_library(lib).map(|l| Selection::of(&l))
     }
 
     /// Validates, assigns ids to new entries, persists, then swaps. Any failure keeps the previous
@@ -315,6 +386,24 @@ pub fn get_library(state: tauri::State<'_, AppState>) -> Library {
     state.library()
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn select_set(state: tauri::State<'_, AppState>, delta: i8) -> Result<Selection, String> {
+    select(&state, Pick::Set, delta)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn select_palette(state: tauri::State<'_, AppState>, delta: i8) -> Result<Selection, String> {
+    select(&state, Pick::Palette, delta)
+}
+
+fn select(state: &AppState, pick: Pick, delta: i8) -> Result<Selection, String> {
+    let sel = state.select(pick, delta)?;
+    state.send(Input::Library(Box::new(state.library())))?;
+    Ok(sel)
+}
+
 /// Entries whose id the stored library lacks are new; the saved library (with real ids) is returned.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
@@ -439,7 +528,7 @@ mod tests {
         let json = serde_json::to_string(&Status::initial()).unwrap_or_default();
         assert_eq!(
             json,
-            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false}}"#
+            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Default","palette":{"name":"Test","colours":[{"h":0,"s":1000,"v":1000},{"h":240,"s":1000,"v":1000},{"h":120,"s":350,"v":1000}]}}}"#
         );
         let connected = StripStatus::Connected {
             name: "dj lights".into(),
@@ -486,7 +575,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 16);
+        assert_eq!(commands.len(), 18);
         assert_eq!(granted, commands);
     }
 
@@ -507,6 +596,44 @@ mod tests {
         assert!(msg.contains("palettes") && !msg.contains("4242"), "{msg}");
         assert_eq!(state.library(), before);
         assert!(!dir.path().join("library.json").exists());
+    }
+
+    #[test]
+    fn palette_cycles_and_persists() {
+        let (dir, state) = lib_state();
+        let mut lib = state.library();
+        let mut pal = lib.palettes[0].1.clone();
+        pal.name = "Second".into();
+        lib.palettes.push((900, pal));
+        state.save_library(lib).unwrap();
+        let name = |sel: Selection| sel.palette.name;
+        assert_eq!(name(state.select(Pick::Palette, 1).unwrap()), "Second");
+        assert_eq!(state.library().active_palette, Some(2));
+        // Wraps both ways.
+        assert_eq!(name(state.select(Pick::Palette, 1).unwrap()), "Test");
+        assert_eq!(name(state.select(Pick::Palette, -1).unwrap()), "Second");
+        assert_eq!(
+            crate::library_store::load(&dir.path().join("library.json"), 10).active_palette,
+            Some(2)
+        );
+        for bad in [0, 2, -2] {
+            assert!(state.select(Pick::Palette, bad).is_err());
+            assert!(state.select(Pick::Set, bad).is_err());
+        }
+    }
+
+    #[test]
+    fn set_cycles_through_sets() {
+        let (_dir, state) = lib_state();
+        let mut lib = state.library();
+        let mut set = lib.sets[0].clone();
+        set.name = "Club".into();
+        set.id = 900;
+        lib.sets.push(set);
+        state.save_library(lib).unwrap();
+        assert_eq!(state.select(Pick::Set, 1).unwrap().set, "Club");
+        assert_eq!(state.select(Pick::Set, 1).unwrap().set, "Default");
+        assert_eq!(state.select(Pick::Set, -1).unwrap().set, "Club");
     }
 
     #[test]

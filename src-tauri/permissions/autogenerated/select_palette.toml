@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-select-palette"
+description = "Enables the select_palette command without any pre-configured scope."
+commands.allow = ["select_palette"]
+
+[[permission]]
+identifier = "deny-select-palette"
+description = "Denies the select_palette command without any pre-configured scope."
+commands.deny = ["select_palette"]

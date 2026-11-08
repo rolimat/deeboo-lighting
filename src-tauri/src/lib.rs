@@ -42,6 +42,8 @@ pub fn run() -> tauri::Result<()> {
             commands::get_settings,
             commands::get_library,
             commands::save_library,
+            commands::select_set,
+            commands::select_palette,
             commands::save_settings,
             commands::list_midi_sources,
             commands::list_audio_inputs,
@@ -75,7 +77,12 @@ pub fn run() -> tauri::Result<()> {
                     .as_ref()
                     .map_or(runtime::DEFAULT_SEGMENTS, |c| c.segments),
             );
-            let handle = runtime::spawn(app.handle().clone(), state.settings(), strip);
+            let handle = runtime::spawn(
+                app.handle().clone(),
+                state.settings(),
+                strip,
+                state.library(),
+            );
             state.set_runtime(handle);
             Ok(())
         })

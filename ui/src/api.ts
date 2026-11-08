@@ -10,6 +10,21 @@ export type StripStatus =
   | { kind: "keyInvalid" }
   | { kind: "notFound" };
 
+export interface Hsv {
+  /** 0 to 360. */
+  h: number;
+  /** 0 to 1000. */
+  s: number;
+  /** 0 to 1000. */
+  v: number;
+}
+
+/** The active set and the palette in force (Principal, Contraste, Suave). */
+export interface Selection {
+  set: string;
+  palette: { name: string; colours: [Hsv, Hsv, Hsv] };
+}
+
 export interface Status {
   strip: StripStatus;
   bpm: number | null;
@@ -23,6 +38,7 @@ export interface Status {
   lightsOn: boolean;
   midi: { source: string | null; ok: boolean };
   audio: { ok: boolean; device?: string; levelDb?: number };
+  selection: Selection;
 }
 
 export interface Settings {
@@ -51,6 +67,9 @@ export const api = {
   listMidiSources: (): Promise<string[]> => invoke("list_midi_sources"),
   listAudioInputs: (): Promise<string[]> => invoke("list_audio_inputs"),
   uiCommand: (cmd: UiCommand): Promise<void> => invoke("ui_command", { cmd }),
+  /** Steps the active set by -1 or 1 (wraps); resolves to the new selection. */
+  selectSet: (delta: -1 | 1): Promise<Selection> => invoke("select_set", { delta }),
+  selectPalette: (delta: -1 | 1): Promise<Selection> => invoke("select_palette", { delta }),
   quit: (): Promise<void> => invoke("quit"),
   /** Opens (or focuses) the editor window on a section. */
   openEditor: (section: "strip"): Promise<void> => invoke("open_editor", { section }),

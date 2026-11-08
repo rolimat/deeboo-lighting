@@ -6,6 +6,8 @@ const COMMANDS: &[&str] = &[
     "get_settings",
     "get_library",
     "save_library",
+    "select_set",
+    "select_palette",
     "save_settings",
     "list_midi_sources",
     "list_audio_inputs",

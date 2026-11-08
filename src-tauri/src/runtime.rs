@@ -15,7 +15,7 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::audio::{AudioError, AudioIn, RING_SECONDS};
 use crate::clock::MonoClock;
-use crate::commands::{AppState, AudioStatus, MidiStatus, Status, StripStatus};
+use crate::commands::{AppState, AudioStatus, MidiStatus, Selection, Status, StripStatus};
 use crate::midi::{MidiEvent, MidiIn, QUEUE};
 use crate::settings::{Settings, sensitivity_params};
 use crate::strip::{self, StripMsg};
@@ -218,8 +218,7 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     source_present: bool,
     /// The wizard holds the strip: the engine keeps running but sends nothing.
     strip_paused: bool,
-    /// The saved library; the engine starts using it in the next task.
-    #[allow(dead_code)]
+    /// The saved library: kept to rebuild the engine's look after a segment-count change.
     library: Option<Library>,
 }
 
@@ -320,6 +319,10 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 },
                 _ => AudioStatus::default(),
             },
+            selection: self.library.as_ref().map_or_else(
+                || Selection::of(&Library::builtin(self.segments)),
+                Selection::of,
+            ),
         }
     }
 
@@ -443,8 +446,13 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 }
                 self.publisher.touch();
             }
-            Input::Library(lib) => self.library = Some(*lib),
-            Input::StripChanged(cfg) => self.strip_changed(cfg),
+            Input::Library(lib) => {
+                let cmds = self.engine.set_library(now_us, &lib);
+                self.flush(cmds);
+                self.library = Some(*lib);
+                self.publisher.touch();
+            }
+            Input::StripChanged(cfg) => self.strip_changed(cfg, now_us),
             Input::StripPause(pause) => {
                 self.strip_paused = pause;
                 if pause {
@@ -463,7 +471,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
 
     /// Re-pairing: the strip task reconnects; the scene is resent when it reports `Connected`.
     /// A different segment count cannot keep the old plan, so the engine starts over.
-    fn strip_changed(&mut self, cfg: StripConfig) {
+    fn strip_changed(&mut self, cfg: StripConfig, now_us: u64) {
         if cfg.segments != self.segments {
             log::warn!(
                 "segment count changed from {} to {}",
@@ -472,6 +480,11 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             );
             self.segments = cfg.segments;
             self.engine = engine_for(&self.settings, cfg.segments, self.last.lights_on);
+            if let Some(lib) = &self.library {
+                // A fresh engine is not playing: the library (or its fallback) applies at once.
+                let cmds = self.engine.set_library(now_us, lib);
+                self.flush(cmds);
+            }
         }
         self.strip = StripStatus::Connecting;
         if let Some(tx) = &self.strip_tx {
@@ -621,7 +634,12 @@ pub struct RuntimeHandle {
 }
 
 /// Starts the engine thread (and the strip task when there is a strip).
-pub fn spawn(app: AppHandle, settings: Settings, strip: Option<StripConfig>) -> RuntimeHandle {
+pub fn spawn(
+    app: AppHandle,
+    settings: Settings,
+    strip: Option<StripConfig>,
+    library: Library,
+) -> RuntimeHandle {
     let (tx, rx) = sync_channel(QUEUE);
     let clock = MonoClock::new();
     let segments = strip.as_ref().map_or(DEFAULT_SEGMENTS, |c| c.segments);
@@ -656,6 +674,7 @@ pub fn spawn(app: AppHandle, settings: Settings, strip: Option<StripConfig>) -> 
                 emit,
                 clock.now_us(),
             );
+            core.handle(Input::Library(Box::new(library)), clock.now_us());
             app.state::<AppState>().set_status(core.status());
             let tray_app = app.clone();
             core.set_tray(
@@ -877,11 +896,14 @@ mod tests {
     }
 
     #[test]
-    fn library_input_is_stored() {
+    fn library_input_reaches_the_popover_status() {
         let (mut c, _rx, _) = core(false);
-        assert!(c.library.is_none());
-        c.handle(Input::Library(Box::new(Library::builtin(10))), 1_000);
-        assert_eq!(c.library, Some(Library::builtin(10)));
+        assert_eq!(c.status().selection.set, "Default");
+        let mut lib = Library::builtin(10);
+        lib.sets[0].name = "Club".into();
+        c.handle(Input::Library(Box::new(lib.clone())), 1_000);
+        assert_eq!(c.library, Some(lib));
+        assert_eq!(c.status().selection.set, "Club");
     }
 
     #[test]

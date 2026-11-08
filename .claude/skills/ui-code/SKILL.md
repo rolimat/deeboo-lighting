@@ -16,6 +16,7 @@ Two entry points: the popover (`ui/index.html`, `ui/src/*.ts`, plain TS and CSS)
 - The UI only talks to Rust through `ui/src/api.ts` (editor: `ui/src/editor/api.ts`); views never import `@tauri-apps/api` directly.
 - Webview loads only bundled files: strict CSP, no inline scripts or styles, no remote origins. The QR is rendered locally.
 - Never show a secret. The key is shown masked; nothing secret enters the DOM, console or state objects.
+- The popover may call only `select_set`, `select_palette` (both return the new `Selection`: set name, palette name, its three colours) and `open_editor` besides the status/settings commands; `status.selection` carries the same for rendering.
 - Status events arrive only while the popover is visible (max 30 Hz). Write to the DOM only when a value changed (never rewrite text under the pointer; WebKit drops the click).
 - The editor window is created on open and destroyed on close. Its simulation animates with `requestAnimationFrame` only while visible; no timers or polling.
 - Editor components are tested by mounting with `preact` `render` inside `act` from `preact/test-utils`, with `./api` mocked (`await act(async () => { render(<App/>, root); await new Promise(r => setTimeout(r)) })` lets effects settle). The editor opens through the Rust `open_editor` command, has its own capability file (`src-tauri/capabilities/editor.json`) listing exactly its commands, and its window is never pre-declared in `tauri.conf.json`.

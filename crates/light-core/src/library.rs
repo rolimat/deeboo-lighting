@@ -209,6 +209,27 @@ impl Library {
         }
     }
 
+    /// The active set, if it exists.
+    #[must_use]
+    pub fn current_set(&self) -> Option<&Set> {
+        self.sets.iter().find(|s| s.id == self.active_set)
+    }
+
+    /// The palette in force: the chosen one, else the active set's first.
+    #[must_use]
+    pub fn current_palette_id(&self) -> Option<u32> {
+        self.active_palette
+            .or_else(|| self.current_set()?.rhythm.palettes.first().copied())
+    }
+
+    /// The palette to show; the test palette when the library has none.
+    #[must_use]
+    pub fn current_palette(&self) -> Palette {
+        self.current_palette_id()
+            .and_then(|id| self.palettes.iter().find(|(i, _)| *i == id))
+            .map_or_else(test_palette, |(_, p)| p.clone())
+    }
+
     /// Segment count the library was built for (the shape's piece count).
     #[must_use]
     pub fn segments(&self) -> u8 {

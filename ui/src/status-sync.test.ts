@@ -33,6 +33,17 @@ const base: Omit<Status, "strip"> = {
   lightsOn: true,
   midi: { source: null, ok: true },
   audio: { ok: false },
+  selection: {
+    set: "Default",
+    palette: {
+      name: "Test",
+      colours: [
+        { h: 0, s: 1000, v: 1000 },
+        { h: 240, s: 1000, v: 1000 },
+        { h: 120, s: 350, v: 1000 },
+      ],
+    },
+  },
 };
 const connecting: Status = { ...base, strip: { kind: "connecting" } };
 const connected: Status = {
