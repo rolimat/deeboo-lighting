@@ -105,3 +105,18 @@ proptest! {
         }
     }
 }
+
+/// A shorter previous state (segment count changed) must not panic: missing segments are unknown and get sent.
+#[test]
+fn shorter_prev_state_does_not_panic() {
+    let red = Some(light_core::paint::Hsv {
+        h: 0,
+        s: 1000,
+        v: 1000,
+    });
+    let mut state = vec![red, None, None, None];
+    for cmd in light_core::scene::diff(&[red, None], &[red, None, red, None]) {
+        light_core::scene::apply(&mut state, &cmd);
+    }
+    assert_eq!(state, vec![red, None, red, None]);
+}

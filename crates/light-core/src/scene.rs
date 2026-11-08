@@ -26,7 +26,7 @@ pub fn diff(prev: &[Colour], next: &[Colour]) -> Vec<PaintCommand> {
     }
     let mut out = Vec::new();
     let off: Vec<u8> = (0..next.len())
-        .filter(|&i| next[i].is_none() && prev[i].is_some())
+        .filter(|&i| next[i].is_none() && prev.get(i).copied().flatten().is_some())
         .map(seg)
         .collect();
     if !off.is_empty() {
@@ -35,7 +35,7 @@ pub fn diff(prev: &[Colour], next: &[Colour]) -> Vec<PaintCommand> {
     let mut groups: Vec<(Hsv, Vec<u8>)> = Vec::new();
     for (i, n) in next.iter().enumerate() {
         let Some(c) = *n else { continue };
-        if prev[i] == Some(c) {
+        if prev.get(i).copied().flatten() == Some(c) {
             continue;
         }
         match groups.iter_mut().find(|(g, _)| *g == c) {
