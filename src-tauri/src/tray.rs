@@ -8,6 +8,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{App, AppHandle, Manager, WindowEvent};
 use tauri_plugin_positioner::{Position, WindowExt};
 
+use crate::commands::AppState;
+
 const POPOVER: &str = "popover";
 const TRAY_ID: &str = "main";
 /// A tray click this soon after a blur hid the popover is the same click that caused the blur.
@@ -21,6 +23,11 @@ fn hidden_by_blur_just_now(hidden_at: Option<Instant>, now: Instant) -> bool {
     hidden_at.is_some_and(|t| now.saturating_duration_since(t) < BLUR_CLICK_WINDOW)
 }
 
+/// Tells the engine thread whether the popover is on screen (it publishes status only then).
+fn set_visible(app: &AppHandle, visible: bool) {
+    app.state::<AppState>().set_popover_visible(visible);
+}
+
 fn toggle_popover(app: &AppHandle) {
     let Some(window) = app.get_webview_window(POPOVER) else {
         log::error!("popover window is missing");
@@ -28,6 +35,7 @@ fn toggle_popover(app: &AppHandle) {
     };
     if window.is_visible().unwrap_or(false) {
         let _ = window.hide();
+        set_visible(app, false);
         return;
     }
     let hidden_at = *app
@@ -43,12 +51,14 @@ fn toggle_popover(app: &AppHandle) {
     }
     let _ = window.show();
     let _ = window.set_focus();
+    set_visible(app, true);
 }
 
 fn on_popover_blur(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(POPOVER) {
         let _ = window.hide();
     }
+    set_visible(app, false);
     *app.state::<BlurHide>()
         .0
         .lock()

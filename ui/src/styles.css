@@ -47,13 +47,3 @@ body {
 .strip-status {
   color: var(--dim);
 }
-
-.test-strip {
-  margin-top: 8px;
-  padding: 4px 10px;
-  color: var(--text);
-  background: var(--green-dark);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  font: inherit;
-}

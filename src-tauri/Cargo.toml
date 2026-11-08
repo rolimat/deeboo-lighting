@@ -28,7 +28,7 @@ if-addrs = "0.15"
 secrecy = "0.10"
 base64 = "0.22"
 serde_json = "1"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "sync", "rt"] }
 midir = "0.10"
 cpal = "0.15"
 

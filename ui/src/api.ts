@@ -9,10 +9,17 @@ export type StripStatus =
 
 export interface Status {
   strip: StripStatus;
-  /** True in debug builds only. */
-  debug: boolean;
-  /** MIDI clock ticks seen by the debug probe; null in release. */
-  clockTicks: number | null;
+  bpm: number | null;
+  playing: boolean;
+  beatInBar: number | null;
+  barInPhrase: number | null;
+  phraseBars: number;
+  moment: MomentName;
+  auto: boolean;
+  predicted: boolean;
+  lightsOn: boolean;
+  midi: { source: string | null; ok: boolean };
+  audio: { ok: boolean };
 }
 
 export interface Settings {
@@ -41,11 +48,7 @@ export const api = {
   listMidiSources: (): Promise<string[]> => invoke("list_midi_sources"),
   listAudioInputs: (): Promise<string[]> => invoke("list_audio_inputs"),
   uiCommand: (cmd: UiCommand): Promise<void> => invoke("ui_command", { cmd }),
-  /** The backend pushes the whole status on every change (event `status`). */
+  /** The backend pushes the whole status on every change, only while the popover is visible (event `status`). */
   onStatus: (cb: (status: Status) => void): Promise<UnlistenFn> =>
     listen<Status>("status", (e) => cb(e.payload)),
-  /** Debug builds only: the backend rejects it in release. */
-  devPaintTest: (): Promise<void> => invoke("dev_paint_test"),
-  /** Debug builds only: peak of the default input over 1 s, in dBFS. */
-  devMicLevel: (): Promise<number> => invoke("dev_mic_level"),
 };
