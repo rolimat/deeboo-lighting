@@ -115,6 +115,9 @@ fn keep_aside(path: &Path) {
 /// # Errors
 /// Returns the I/O (or serialisation) error.
 pub fn save(path: &Path, s: &Settings) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_vec_pretty(s)?)?;
     std::fs::rename(&tmp, path)
@@ -183,6 +186,14 @@ mod tests {
         assert_eq!(load(&p), s);
         let names: Vec<_> = std::fs::read_dir(d.path()).unwrap().collect();
         assert_eq!(names.len(), 1, "no temp file left behind");
+    }
+
+    #[test]
+    fn save_creates_missing_config_dir() {
+        let (d, _) = tmp();
+        let p = d.path().join("fresh").join("config").join("settings.json");
+        save(&p, &Settings::default()).unwrap();
+        assert_eq!(load(&p), Settings::default());
     }
 
     #[test]
