@@ -82,6 +82,15 @@ precommit:
 
 check: precommit
 
+# Release DMG (ad-hoc signed) in target/release/bundle/dmg, macOS host only.
+dmg:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ "$(uname)" = Darwin ] || { echo "just dmg runs on the macOS host only" >&2; exit 1; }
+    export PATH="$HOME/.cargo/bin:$PATH"
+    if [ ! -f ui/node_modules/.bin/tauri ]; then npm --prefix ui ci; fi
+    npm --prefix ui run tauri build -- --bundles dmg
+
 dev:
     #!/usr/bin/env bash
     set -euo pipefail
