@@ -18,6 +18,7 @@ use crate::commands::{AppState, AudioStatus, MidiStatus, Status, StripStatus};
 use crate::midi::{MidiEvent, MidiIn, QUEUE};
 use crate::settings::{Settings, sensitivity_params};
 use crate::strip::{self, StripConfig, StripMsg};
+use crate::tray::{TrayInput, TrayView, tray_deadline, tray_view};
 
 /// Everything that can wake the engine thread.
 pub enum Input {
@@ -187,6 +188,17 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     publisher: Publisher,
     emit: E,
     last: EngineStatus,
+    tray: Option<TrayLink>,
+    play_start_us: Option<u64>,
+    tray_due: Option<u64>,
+}
+
+/// Paints the menu bar: called with the previous and the new view, only when they differ.
+type TraySink = Box<dyn FnMut(Option<&TrayView>, &TrayView)>;
+
+struct TrayLink {
+    sink: TraySink,
+    shown: Option<TrayView>,
 }
 
 impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
@@ -226,6 +238,9 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             publisher: Publisher::default(),
             emit,
             last,
+            tray: None,
+            play_start_us: None,
+            tray_due: None,
         };
         core.replan(now_us);
         core
@@ -263,8 +278,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             lights_on: s.lights_on,
             midi: MidiStatus {
                 source: self.settings.midi_source.clone(),
-                ok: self.settings.midi_source.is_none()
-                    || self.settings.midi_source == self.midi.connected_source(),
+                ok: self.midi_ok(),
             },
             audio: match &self.capture {
                 Capture::Open(name) => AudioStatus {
@@ -307,6 +321,44 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             self.level_db = None;
             self.publisher.touch();
         }
+    }
+
+    /// Starts driving the menu bar through `sink`.
+    pub fn set_tray(&mut self, sink: TraySink, now_us: u64) {
+        self.tray = Some(TrayLink { sink, shown: None });
+        self.update_tray(now_us);
+    }
+
+    fn midi_ok(&self) -> bool {
+        self.settings.midi_source.is_none()
+            || self.settings.midi_source == self.midi.connected_source()
+    }
+
+    fn update_tray(&mut self, now_us: u64) {
+        let midi_ok = self.midi_ok();
+        let s = &self.last;
+        if !s.playing {
+            self.play_start_us = None;
+        } else if self.play_start_us.is_none() {
+            self.play_start_us = Some(now_us);
+        }
+        let Some(link) = &mut self.tray else { return };
+        let input = TrayInput {
+            midi_ok,
+            strip_ok: matches!(self.strip, StripStatus::Connected { .. }),
+            playing: s.playing,
+            bpm: s.bpm,
+            last_beat_us: s.last_beat_us,
+            play_start_us: self.play_start_us,
+            moment: s.moment,
+            forced: !s.auto,
+        };
+        let view = tray_view(&input, now_us);
+        if link.shown.as_ref() != Some(&view) {
+            (link.sink)(link.shown.as_ref(), &view);
+            link.shown = Some(view);
+        }
+        self.tray_due = tray_deadline(&input, now_us);
     }
 
     pub fn set_visible(&mut self, visible: bool) {
@@ -396,10 +448,14 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
 
     /// The engine's own deadline (clock timeout, next strip message) or the next status update.
     pub fn deadline(&self) -> Option<u64> {
-        [self.engine.next_deadline_us(), self.publisher.deadline()]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            self.engine.next_deadline_us(),
+            self.publisher.deadline(),
+            self.tray_due,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// A deadline passed.
@@ -418,6 +474,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             self.publisher.touch();
         }
         self.sync_capture();
+        self.update_tray(now_us);
         if self.publisher.due(now_us) {
             let status = self.status();
             (self.emit)(&status);
@@ -500,6 +557,11 @@ pub fn spawn(app: AppHandle, settings: Settings, strip: Option<StripConfig>) -> 
                 clock.now_us(),
             );
             app.state::<AppState>().set_status(core.status());
+            let tray_app = app.clone();
+            core.set_tray(
+                Box::new(move |prev, view| crate::tray::apply(&tray_app, prev, view)),
+                clock.now_us(),
+            );
             run(&rx, &clock, &mut core, &visible);
         });
     if let Err(e) = spawned {
@@ -780,5 +842,28 @@ mod tests {
         };
         c.handle(Input::Settings(new), 3_000_000);
         assert!(c.detect.is_some());
+    }
+
+    #[test]
+    fn tray_repaints_only_on_change_and_has_no_deadline_when_stopped() {
+        let (mut c, _rx, _) = core(true);
+        let paints = Rc::new(RefCell::new(0));
+        let p = Rc::clone(&paints);
+        c.set_tray(Box::new(move |_, _| *p.borrow_mut() += 1), 0);
+        assert_eq!(*paints.borrow(), 1, "first paint");
+        assert_eq!(c.deadline(), None);
+        c.handle(Input::PopoverShown, 10);
+        assert_eq!(*paints.borrow(), 1, "nothing changed");
+        c.handle(Input::StripState(connected()), 20);
+        assert_eq!(*paints.borrow(), 1, "MIDI source missing: still red");
+        c.handle(
+            Input::Settings(Settings {
+                midi_source: None,
+                ..Settings::default()
+            }),
+            30,
+        );
+        assert_eq!(*paints.borrow(), 2, "dot went green");
+        assert_eq!(c.tray_due, None, "stopped: no tray deadline");
     }
 }

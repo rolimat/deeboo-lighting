@@ -121,3 +121,10 @@ detect-probe *ARGS:
     [ "$(uname)" = Darwin ] || { echo "just detect-probe runs on the macOS host only" >&2; exit 1; }
     export PATH="$HOME/.cargo/bin:$PATH"
     cargo run --release -p detect-probe -- "$@"
+
+# Regenerates the committed menu bar frames in src-tauri/icons/tray (runs in Docker; output is deterministic).
+tray-frames:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} tray-frames
+    cargo run --locked -p tray-frames

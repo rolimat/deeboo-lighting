@@ -23,6 +23,7 @@ Spec §10: [docs/superpowers/specs/2026-11-06-deeboo-lighting-design.md](../../.
 | `just dev` | macOS only: `npm --prefix ui run tauri dev` |
 | `just tuya-login` | macOS only: Smart Life QR login, lists devices, saves the strip to `.dev/strip.json` (0600) |
 | `just detect-probe <audio> [--labels f.json] [--timeline] [--bpm N] [--realtime]` | macOS only: runs the detector on an MP3/WAV in the live-app event order (recordings stay in ignored `recordings/`); `--realtime` plays it on the default output |
+| `just tray-frames` | Docker: regenerates the committed menu bar PNGs in `src-tauri/icons/tray` (deterministic; commit the output) |
 | `just ship` | push and wait for the CI run of this exact commit |
 
 ## Rules
