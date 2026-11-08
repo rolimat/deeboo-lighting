@@ -28,6 +28,8 @@ pub enum Input {
     Settings(Settings),
     PopoverShown,
     StripState(StripStatus),
+    /// The wizard saved a new strip file: reconnect with it.
+    StripChanged(StripConfig),
     Quit,
 }
 
@@ -169,6 +171,17 @@ fn phrase(bars: u8) -> PhraseBars {
     }
 }
 
+/// A fresh engine for `segments` with the settings' show parameters.
+fn engine_for(settings: &Settings, segments: u8, lights_on: bool) -> Engine {
+    Engine::new(EngineConfig {
+        segments,
+        phrase: phrase(settings.phrase_bars),
+        lead_us: u64::from(settings.lead_ms) * 1000,
+        brightness_pct: settings.brightness_pct,
+        lights_on,
+    })
+}
+
 /// The engine status as the popover sees it: BPM to a tenth, so jitter does not repaint.
 fn snapshot(engine: &Engine) -> EngineStatus {
     let mut s = engine.status();
@@ -179,6 +192,8 @@ fn snapshot(engine: &Engine) -> EngineStatus {
 /// The thread's state; generic over the MIDI input and the status sink so tests can fake both.
 pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     engine: Engine,
+    /// Segment count the engine plans for.
+    segments: u8,
     midi: M,
     audio: A,
     capture: Capture,
@@ -216,13 +231,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         emit: E,
         now_us: u64,
     ) -> Self {
-        let engine = Engine::new(EngineConfig {
-            segments,
-            phrase: phrase(settings.phrase_bars),
-            lead_us: u64::from(settings.lead_ms) * 1000,
-            brightness_pct: settings.brightness_pct,
-            lights_on: settings.lights_on,
-        });
+        let engine = engine_for(&settings, segments, settings.lights_on);
         let strip = if strip_tx.is_some() {
             StripStatus::Connecting
         } else {
@@ -235,6 +244,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             .is_none_or(|n| midi.source_available(n));
         let mut core = Self {
             engine,
+            segments,
             midi,
             audio,
             capture: Capture::Closed,
@@ -390,8 +400,12 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 self.flush(cmds);
             }
             Input::Ui(cmd) => {
-                if let (UiCommand::Lights(true), StripStatus::Error, Some(tx)) =
-                    (cmd, &self.strip, &self.strip_tx)
+                // A rejected key is not retried: only pairing again helps.
+                if let (
+                    UiCommand::Lights(true),
+                    StripStatus::Error | StripStatus::NotFound,
+                    Some(tx),
+                ) = (cmd, &self.strip, &self.strip_tx)
                 {
                     let _ = tx.send(StripMsg::Connect);
                 }
@@ -414,10 +428,30 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 }
                 self.publisher.touch();
             }
+            Input::StripChanged(cfg) => self.strip_changed(cfg),
             Input::Quit => return false,
         }
         self.after(now_us);
         true
+    }
+
+    /// Re-pairing: the strip task reconnects; the scene is resent when it reports `Connected`.
+    /// A different segment count cannot keep the old plan, so the engine starts over.
+    fn strip_changed(&mut self, cfg: StripConfig) {
+        if cfg.segments != self.segments {
+            log::warn!(
+                "segment count changed from {} to {}",
+                self.segments,
+                cfg.segments
+            );
+            self.segments = cfg.segments;
+            self.engine = engine_for(&self.settings, cfg.segments, self.last.lights_on);
+        }
+        self.strip = StripStatus::Connecting;
+        if let Some(tx) = &self.strip_tx {
+            let _ = tx.send(StripMsg::Configure(cfg));
+        }
+        self.publisher.touch();
     }
 
     /// midir keeps its connection object after the `CoreMIDI` endpoint vanishes, so ask the OS.
@@ -565,12 +599,13 @@ pub fn spawn(app: AppHandle, settings: Settings, strip: Option<StripConfig>) -> 
     let (tx, rx) = sync_channel(QUEUE);
     let clock = MonoClock::new();
     let segments = strip.as_ref().map_or(DEFAULT_SEGMENTS, |c| c.segments);
-    let strip_tx = strip.map(|cfg| {
+    // The strip task always runs: with no strip file it waits for the wizard's config.
+    let strip_tx = {
         let (stx, srx) = unbounded_channel();
         let engine_tx = tx.clone();
-        strip::spawn(cfg, srx, move |s| report_strip(&engine_tx, s));
-        stx
-    });
+        strip::spawn(strip, srx, move |s| report_strip(&engine_tx, s));
+        Some(stx)
+    };
     let midi_tx = tx.clone();
     let visible = app.state::<AppState>().visible_flag();
     let spawned = std::thread::Builder::new()
@@ -784,6 +819,92 @@ mod tests {
         assert!(rx.try_recv().is_err(), "a message reached the dead strip");
         // Lights on asks the strip task to reconnect.
         c.handle(Input::Ui(UiCommand::Lights(true)), 2_100_000);
+        assert!(matches!(rx.try_recv(), Ok(StripMsg::Connect)));
+    }
+
+    fn new_cfg(name: &str, segments: u8) -> StripConfig {
+        StripConfig {
+            id: "bf1234".into(),
+            name: name.into(),
+            local_key: secrecy::SecretString::from("0123456789abcdef"),
+            segments,
+            last_ip: None,
+        }
+    }
+
+    /// Ticks through the scheduler's gaps and collects what reaches the strip task.
+    fn painted(
+        c: &mut TestCore,
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<StripMsg>,
+    ) -> Vec<PaintCommand> {
+        let mut out = Vec::new();
+        for _ in 0..40 {
+            while let Ok(m) = rx.try_recv() {
+                if let StripMsg::Paint(p) = m {
+                    out.push(p);
+                }
+            }
+            let Some(d) = c.deadline() else { break };
+            c.tick(d);
+        }
+        out
+    }
+
+    #[test]
+    fn strip_changed_reconnects_and_resends_scene() {
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::StripState(connected()), 1_000);
+        assert!(
+            !painted(&mut c, &mut rx).is_empty(),
+            "scene on first connect"
+        );
+        c.handle(Input::StripChanged(new_cfg("new", 10)), 2_000_000);
+        assert!(matches!(rx.try_recv(), Ok(StripMsg::Configure(_))));
+        assert_eq!(c.status().strip, StripStatus::Connecting);
+        assert!(
+            painted(&mut c, &mut rx).is_empty(),
+            "nothing while connecting"
+        );
+        let again = StripStatus::Connected {
+            name: "new".into(),
+            segments: 10,
+        };
+        c.handle(Input::StripState(again), 3_000_000);
+        assert!(
+            !painted(&mut c, &mut rx).is_empty(),
+            "scene resent after reconnect"
+        );
+    }
+
+    #[test]
+    fn strip_changed_with_another_segment_count_rebuilds_the_engine() {
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::StripState(connected()), 1_000);
+        let _ = painted(&mut c, &mut rx);
+        c.handle(Input::StripChanged(new_cfg("short", 4)), 2_000_000);
+        let _ = rx.try_recv();
+        let now = StripStatus::Connected {
+            name: "short".into(),
+            segments: 4,
+        };
+        c.handle(Input::StripState(now), 3_000_000);
+        let cmds = painted(&mut c, &mut rx);
+        assert_ne!(cmds.len(), 0);
+        assert!(
+            cmds.iter().all(|p| light_core::paint::encode(4, p).is_ok()),
+            "every command fits 4 segments"
+        );
+    }
+
+    #[test]
+    fn key_invalid_and_not_found_show_and_lights_on_retries_only_the_latter() {
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::StripState(StripStatus::KeyInvalid), 1_000);
+        assert_eq!(c.status().strip, StripStatus::KeyInvalid);
+        c.handle(Input::Ui(UiCommand::Lights(true)), 2_000);
+        assert!(rx.try_recv().is_err(), "a rejected key is not retried");
+        c.handle(Input::StripState(StripStatus::NotFound), 3_000);
+        c.handle(Input::Ui(UiCommand::Lights(true)), 4_000);
         assert!(matches!(rx.try_recv(), Ok(StripMsg::Connect)));
     }
 

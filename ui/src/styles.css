@@ -199,6 +199,11 @@ select {
   padding: 2px 0;
 }
 
+.row-action,
+.row-settings-strip button {
+  margin-left: auto;
+}
+
 .dot {
   width: 8px;
   height: 8px;

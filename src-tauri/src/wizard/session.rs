@@ -9,8 +9,9 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 use tuya_cloud::{Transport, UserCode};
 
@@ -61,6 +62,8 @@ enum Phase {
     #[default]
     Idle,
     Running,
+    /// A LAN step failed; the key is kept in the run, which waits for `retry` or `cancel`.
+    Failed,
     Identify,
 }
 
@@ -78,6 +81,10 @@ struct Inner {
     ready: Option<Ready>,
     /// Set by a cancel during the cloud phase, so the hand-over to the LAN phase honours it.
     cancelled: bool,
+    /// Wakes the run that waits in `Failed`; dropping it (a cancel) ends that run.
+    retry: Option<oneshot::Sender<()>>,
+    /// Dropped with the run's state, which wakes `shutdown`.
+    waiters: Vec<std::sync::mpsc::Sender<()>>,
 }
 
 /// The one wizard of the app. Cheap to clone; all clones share the run.
@@ -149,33 +156,49 @@ impl Wizard {
             self.finish();
             return;
         };
-        let task = {
-            let emit = emit.clone();
-            tokio::spawn(async move { lan_phase(&*lan, device, key, &emit).await })
-        };
-        {
-            let mut g = lock(&self.0);
-            // A cancel that landed between the two phases found nothing to abort.
-            if g.cancelled {
-                task.abort();
-            }
-            g.lan = Some(task.abort_handle());
-        }
-        match task.await {
-            Ok(Ok(ready)) => {
+        // The key stays here, so a failed LAN step can be retried without a second login.
+        loop {
+            let task = {
+                let (emit, lan, device) = (emit.clone(), lan.clone(), device.clone());
+                let key = SecretString::from(key.expose_secret().to_owned());
+                tokio::spawn(async move { lan_phase(&*lan, device, key, &emit).await })
+            };
+            {
                 let mut g = lock(&self.0);
-                g.phase = Phase::Identify;
-                g.inputs = None;
-                g.lan = None;
-                g.ready = Some(ready);
+                // A cancel that landed between the two phases found nothing to abort.
+                if g.cancelled {
+                    task.abort();
+                }
+                g.lan = Some(task.abort_handle());
             }
-            Ok(Err((step, message))) => {
-                emit(WizardState::Failed { step, message });
-                self.finish();
-            }
-            Err(_aborted) => {
-                emit(WizardState::Idle);
-                self.finish();
+            match task.await {
+                Ok(Ok(ready)) => {
+                    let mut g = lock(&self.0);
+                    g.phase = Phase::Identify;
+                    g.inputs = None;
+                    g.lan = None;
+                    g.ready = Some(ready);
+                    return;
+                }
+                Ok(Err((step, message))) => {
+                    let (tx, wait) = oneshot::channel();
+                    {
+                        let mut g = lock(&self.0);
+                        g.phase = Phase::Failed;
+                        g.lan = None;
+                        g.retry = Some(tx);
+                    }
+                    emit(WizardState::Failed { step, message });
+                    // A dropped sender is a cancel, which has already reset the state.
+                    if wait.await.is_err() {
+                        return;
+                    }
+                }
+                Err(_aborted) => {
+                    emit(WizardState::Idle);
+                    self.finish();
+                    return;
+                }
             }
         }
     }
@@ -218,11 +241,38 @@ impl Wizard {
         emit(WizardState::Idle);
     }
 
-    /// Back to the first step after a failure.
+    /// After a failure: repeats the failed LAN step with the key already held, or, when nothing is
+    /// held (a cloud step failed), goes back to the first step.
     pub fn retry(&self, emit: &Emit) {
-        if lock(&self.0).phase == Phase::Idle {
-            emit(WizardState::Idle);
+        let mut g = lock(&self.0);
+        match g.phase {
+            Phase::Failed => {
+                g.phase = Phase::Running;
+                if let Some(tx) = g.retry.take() {
+                    let _ = tx.send(());
+                }
+            }
+            Phase::Idle => {
+                drop(g);
+                emit(WizardState::Idle);
+            }
+            Phase::Running | Phase::Identify => {}
         }
+    }
+
+    /// App exit: cancels, then waits (at most `wait`) until the run has revoked its cloud session.
+    pub fn shutdown(&self, emit: &Emit, wait: Duration) {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        {
+            let mut g = lock(&self.0);
+            if g.phase == Phase::Idle {
+                return;
+            }
+            g.waiters.push(tx);
+        }
+        self.cancel(emit);
+        // The run's state is replaced when it ends, which drops `tx`: a disconnect wakes us.
+        let _ = rx.recv_timeout(wait);
     }
 
     /// Lights `segment` (1-based) white on the strip.
@@ -248,11 +298,11 @@ impl Wizard {
         })
     }
 
-    /// Writes the strip file (0600) and finishes.
+    /// Writes the strip file (0600), finishes and hands the saved config on.
     ///
     /// # Errors
     /// Fails outside the identify step or when the file cannot be written.
-    pub fn save(&self, path: &Path, emit: &Emit) -> Result<(), String> {
+    pub fn save(&self, path: &Path, emit: &Emit) -> Result<StripConfig, String> {
         let ready = {
             let mut g = lock(&self.0);
             if g.phase != Phase::Identify {
@@ -262,7 +312,6 @@ impl Wizard {
             *g = Inner::default();
             r
         };
-        // The runtime picks the new file up in plan 4 task 7.
         if let Err(e) = strip_store::save(path, &ready.cfg) {
             log::warn!("strip file not saved: {e}");
             emit(WizardState::Failed {
@@ -275,7 +324,7 @@ impl Wizard {
             device: ready.device,
             segments: ready.cfg.segments,
         });
-        Ok(())
+        Ok(ready.cfg)
     }
 }
 
@@ -399,7 +448,7 @@ mod tests {
     #[derive(Default)]
     struct FakeLan {
         finds: Mutex<VecDeque<Result<Ipv4Addr, StripError>>>,
-        listen: Mutex<Option<Result<u8, StripError>>>,
+        listen: Mutex<VecDeque<Result<u8, StripError>>>,
         windows: Mutex<Vec<Duration>>,
         lit: Arc<Mutex<Vec<(u8, u8)>>>,
         connect_fails: bool,
@@ -432,7 +481,7 @@ mod tests {
             self.listen
                 .lock()
                 .unwrap()
-                .take()
+                .pop_front()
                 .unwrap_or(Err(StripError::NoSegments))
         }
         async fn connect(&self, _: &StripConfig) -> Result<Arc<dyn Identify>, StripError> {
@@ -446,7 +495,7 @@ mod tests {
     fn lan(finds: Vec<Result<Ipv4Addr, StripError>>, n: Result<u8, StripError>) -> FakeLan {
         FakeLan {
             finds: Mutex::new(finds.into()),
-            listen: Mutex::new(Some(n)),
+            listen: Mutex::new(VecDeque::from([n])),
             ..FakeLan::default()
         }
     }
@@ -658,5 +707,187 @@ mod tests {
             .unwrap();
         let json = serde_json::to_string(&*log.lock().unwrap()).unwrap();
         assert!(!json.contains(KEY));
+    }
+
+    const REFRESH: &str = "rt-SECRET";
+
+    /// Smart Life as a script: scan succeeds on the first poll, one strip `d1`. While `gate` is set
+    /// the first poll stays in flight until the test releases it.
+    #[derive(Default)]
+    struct Cloud {
+        seen: Mutex<Vec<String>>,
+        gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        in_poll: std::sync::atomic::AtomicBool,
+    }
+
+    impl Cloud {
+        fn count(&self, needle: &str) -> usize {
+            let seen = self.seen.lock().unwrap();
+            seen.iter().filter(|u| u.contains(needle)).count()
+        }
+    }
+
+    impl Transport for Cloud {
+        fn send(&self, req: &HttpRequest) -> Result<String, CloudError> {
+            let u = &req.url;
+            self.seen.lock().unwrap().push(u.clone());
+            if u.contains("/qrcode/tokens/") {
+                self.in_poll
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                if let Some(g) = self.gate.lock().unwrap().as_ref() {
+                    let _ = g.recv_timeout(Duration::from_secs(5));
+                }
+                Ok(serde_json::json!({"success": true, "result": {
+                    "access_token": "at-SECRET", "refresh_token": REFRESH, "uid": "u1",
+                    "expire_time": 7200, "terminal_id": "term1",
+                    "endpoint": "https://apigw.tuyaeu.com", "username": "x"}})
+                .to_string())
+            } else if u.contains("/qrcode/tokens") {
+                Ok(r#"{"success":true,"result":{"qrcode":"TKN-SECRET"}}"#.into())
+            } else if u.contains("/users/homes") {
+                Ok(tuya_cloud::testing::encrypted_reply(
+                    req,
+                    REFRESH,
+                    r#"[{"ownerId":"1"}]"#,
+                ))
+            } else if u.contains("/ha/home/devices") {
+                let devs = format!(
+                    r#"[{{"id":"d1","name":"Strip","category":"dd","product_name":"JSK","online":true,"local_key":"{KEY}"}}]"#
+                );
+                Ok(tuya_cloud::testing::encrypted_reply(req, REFRESH, &devs))
+            } else if u.contains("/terminal/expire") {
+                Ok(tuya_cloud::testing::encrypted_reply(req, REFRESH, "true"))
+            } else {
+                Err(CloudError::Network)
+            }
+        }
+    }
+
+    async fn wait_for(log: &Log, want: impl Fn(&WizardState) -> bool) {
+        for _ in 0..2000 {
+            if log.lock().unwrap().iter().any(&want) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("state never reached: {:?}", log.lock().unwrap());
+    }
+
+    /// An emitter that picks `d1` as soon as the list is shown, like the user would.
+    fn choosing(w: &Wizard, log: Emit) -> Emit {
+        let w = w.clone();
+        Arc::new(move |s| {
+            if matches!(s, WizardState::ChooseStrip { .. }) {
+                w.choose("d1").unwrap();
+            }
+            log(s);
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_after_segment_timeout_listens_again() {
+        let cloud = Arc::new(Cloud::default());
+        let l = Arc::new(lan(vec![Ok(IP), Ok(IP)], Err(StripError::NoSegments)));
+        l.listen.lock().unwrap().push_back(Ok(4));
+        let w = Wizard::default();
+        let (rec, log) = recorder();
+        let emit = choosing(&w, rec);
+        let code = UserCode::parse("abc123").unwrap();
+        w.start(l.clone(), cloud.clone(), code, emit.clone())
+            .unwrap();
+        wait_for(&log, |s| {
+            matches!(
+                s,
+                WizardState::Failed {
+                    step: Step::Segments,
+                    ..
+                }
+            )
+        })
+        .await;
+        assert_eq!(lock(&w.0).phase, Phase::Failed, "the run waits for Retry");
+        w.retry(&emit);
+        wait_for(&log, |s| {
+            matches!(s, WizardState::Identify { segments: 4, .. })
+        })
+        .await;
+        assert_eq!(
+            *l.windows.lock().unwrap(),
+            [FIND_WINDOW, LISTEN_WINDOW, FIND_WINDOW, LISTEN_WINDOW]
+        );
+        // One login, one revoke: the retry did not go back to the User Code.
+        assert_eq!(
+            cloud.count("/qrcode/tokens") - cloud.count("/qrcode/tokens/"),
+            1
+        );
+        assert_eq!(cloud.count("/terminal/expire"), 1);
+        assert_eq!(lock(&w.0).phase, Phase::Identify);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancel_while_waiting_for_retry_ends_the_run() {
+        let l = Arc::new(lan(vec![Ok(IP)], Err(StripError::NoSegments)));
+        let w = Wizard::default();
+        let (rec, log) = recorder();
+        let emit = choosing(&w, rec);
+        let code = UserCode::parse("abc123").unwrap();
+        w.start(l, Arc::new(Cloud::default()), code, emit.clone())
+            .unwrap();
+        wait_for(&log, |s| matches!(s, WizardState::Failed { .. })).await;
+        w.cancel(&emit);
+        assert_eq!(lock(&w.0).phase, Phase::Idle);
+        assert_eq!(log.lock().unwrap().last(), Some(&WizardState::Idle));
+        assert!(
+            lock(&w.0).retry.is_none(),
+            "the key is dropped with the run"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn quit_cancels_wizard_and_revokes() {
+        let cloud = Arc::new(Cloud::default());
+        let (release, gate) = std::sync::mpsc::channel();
+        *cloud.gate.lock().unwrap() = Some(gate);
+        let w = Wizard::default();
+        let (emit, log) = recorder();
+        let code = UserCode::parse("abc123").unwrap();
+        w.start(
+            Arc::new(FakeLan::default()),
+            cloud.clone(),
+            code,
+            emit.clone(),
+        )
+        .unwrap();
+        while !cloud.in_poll.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // The scan was confirmed: a cloud session is being opened when the app quits.
+        let (w2, e2) = (w.clone(), emit.clone());
+        let quit = tokio::task::spawn_blocking(move || w2.shutdown(&e2, Duration::from_secs(5)));
+        // Real threads, real time: the poll is released only once the cancel has been queued.
+        let w3 = w.clone();
+        let releaser = tokio::task::spawn_blocking(move || {
+            while !lock(&w3.0).cancelled {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            release.send(()).unwrap();
+        });
+        releaser.await.unwrap();
+        quit.await.unwrap();
+        assert_eq!(
+            cloud.count("/terminal/expire"),
+            1,
+            "session revoked before quit returns"
+        );
+        assert_eq!(lock(&w.0).phase, Phase::Idle);
+        assert_eq!(log.lock().unwrap().last(), Some(&WizardState::Idle));
+    }
+
+    #[test]
+    fn shutdown_of_an_idle_wizard_returns_at_once() {
+        let (emit, _) = recorder();
+        let t = std::time::Instant::now();
+        Wizard::default().shutdown(&emit, Duration::from_secs(5));
+        assert!(t.elapsed() < Duration::from_secs(1));
     }
 }

@@ -6,7 +6,9 @@ export type StripStatus =
   | { kind: "notConfigured" }
   | { kind: "connecting" }
   | { kind: "connected"; name: string; segments: number }
-  | { kind: "error" };
+  | { kind: "error" }
+  | { kind: "keyInvalid" }
+  | { kind: "notFound" };
 
 export interface Status {
   strip: StripStatus;
@@ -50,6 +52,8 @@ export const api = {
   listAudioInputs: (): Promise<string[]> => invoke("list_audio_inputs"),
   uiCommand: (cmd: UiCommand): Promise<void> => invoke("ui_command", { cmd }),
   quit: (): Promise<void> => invoke("quit"),
+  /** Opens (or focuses) the editor window on a section. */
+  openEditor: (section: "strip"): Promise<void> => invoke("open_editor", { section }),
   setWindowHeight: (height: number): Promise<void> =>
     getCurrentWindow().setSize(new LogicalSize(340, height)),
   /** The backend pushes the whole status on every change, only while the popover is visible (event `status`). */

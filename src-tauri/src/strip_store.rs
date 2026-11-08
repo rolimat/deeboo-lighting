@@ -19,6 +19,16 @@ pub struct StripConfig {
     pub last_ip: Option<Ipv4Addr>,
 }
 
+impl fmt::Debug for StripConfig {
+    /// Names the strip only: no key, no address.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StripConfig")
+            .field("name", &self.name)
+            .field("segments", &self.segments)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Never carries file contents or the key.
 #[derive(Debug)]
 pub enum StoreError {

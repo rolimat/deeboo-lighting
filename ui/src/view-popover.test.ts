@@ -8,6 +8,7 @@ vi.mock("./api", () => ({
     listMidiSources: vi.fn(),
     listAudioInputs: vi.fn(),
     quit: vi.fn(),
+    openEditor: vi.fn(),
   },
 }));
 import { api, type Settings, type Status } from "./api";
@@ -54,6 +55,7 @@ beforeEach(() => {
   vi.mocked(api.listMidiSources).mockResolvedValue(["IAC Bus 1", "Pioneer DJ"]);
   vi.mocked(api.listAudioInputs).mockResolvedValue(["Built-in Mic", "Loopback"]);
   vi.mocked(api.uiCommand).mockResolvedValue();
+  vi.mocked(api.openEditor).mockResolvedValue();
   document.body.innerHTML = '<div id="app"></div>';
   root = document.getElementById("app") as HTMLElement;
   view = mountPopover(root);
@@ -104,7 +106,7 @@ it("moment_click_forces_and_auto_toggles", () => {
 it("status_rows_render_each_state", () => {
   view.update(base);
   expect(text(".row-midi")).toBe("MIDI · Deeboo Lighting In");
-  expect(text(".row-strip")).toBe("Strip · not connected");
+  expect(text(".row-strip .row-text")).toBe("Strip · not connected");
   expect(text(".row-audio")).toBe("Audio · off");
   view.update(
     st({
@@ -114,14 +116,14 @@ it("status_rows_render_each_state", () => {
     }),
   );
   expect(text(".row-midi")).toBe("MIDI · Pioneer DJ");
-  expect(text(".row-strip")).toBe("Strip · dj lights (10 segments)");
+  expect(text(".row-strip .row-text")).toBe("Strip · dj lights (10 segments)");
   expect(text(".row-audio")).toBe("Audio · Loopback");
   expect((q(".level-fill") as HTMLElement).style.width).toBe("50%");
   view.update(st({ strip: { kind: "error" }, audio: { ok: false, device: "Loopback" } }));
-  expect(text(".row-strip")).toBe("Strip · connection error");
+  expect(text(".row-strip .row-text")).toBe("Strip · connection error");
   expect(text(".row-audio")).toBe("Audio · no access");
   view.update(st({ strip: { kind: "connecting" } }));
-  expect(text(".row-strip")).toBe("Strip · connecting…");
+  expect(text(".row-strip .row-text")).toBe("Strip · connecting…");
 });
 
 it("brightness_slider_saves", async () => {
@@ -183,6 +185,42 @@ it("settings_lists_sources_and_saves_changes", async () => {
   expect(q(".view-settings")?.hasAttribute("hidden")).toBe(true);
 });
 
+it("settings_shows_strip_and_change_button", async () => {
+  view.update(st({ strip: { kind: "connected", name: "Strip A", segments: 10 } }));
+  byLabel("Settings").click();
+  await flush();
+  expect(text(".view-settings .strip-line")).toBe("Strip · Strip A (10)");
+  const change = byLabel("Change strip");
+  expect(change.textContent).toBe("Change…");
+  change.click();
+  expect(api.openEditor).toHaveBeenCalledWith("strip");
+});
+
+it("settings_offers_connect_without_a_strip", async () => {
+  view.update(base);
+  byLabel("Settings").click();
+  await flush();
+  expect(text(".view-settings .strip-line")).toBe("Strip · not connected");
+  expect(byLabel("Change strip").textContent).toBe("Connect…");
+});
+
+it("status_offers_reconnect_on_key_invalid", () => {
+  const reconnect = byLabel("Reconnect strip");
+  expect(reconnect.hidden).toBe(true);
+  view.update(st({ strip: { kind: "keyInvalid" } }));
+  expect(text(".row-strip .row-text")).toBe("Strip · key no longer valid");
+  expect(q(".row-strip .dot")?.getAttribute("data-state")).toBe("bad");
+  expect(reconnect.hidden).toBe(false);
+  expect(reconnect.textContent).toBe("Reconnect…");
+  reconnect.click();
+  expect(api.openEditor).toHaveBeenCalledWith("strip");
+  view.update(st({ strip: { kind: "notFound" } }));
+  expect(text(".row-strip .row-text")).toBe("Strip · not found");
+  expect(reconnect.hidden).toBe(false);
+  view.update(st({ strip: { kind: "connected", name: "dj", segments: 10 } }));
+  expect(reconnect.hidden).toBe(true);
+});
+
 it("settings_save_error_is_shown", async () => {
   vi.mocked(api.saveSettings).mockRejectedValue("disk full");
   byLabel("Settings").click();
@@ -215,8 +253,11 @@ it("copy_is_english", async () => {
       "Brightness",
       "MIDI · Deeboo Lighting In",
       "Strip · not connected",
+      "Reconnect…",
       "Audio · off",
       "‹ Settings",
+      "Strip · not connected",
+      "Connect…",
       "MIDI input",
       "Deeboo Lighting In only",
       "IAC Bus 1",

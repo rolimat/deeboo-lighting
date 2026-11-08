@@ -72,7 +72,8 @@ pub fn run() -> tauri::Result<()> {
         .build(tauri::generate_context!())?
         .run(|app, event| {
             if let RunEvent::Exit = event {
-                app.state::<commands::AppState>().quit();
+                app.state::<commands::AppState>()
+                    .quit(&commands::wizard_emit(app));
             }
         });
     Ok(())

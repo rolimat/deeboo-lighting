@@ -3,12 +3,13 @@
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use light_core::paint::{Hsv, PAINT_DP, PaintCommand, decode_segment_count, encode};
-use rustuya::tokio::{Device, Discovered, Discovery, Event, Listener, Version};
+use rustuya::tokio::{Device, Discovered, Discovery, Event, Listener, TuyaError, Version};
 use secrecy::ExposeSecret;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -26,6 +27,8 @@ pub enum StripError {
     NotFound,
     ForbiddenAddress,
     Connect,
+    /// The strip answered but rejected the key (decryption or authentication failed).
+    Auth,
     Send,
     Encode,
     NoSegments,
@@ -37,6 +40,7 @@ impl fmt::Display for StripError {
             Self::NotFound => "strip not found on the LAN",
             Self::ForbiddenAddress => "strip address is not on a local private subnet",
             Self::Connect => "cannot connect to the strip",
+            Self::Auth => "the strip rejected the saved key",
             Self::Send => "cannot send to the strip",
             Self::Encode => "cannot encode the paint command",
             Self::NoSegments => "no paint data received from the strip",
@@ -70,32 +74,79 @@ pub struct Strip {
     device: Device,
 }
 
-impl Strip {
-    /// # Errors
-    /// Fails if the strip is not found, sits outside the local subnets, or does not connect.
-    pub async fn connect(cfg: &StripConfig) -> Result<Self, StripError> {
-        let disco = Discovery::new().map_err(|e| {
-            log::debug!("discovery init failed: {e}");
-            StripError::NotFound
-        })?;
-        let info = disco.find(&cfg.id, DISCOVERY_WINDOW).await.map_err(|e| {
-            log::debug!("discovery failed: {e}");
-            StripError::NotFound
-        })?;
-        if !matches!(info.ip, IpAddr::V4(ip) if on_local_subnet(ip)) {
-            return Err(StripError::ForbiddenAddress);
-        }
+/// What a connection attempt needs from the network (real: discovery and rustuya; tests: a script).
+trait Link {
+    type Conn;
+    /// Whether the saved address is allowed on the Mac's subnets and answers.
+    fn hint(&self, ip: Ipv4Addr) -> impl Future<Output = bool> + Send;
+    /// Finds the strip by ID through discovery.
+    fn find(&self, id: &str) -> impl Future<Output = Result<Found, StripError>> + Send;
+    /// `version` is `None` when unknown (the saved-address path).
+    fn dial(
+        &self,
+        cfg: &StripConfig,
+        ip: Ipv4Addr,
+        version: Option<Version>,
+    ) -> impl Future<Output = Result<Self::Conn, StripError>> + Send;
+}
+
+/// The saved address is only a hint: another Tuya device may hold it now, and its refusal of our key
+/// says nothing about ours. Only the device found by ID can fail with `Auth`.
+async fn connect_in<L: Link>(link: &L, cfg: &StripConfig) -> Result<L::Conn, StripError> {
+    if let Some(ip) = cfg.last_ip
+        && link.hint(ip).await
+        && let Ok(conn) = link.dial(cfg, ip, None).await
+    {
+        return Ok(conn);
+    }
+    let found = link.find(&cfg.id).await?;
+    let version = (found.version != Version::Auto).then_some(found.version);
+    link.dial(cfg, found.ip, version).await
+}
+
+struct RealLink;
+
+impl Link for RealLink {
+    type Conn = Device;
+
+    async fn hint(&self, ip: Ipv4Addr) -> bool {
+        on_local_subnet(ip) && tcp_reachable(ip).await
+    }
+
+    async fn find(&self, id: &str) -> Result<Found, StripError> {
+        find_by_id(id, None, DISCOVERY_WINDOW).await
+    }
+
+    async fn dial(
+        &self,
+        cfg: &StripConfig,
+        ip: Ipv4Addr,
+        version: Option<Version>,
+    ) -> Result<Device, StripError> {
         let key = cfg.local_key.expose_secret().as_bytes().to_vec();
-        let mut builder = Device::builder(cfg.id.clone(), key).address(info.ip.to_string());
-        if let Some(v) = info.version {
+        let mut builder = Device::builder(cfg.id.clone(), key).address(ip.to_string());
+        if let Some(v) = version {
             builder = builder.version(v);
         }
         let device = builder.connect().map_err(|_| StripError::Connect)?;
-        device
-            .wait_connected(TIMEOUT)
+        if let Err(e) = device.wait_connected(TIMEOUT).await {
+            device.close().await;
+            return Err(match e {
+                TuyaError::Core(c) if c.is_auth_failure() => StripError::Auth,
+                _ => StripError::Connect,
+            });
+        }
+        Ok(device)
+    }
+}
+
+impl Strip {
+    /// # Errors
+    /// `NotFound` if discovery misses the ID, `Auth` if the strip rejects the key, `Connect` otherwise.
+    pub async fn connect(cfg: &StripConfig) -> Result<Self, StripError> {
+        connect_in(&RealLink, cfg)
             .await
-            .map_err(|_| StripError::Connect)?;
-        Ok(Self { device })
+            .map(|device| Self { device })
     }
 
     /// Lights `segment` white on an otherwise dark strip so the user can see which it is.
@@ -251,13 +302,17 @@ impl Announcements for Disco {
 
     async fn reachable(&self, ip: Ipv4Addr) -> bool {
         let _ = &self.disco;
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            tokio::net::TcpStream::connect((ip, TUYA_PORT)),
-        )
-        .await
-        .is_ok_and(|r| r.is_ok())
+        tcp_reachable(ip).await
     }
+}
+
+async fn tcp_reachable(ip: Ipv4Addr) -> bool {
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::TcpStream::connect((ip, TUYA_PORT)),
+    )
+    .await
+    .is_ok_and(|r| r.is_ok())
 }
 
 struct DeviceFrames(Listener);
@@ -337,42 +392,89 @@ impl Painter for Strip {
 }
 
 /// From the engine to the strip task.
-#[derive(Debug)]
 pub enum StripMsg {
     Paint(PaintCommand),
     /// Try again after an error; ignored while connected.
     Connect,
+    /// A new strip file: drop the connection and connect with this config.
+    Configure(StripConfig),
 }
 
-/// Connects, then paints each command as it arrives. After a paint error it reports
-/// `StripStatus::Error` and drops commands until a `Connect` brings the strip back.
+/// The status a failed connection shows: a rejected key and a missing ID get their own.
+fn status_of(e: &StripError) -> StripStatus {
+    match e {
+        StripError::Auth => StripStatus::KeyInvalid,
+        StripError::NotFound => StripStatus::NotFound,
+        _ => StripStatus::Error,
+    }
+}
+
+/// The next config sent to the task; paints and retries meanwhile are stale and dropped.
+async fn wait_configure(rx: &mut UnboundedReceiver<StripMsg>) -> Option<StripConfig> {
+    loop {
+        if let StripMsg::Configure(c) = rx.recv().await? {
+            return Some(c);
+        }
+    }
+}
+
+/// Connects, then paints each command as it arrives. A failure reports its status
+/// (`StripStatus::{Error, NotFound, KeyInvalid}`) and drops commands until a `Connect` retries;
+/// a `Configure` at any moment, even mid-connection, starts over with the new config.
 pub async fn run<P, Fut>(
-    name: String,
-    segments: u8,
-    mut connect: impl FnMut() -> Fut,
+    initial: Option<StripConfig>,
+    mut connect: impl FnMut(Arc<StripConfig>) -> Fut,
     mut rx: UnboundedReceiver<StripMsg>,
     report: impl Fn(StripStatus),
 ) where
     P: Painter,
     Fut: Future<Output = Result<P, StripError>>,
 {
+    let mut cfg = initial.map(Arc::new);
     let mut painter = None;
-    loop {
+    'connect: loop {
+        let Some(c) = cfg.clone() else {
+            report(StripStatus::NotConfigured);
+            match wait_configure(&mut rx).await {
+                Some(new) => cfg = Some(Arc::new(new)),
+                None => return,
+            }
+            continue;
+        };
         if painter.is_none() {
             report(StripStatus::Connecting);
-            match connect().await {
-                Ok(p) => {
-                    // Whatever queued up while connecting is stale; the engine repaints on `Connected`.
-                    while rx.try_recv().is_ok() {}
+            let attempt = tokio::select! {
+                r = connect(c.clone()) => Ok(r),
+                new = wait_configure(&mut rx) => Err(new),
+            };
+            match attempt {
+                Err(None) => return,
+                Err(Some(new)) => {
+                    cfg = Some(Arc::new(new));
+                    continue;
+                }
+                Ok(Ok(p)) => {
+                    // Whatever queued up while connecting is stale (the engine repaints on
+                    // `Connected`), except a newer config.
+                    let mut newer = None;
+                    while let Ok(m) = rx.try_recv() {
+                        if let StripMsg::Configure(new) = m {
+                            newer = Some(new);
+                        }
+                    }
+                    if let Some(new) = newer {
+                        cfg = Some(Arc::new(new));
+                        continue;
+                    }
                     painter = Some(p);
                     report(StripStatus::Connected {
-                        name: name.clone(),
-                        segments,
+                        name: c.name.clone(),
+                        segments: c.segments,
                     });
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     log::error!("strip connection failed: {e}");
-                    report(StripStatus::Error);
+                    report(status_of(&e));
                 }
             }
         }
@@ -380,31 +482,35 @@ pub async fn run<P, Fut>(
         loop {
             let Some(msg) = rx.recv().await else { return };
             match (&painter, msg) {
+                (_, StripMsg::Configure(new)) => {
+                    cfg = Some(Arc::new(new));
+                    painter = None;
+                    continue 'connect;
+                }
                 (Some(p), StripMsg::Paint(cmd)) => {
-                    if let Err(e) = p.paint(segments, &cmd).await {
+                    if let Err(e) = p.paint(c.segments, &cmd).await {
                         log::warn!("strip paint failed: {e}");
                         report(StripStatus::Error);
                         painter = None;
                     }
                 }
-                (None, StripMsg::Connect) => break,
+                (None, StripMsg::Connect) => continue 'connect,
                 _ => {}
             }
         }
     }
 }
 
-/// Starts the strip task on the async runtime.
+/// Starts the strip task on the async runtime; it idles until a config arrives if there is none.
 pub fn spawn(
-    cfg: StripConfig,
+    cfg: Option<StripConfig>,
     rx: UnboundedReceiver<StripMsg>,
     report: impl Fn(StripStatus) + Send + 'static,
 ) {
     tauri::async_runtime::spawn(async move {
         run(
-            cfg.name.clone(),
-            cfg.segments,
-            || Strip::connect(&cfg),
+            cfg,
+            |c: Arc<StripConfig>| async move { Strip::connect(&c).await },
             rx,
             report,
         )
@@ -460,9 +566,8 @@ mod tests {
         };
         tauri::async_runtime::block_on(async move {
             let task = tokio::spawn(run(
-                "dj".into(),
-                10,
-                move || {
+                Some(cfg("dj", None)),
+                move |_| {
                     let a = Arc::clone(&a);
                     async move { Ok(Fake(a)) }
                 },
@@ -722,5 +827,245 @@ mod tests {
             paused(identify_via(&rec, 11, 10)),
             Err(StripError::Encode)
         ));
+    }
+
+    // --- reconnecting, classification and the stale-address fallback ---
+
+    fn cfg(name: &str, last_ip: Option<Ipv4Addr>) -> StripConfig {
+        StripConfig {
+            id: "bf1234".into(),
+            name: name.into(),
+            local_key: secrecy::SecretString::from("0123456789abcdef"),
+            segments: 10,
+            last_ip,
+        }
+    }
+
+    type Reports = Arc<Mutex<Vec<StripStatus>>>;
+
+    /// Runs the task until `rx` closes; `script` feeds it messages and `connect` decides each outcome.
+    fn drive_task(
+        initial: Option<StripConfig>,
+        connect: impl FnMut(
+            Arc<StripConfig>,
+        )
+            -> std::pin::Pin<Box<dyn Future<Output = Result<Fake, StripError>> + Send>>,
+        script: impl AsyncFnOnce(&tokio::sync::mpsc::UnboundedSender<StripMsg>, &Reports),
+    ) -> Vec<StripStatus> {
+        let log: Reports = Arc::default();
+        let l = Arc::clone(&log);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        paused(async {
+            let task = run(initial, connect, rx, move |s| {
+                l.lock().map(|mut v| v.push(s)).unwrap_or_default();
+            });
+            let feed = async {
+                script(&tx, &log).await;
+                drop(tx);
+            };
+            tokio::join!(task, feed);
+        });
+        log.lock().map(|l| l.clone()).unwrap_or_default()
+    }
+
+    fn ok_fake(
+        _: Arc<StripConfig>,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<Fake, StripError>> + Send>> {
+        Box::pin(async { Ok(Fake(Arc::new(AtomicUsize::new(0)))) })
+    }
+
+    async fn settle() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    #[test]
+    fn auth_failure_marks_key_invalid() {
+        let r = drive_task(
+            Some(cfg("dj", None)),
+            |_| Box::pin(async { Err(StripError::Auth) }),
+            async |_, _| settle().await,
+        );
+        assert_eq!(r, vec![StripStatus::Connecting, StripStatus::KeyInvalid]);
+    }
+
+    #[test]
+    fn missing_id_marks_not_found() {
+        let r = drive_task(
+            Some(cfg("dj", None)),
+            |_| Box::pin(async { Err(StripError::NotFound) }),
+            async |tx, _| {
+                settle().await;
+                // Retrying asks again; a connection refused is a plain error.
+                tx.send(StripMsg::Connect).unwrap_or_default();
+                settle().await;
+            },
+        );
+        assert_eq!(
+            r,
+            vec![
+                StripStatus::Connecting,
+                StripStatus::NotFound,
+                StripStatus::Connecting,
+                StripStatus::NotFound
+            ]
+        );
+        assert_eq!(status_of(&StripError::Connect), StripStatus::Error);
+    }
+
+    #[test]
+    fn configure_connects_a_strip_that_was_not_configured_and_replaces_a_connected_one() {
+        let connected = |n: &str| StripStatus::Connected {
+            name: n.into(),
+            segments: 10,
+        };
+        let r = drive_task(None, ok_fake, async |tx, _| {
+            settle().await;
+            tx.send(StripMsg::Configure(cfg("one", None)))
+                .unwrap_or_default();
+            settle().await;
+            tx.send(StripMsg::Configure(cfg("two", None)))
+                .unwrap_or_default();
+            settle().await;
+        });
+        assert_eq!(
+            r,
+            vec![
+                StripStatus::NotConfigured,
+                StripStatus::Connecting,
+                connected("one"),
+                StripStatus::Connecting,
+                connected("two")
+            ]
+        );
+    }
+
+    #[test]
+    fn configure_wins_over_a_connection_attempt_in_flight() {
+        let r = drive_task(
+            Some(cfg("old", None)),
+            |c| {
+                if c.name == "old" {
+                    Box::pin(std::future::pending())
+                } else {
+                    Box::pin(async { Ok(Fake(Arc::new(AtomicUsize::new(0)))) })
+                }
+            },
+            async |tx, _| {
+                settle().await;
+                tx.send(StripMsg::Configure(cfg("new", None)))
+                    .unwrap_or_default();
+                settle().await;
+            },
+        );
+        assert_eq!(
+            r.last(),
+            Some(&StripStatus::Connected {
+                name: "new".into(),
+                segments: 10
+            })
+        );
+    }
+
+    struct FakeLink {
+        hint_ok: bool,
+        /// Addresses whose device rejects the key.
+        reject: Vec<Ipv4Addr>,
+        found: Result<Ipv4Addr, ()>,
+        dials: Mutex<Vec<Ipv4Addr>>,
+    }
+
+    impl FakeLink {
+        fn new(hint_ok: bool, reject: &[Ipv4Addr], found: Result<Ipv4Addr, ()>) -> Self {
+            Self {
+                hint_ok,
+                reject: reject.to_vec(),
+                found,
+                dials: Mutex::default(),
+            }
+        }
+    }
+
+    impl Link for FakeLink {
+        type Conn = Ipv4Addr;
+
+        fn hint(&self, _: Ipv4Addr) -> impl Future<Output = bool> + Send {
+            std::future::ready(self.hint_ok)
+        }
+
+        fn find(&self, _: &str) -> impl Future<Output = Result<Found, StripError>> + Send {
+            std::future::ready(
+                self.found
+                    .map(|ip| Found {
+                        ip,
+                        version: Version::Auto,
+                    })
+                    .map_err(|()| StripError::NotFound),
+            )
+        }
+
+        fn dial(
+            &self,
+            _: &StripConfig,
+            ip: Ipv4Addr,
+            _: Option<Version>,
+        ) -> impl Future<Output = Result<Ipv4Addr, StripError>> + Send {
+            self.dials
+                .lock()
+                .map(|mut d| d.push(ip))
+                .unwrap_or_default();
+            std::future::ready(if self.reject.contains(&ip) {
+                Err(StripError::Auth)
+            } else {
+                Ok(ip)
+            })
+        }
+    }
+
+    const STALE: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 77);
+
+    #[test]
+    fn stale_last_ip_falls_back_to_discovery() {
+        // Another Tuya device answers on the saved address and refuses our key.
+        let link = FakeLink::new(true, &[STALE], Ok(STRIP));
+        let r = paused(connect_in(&link, &cfg("dj", Some(STALE))));
+        assert_eq!(r.ok(), Some(STRIP));
+        assert_eq!(*link.dials.lock().unwrap(), [STALE, STRIP]);
+    }
+
+    #[test]
+    fn only_the_device_found_by_id_can_fail_the_key() {
+        let link = FakeLink::new(true, &[STALE, STRIP], Ok(STRIP));
+        let r = paused(connect_in(&link, &cfg("dj", Some(STALE))));
+        assert!(matches!(r, Err(StripError::Auth)));
+        assert_eq!(*link.dials.lock().unwrap(), [STALE, STRIP]);
+        // A rejected key on the saved address alone, with the strip not announcing: not found.
+        let link = FakeLink::new(true, &[STALE], Err(()));
+        let r = paused(connect_in(&link, &cfg("dj", Some(STALE))));
+        assert!(matches!(r, Err(StripError::NotFound)));
+    }
+
+    #[test]
+    fn unreachable_or_missing_hint_goes_straight_to_discovery() {
+        let link = FakeLink::new(false, &[], Ok(STRIP));
+        assert_eq!(
+            paused(connect_in(&link, &cfg("dj", Some(STALE)))).ok(),
+            Some(STRIP)
+        );
+        assert_eq!(*link.dials.lock().unwrap(), [STRIP]);
+        let link = FakeLink::new(true, &[], Ok(STRIP));
+        assert_eq!(
+            paused(connect_in(&link, &cfg("dj", None))).ok(),
+            Some(STRIP)
+        );
+        assert_eq!(*link.dials.lock().unwrap(), [STRIP]);
+    }
+
+    #[test]
+    fn a_good_saved_address_is_used_without_discovery() {
+        let link = FakeLink::new(true, &[], Err(()));
+        assert_eq!(
+            paused(connect_in(&link, &cfg("dj", Some(STALE)))).ok(),
+            Some(STALE)
+        );
     }
 }

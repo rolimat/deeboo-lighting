@@ -10,16 +10,27 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
 use crate::runtime::{Input, RuntimeHandle};
+
 use crate::settings::{self, Settings};
 use crate::wizard::session::{Emit, RealLan, Wizard};
+
+/// The most the app waits at exit for the wizard to revoke its cloud session.
+const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StripStatus {
     NotConfigured,
     Connecting,
-    Connected { name: String, segments: u8 },
+    Connected {
+        name: String,
+        segments: u8,
+    },
     Error,
+    /// The strip refused the saved key (re-added in Smart Life): pair again.
+    KeyInvalid,
+    /// Discovery did not see the strip's ID.
+    NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -219,7 +230,9 @@ impl AppState {
         self.wizard.cancel(emit);
     }
 
-    pub fn quit(&self) {
+    /// App exit: a running wizard is cancelled (its cloud session revoked) before the engine stops.
+    pub fn quit(&self, emit: &Emit) {
+        self.wizard.shutdown(emit, QUIT_WAIT);
         let _ = self.send(Input::Quit);
     }
 }
@@ -328,7 +341,14 @@ pub async fn strip_identify(state: tauri::State<'_, AppState>, segment: u8) -> R
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
 pub fn wizard_save(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.wizard.save(&state.strip_path()?, &wizard_emit(&app))
+    let cfg = state
+        .wizard
+        .save(&state.strip_path()?, &wizard_emit(&app))?;
+    // The file is safe on disk; if the engine cannot take the news now, a restart still picks it up.
+    state.send(Input::StripChanged(cfg)).map_err(|e| {
+        log::warn!("strip saved but not reloaded: {e}");
+        "Saved. Restart the app to use the new strip.".to_string()
+    })
 }
 
 /// The settings view's Quit button; `RunEvent::Exit` then stops the engine.
