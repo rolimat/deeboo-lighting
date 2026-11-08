@@ -10,20 +10,8 @@ use serde::Serialize;
 pub enum Step {
     Login,
     Devices,
-    #[cfg_attr(
-        test,
-        expect(dead_code, reason = "raised by the LAN steps in Plan 4 task 3")
-    )]
     Search,
-    #[cfg_attr(
-        test,
-        expect(dead_code, reason = "raised by the LAN steps in Plan 4 task 3")
-    )]
     Segments,
-    #[cfg_attr(
-        test,
-        expect(dead_code, reason = "raised by the save step in Plan 4 task 6")
-    )]
     Save,
 }
 
@@ -78,6 +66,13 @@ pub enum WizardState {
 }
 
 /// UI-driven events.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "specification of the transitions; the session enforces them directly"
+    )
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     Choose(String),
@@ -86,6 +81,13 @@ pub enum Event {
 }
 
 /// Next state for a UI event at `now_us`. Events that make no sense in a state leave it unchanged.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "specification of the transitions; the session enforces them directly"
+    )
+)]
 #[must_use]
 pub fn next(state: WizardState, event: &Event, now_us: u64) -> WizardState {
     match (state, event) {

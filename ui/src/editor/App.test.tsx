@@ -2,7 +2,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { act } from "preact/test-utils";
 import { render } from "preact";
 
-vi.mock("./api", () => ({ api: { getStatus: vi.fn() } }));
+vi.mock("./api", () => ({
+  api: { getStatus: vi.fn(), onWizard: vi.fn(async () => () => {}), wizardCancel: vi.fn() },
+}));
 import { api } from "./api";
 import { App } from "./App";
 

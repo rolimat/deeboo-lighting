@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import type { StripStatus } from "../api";
 import { api } from "./api";
+import { Wizard } from "./strip/Wizard";
 
 function describe(s: StripStatus | null): string {
   switch (s?.kind) {
@@ -29,7 +30,8 @@ export function App() {
       </nav>
       <section class="flex-1 p-6" aria-label="Strip">
         <h1 class="text-lg">Strip</h1>
-        <p class="text-dim">{describe(strip)}</p>
+        <p class="mb-4 text-dim">{describe(strip)}</p>
+        <Wizard />
       </section>
     </div>
   );

@@ -10,6 +10,12 @@ const COMMANDS: &[&str] = &[
     "ui_command",
     "quit",
     "open_editor",
+    "wizard_start",
+    "wizard_choose",
+    "wizard_retry",
+    "wizard_cancel",
+    "strip_identify",
+    "wizard_save",
 ];
 
 fn main() {

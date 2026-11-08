@@ -15,7 +15,7 @@ mod settings;
 mod strip;
 mod strip_store;
 mod tray;
-#[cfg_attr(not(test), expect(dead_code, reason = "wired to IPC in Plan 4 task 6"))]
+
 mod wizard;
 
 /// Env-driven logger; the network stacks stay at `warn` even with `RUST_LOG=trace`, so
@@ -44,8 +44,22 @@ pub fn run() -> tauri::Result<()> {
             commands::list_audio_inputs,
             commands::ui_command,
             commands::quit,
-            editor_window::open_editor
+            editor_window::open_editor,
+            commands::wizard_start,
+            commands::wizard_choose,
+            commands::wizard_retry,
+            commands::wizard_cancel,
+            commands::strip_identify,
+            commands::wizard_save
         ])
+        .on_window_event(|window, event| {
+            // Closing the editor mid-wizard must revoke the cloud session and drop the key.
+            if window.label() == "editor" && matches!(event, tauri::WindowEvent::Destroyed) {
+                let app = window.app_handle();
+                app.state::<commands::AppState>()
+                    .editor_closed(&commands::wizard_emit(app));
+            }
+        })
         .setup(|app| {
             tray::setup(app)?;
             let dir = app.path().app_config_dir()?;

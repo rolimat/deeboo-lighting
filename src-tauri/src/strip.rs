@@ -28,7 +28,6 @@ pub enum StripError {
     Connect,
     Send,
     Encode,
-    #[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
     NoSegments,
 }
 
@@ -103,7 +102,6 @@ impl Strip {
     ///
     /// # Errors
     /// Fails if the segment is outside the strip or a message cannot be sent.
-    #[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
     pub async fn identify(&self, segment: u8, segments: u8) -> Result<(), StripError> {
         identify_via(self, segment, segments).await
     }
@@ -120,24 +118,18 @@ impl Strip {
 }
 
 /// Gap between messages: the strip loses back-to-back ones (spec §5.3).
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 const MESSAGE_GAP: Duration = Duration::from_millis(125);
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 const MAX_SEGMENTS: u8 = 60;
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 const MAX_FRAME: usize = 4096;
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 const TUYA_PORT: u16 = 6668;
 
 /// Where the strip answered; `version` is `Auto` when it was not announced.
 #[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 pub struct Found {
     pub ip: Ipv4Addr,
     pub version: Version,
 }
 
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 pub struct Announcement {
     pub id: String,
     pub ip: IpAddr,
@@ -145,13 +137,11 @@ pub struct Announcement {
 }
 
 /// Source of discovery announcements (real: rustuya; tests: a script).
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 trait Announcements {
     fn next(&mut self) -> impl Future<Output = Option<Announcement>> + Send;
     fn reachable(&self, ip: Ipv4Addr) -> impl Future<Output = bool> + Send;
 }
 
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 async fn find_in(
     src: &mut impl Announcements,
     id: &str,
@@ -191,7 +181,6 @@ async fn find_in(
 }
 
 /// The strip's segment count from a status frame (`{"dps":{"61":"<base64>"}}`), if it holds one.
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 fn segments_from_frame(payload: &[u8]) -> Option<u8> {
     if payload.len() > MAX_FRAME {
         return None;
@@ -205,12 +194,10 @@ fn segments_from_frame(payload: &[u8]) -> Option<u8> {
 }
 
 /// Source of status frames (real: the device listener; tests: a script).
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 trait Frames {
     fn next(&mut self) -> impl Future<Output = Option<Vec<u8>>> + Send;
 }
 
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 async fn listen_in(frames: &mut impl Frames, window: Duration) -> Result<u8, StripError> {
     let wait = async {
         while let Some(f) = frames.next().await {
@@ -228,7 +215,6 @@ async fn listen_in(frames: &mut impl Frames, window: Duration) -> Result<u8, Str
 }
 
 /// Eraser on every segment, then white on `segment` (spec §6.7.5).
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 async fn identify_via<P: Painter>(p: &P, segment: u8, segments: u8) -> Result<(), StripError> {
     let all = PaintCommand::Eraser {
         segments: (1..=segments).collect(),
@@ -248,7 +234,6 @@ async fn identify_via<P: Painter>(p: &P, segment: u8, segments: u8) -> Result<()
     p.paint(segments, &one).await
 }
 
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 struct Disco {
     disco: Discovery,
     stream: Discovered,
@@ -275,7 +260,6 @@ impl Announcements for Disco {
     }
 }
 
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 struct DeviceFrames(Listener);
 
 impl Frames for DeviceFrames {
@@ -292,7 +276,6 @@ impl Frames for DeviceFrames {
 ///
 /// # Errors
 /// `NotFound` if nothing valid answers within `window`.
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 pub async fn find_by_id(
     id: &str,
     last_ip: Option<Ipv4Addr>,
@@ -312,7 +295,6 @@ pub async fn find_by_id(
 ///
 /// # Errors
 /// `ForbiddenAddress`, `Connect`, or `NoSegments` when nothing valid arrives within `window`.
-#[allow(dead_code, reason = "used by the wizard in Plan 4 task 6")]
 pub async fn listen_segment_count(
     cfg: &StripConfig,
     ip: Ipv4Addr,

@@ -108,11 +108,17 @@ mod tests {
             .flatten()
             .filter_map(|v| v.as_str())
             .collect();
-        // The editor reads the strip status and listens for events; no window or popover powers.
+        // The editor reads the strip status, drives the wizard and listens for events; no window or popover powers.
         assert_eq!(
             perms,
             [
                 "allow-get-status",
+                "allow-wizard-start",
+                "allow-wizard-choose",
+                "allow-wizard-retry",
+                "allow-wizard-cancel",
+                "allow-strip-identify",
+                "allow-wizard-save",
                 "core:event:allow-listen",
                 "core:event:allow-unlisten"
             ]

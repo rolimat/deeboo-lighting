@@ -3,5 +3,15 @@
   "identifier": "editor",
   "description": "Minimal permissions for the editor window",
   "windows": ["editor"],
-  "permissions": ["allow-get-status", "core:event:allow-listen", "core:event:allow-unlisten"]
+  "permissions": [
+    "allow-get-status",
+    "allow-wizard-start",
+    "allow-wizard-choose",
+    "allow-wizard-retry",
+    "allow-wizard-cancel",
+    "allow-strip-identify",
+    "allow-wizard-save",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
 }

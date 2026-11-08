@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wizard-cancel"
+description = "Enables the wizard_cancel command without any pre-configured scope."
+commands.allow = ["wizard_cancel"]
+
+[[permission]]
+identifier = "deny-wizard-cancel"
+description = "Denies the wizard_cancel command without any pre-configured scope."
+commands.deny = ["wizard_cancel"]

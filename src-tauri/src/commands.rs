@@ -7,9 +7,11 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use light_core::detect::Moment;
 use light_core::engine::UiCommand;
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 use crate::runtime::{Input, RuntimeHandle};
 use crate::settings::{self, Settings};
+use crate::wizard::session::{Emit, RealLan, Wizard};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -131,6 +133,7 @@ pub struct AppState {
     runtime: Mutex<Option<RuntimeHandle>>,
     /// Read by the engine thread: status goes out only while this is true.
     visible: Arc<AtomicBool>,
+    wizard: Wizard,
 }
 
 impl Default for AppState {
@@ -141,6 +144,7 @@ impl Default for AppState {
             settings_path: Mutex::new(None),
             runtime: Mutex::new(None),
             visible: Arc::new(AtomicBool::new(false)),
+            wizard: Wizard::default(),
         }
     }
 }
@@ -203,6 +207,18 @@ impl AppState {
         }
     }
 
+    /// `strip.json` next to the settings file.
+    fn strip_path(&self) -> Result<std::path::PathBuf, String> {
+        let path = lock(&self.settings_path).clone();
+        path.and_then(|p| p.parent().map(|d| d.join("strip.json")))
+            .ok_or_else(|| "settings unavailable".to_string())
+    }
+
+    /// Editor window closed: revoke and forget whatever the wizard holds.
+    pub fn editor_closed(&self, emit: &Emit) {
+        self.wizard.cancel(emit);
+    }
+
     pub fn quit(&self) {
         let _ = self.send(Input::Quit);
     }
@@ -255,6 +271,64 @@ pub fn ui_command(state: tauri::State<'_, AppState>, cmd: UiCommandDto) -> Resul
         state.save_settings(s)?;
     }
     state.send(Input::Ui(cmd.into()))
+}
+
+/// Pushes wizard states to the editor window only.
+pub fn wizard_emit(app: &tauri::AppHandle) -> Emit {
+    let app = app.clone();
+    Arc::new(move |state| {
+        if let Err(e) = app.emit_to("editor", "wizard", &state) {
+            log::debug!("wizard event not delivered: {e}");
+        }
+    })
+}
+
+/// The User Code is validated here (`UserCode::parse`) and never logged or echoed.
+#[tauri::command]
+pub async fn wizard_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    user_code: String,
+) -> Result<(), String> {
+    let code = tuya_cloud::UserCode::parse(&user_code).map_err(|_| {
+        "Enter the User Code from Smart Life (letters and digits only).".to_string()
+    })?;
+    state.wizard.start(
+        Arc::new(RealLan),
+        Arc::new(tuya_cloud::UreqTransport::new()),
+        code,
+        wizard_emit(&app),
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri deserialises owned arguments
+pub fn wizard_choose(state: tauri::State<'_, AppState>, device_id: String) -> Result<(), String> {
+    state.wizard.choose(&device_id)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
+pub fn wizard_retry(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+    state.wizard.retry(&wizard_emit(&app));
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
+pub fn wizard_cancel(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+    state.wizard.cancel(&wizard_emit(&app));
+}
+
+/// `segment` is 1-based and checked against the strip's segment count.
+#[tauri::command]
+pub async fn strip_identify(state: tauri::State<'_, AppState>, segment: u8) -> Result<(), String> {
+    state.wizard.identify(segment).await
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
+pub fn wizard_save(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.wizard.save(&state.strip_path()?, &wizard_emit(&app))
 }
 
 /// The settings view's Quit button; `RunEvent::Exit` then stops the engine.
@@ -320,7 +394,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 8);
+        assert_eq!(commands.len(), 14);
         assert_eq!(granted, commands);
     }
 

@@ -16,10 +16,6 @@ pub struct StripConfig {
     pub local_key: SecretString,
     pub segments: u8,
     /// Hint only: callers re-check it against the local subnets before use.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the wizard in Plan 4 task 6")
-    )]
     pub last_ip: Option<Ipv4Addr>,
 }
 
@@ -105,10 +101,6 @@ pub fn load(path: &Path) -> Result<StripConfig, StoreError> {
 ///
 /// # Errors
 /// Any I/O error; `path` needs a parent directory and a file name.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the wizard in Plan 4 task 6")
-)]
 pub fn save(path: &Path, cfg: &StripConfig) -> io::Result<()> {
     let bad = || {
         io::Error::new(
