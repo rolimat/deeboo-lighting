@@ -209,13 +209,20 @@ fn phrase(bars: u8) -> PhraseBars {
 
 /// A fresh engine for `segments` with the settings' show parameters.
 fn engine_for(settings: &Settings, segments: u8, lights_on: bool) -> Engine {
-    Engine::new(EngineConfig {
-        segments,
-        phrase: phrase(settings.phrase_bars),
-        lead_us: u64::from(settings.lead_ms) * 1000,
-        brightness_pct: settings.brightness_pct,
-        lights_on,
-    })
+    // Launch time (µs) seeds random order and generated sequences: shows differ between sessions.
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_micros()).unwrap_or(0));
+    Engine::with_seed(
+        EngineConfig {
+            segments,
+            phrase: phrase(settings.phrase_bars),
+            lead_us: u64::from(settings.lead_ms) * 1000,
+            brightness_pct: settings.brightness_pct,
+            lights_on,
+        },
+        seed,
+    )
 }
 
 /// The engine status as the popover sees it: BPM to a tenth, so jitter does not repaint.

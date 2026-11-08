@@ -540,3 +540,50 @@ fn matching_library_sequence_is_played() {
     let got = apply_all(&s.sends, vec![None; 4]);
     assert_eq!(got, vec![hsv(240, 1000, 1000); 4]);
 }
+
+#[test]
+fn generated_sequence_plays_and_changes() {
+    use light_core::library::{Interval, Library, SeqRef};
+    let mut lib = Library::builtin(4);
+    let ms = &mut lib.sets[0].rhythm;
+    ms.sequences = vec![SeqRef::Generated];
+    ms.interval = Interval::Bars(1);
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(64, &mut none);
+    // The messages of each bar (windows start one lead before the bar): built-in Halves repeats
+    // identically, a generated sequence rotating every bar does not.
+    let bars: Vec<String> = (1..15u64)
+        .map(|bar| {
+            let from = T0 + bar * 4 * 480_000 - LEAD;
+            format!(
+                "{:?}",
+                s.sends_in(from, from + 4 * 480_000)
+                    .iter()
+                    .map(|(_, c)| c)
+                    .collect::<Vec<_>>()
+            )
+        })
+        .collect();
+    assert!(bars.iter().any(|b| *b != bars[0]), "{bars:?}");
+}
+
+#[test]
+fn new_palette_on_drop() {
+    use light_core::library::Library;
+    let mut lib = Library::builtin(4);
+    let mut p2 = lib.palettes[0].1.clone();
+    p2.principal.h = 100;
+    lib.palettes.push((2, p2));
+    lib.sets[0].rhythm.palettes = vec![1, 2];
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    s.cmd(UiCommand::Force(BuildUp));
+    s.beats_of(8, &mut none);
+    s.cmd(UiCommand::Force(Rhythm));
+    s.beats_of(8, &mut none);
+    assert_ne!(hue_sends(&s, 100), Vec::<u64>::new());
+}

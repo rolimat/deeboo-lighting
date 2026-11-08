@@ -2,10 +2,13 @@
 use crate::builtin;
 use crate::clock::{ClockEvent, ClockTracker, PhraseBars, Position};
 use crate::detect::Moment;
-use crate::library::{Library, SeqRef};
+use crate::generator::Generator;
+use crate::groups::{Groups, groups};
+use crate::library::{Library, MomentSet, SeqRef, Set};
 use crate::model::{Colour, Palette, Role, Sequence, resolve};
 use crate::moments::MomentControl;
 use crate::paint::PaintCommand;
+use crate::rotation::{Choice, Rotator};
 use crate::scheduler::Scheduler;
 
 #[derive(Clone, Copy, Debug)]
@@ -53,6 +56,15 @@ struct Playing {
 struct Look {
     palette: Palette,
     seqs: [Sequence; 3],
+    /// Only for a library built for this strip: rotation state and what `Generated` needs.
+    rot: Option<Box<Rotation>>,
+}
+
+#[derive(Clone)]
+struct Rotation {
+    lib: Library,
+    groups: Groups,
+    rots: [Rotator; 3],
 }
 
 const MOMENTS: [Moment; 3] = [Moment::Rhythm, Moment::Calm, Moment::BuildUp];
@@ -61,42 +73,66 @@ fn slot(m: Moment) -> usize {
     MOMENTS.iter().position(|x| *x == m).unwrap_or(0)
 }
 
+fn moment_set(set: &Set, m: Moment) -> &MomentSet {
+    match m {
+        Moment::Rhythm => &set.rhythm,
+        Moment::Calm => &set.calm,
+        Moment::BuildUp => &set.buildup,
+    }
+}
+
+/// A library sequence, or a generated one; the built-in when the id is gone or invalid.
+fn resolve_seq(r: &Rotation, generator: &mut Generator, m: Moment, sr: SeqRef, n: u8) -> Sequence {
+    match sr {
+        SeqRef::Id(id) => r
+            .lib
+            .sequences
+            .iter()
+            .find(|(i, q)| *i == id && q.validate(n).is_ok())
+            .map(|(_, q)| q.clone()),
+        SeqRef::Generated => Some(generator.next(m, &r.groups, n)),
+    }
+    .unwrap_or_else(|| builtin::sequence(m, n))
+}
+
 impl Look {
     fn builtin(segments: u8) -> Self {
         Self {
             palette: builtin::test_palette(),
             seqs: MOMENTS.map(|m| builtin::sequence(m, segments)),
+            rot: None,
         }
     }
 
-    /// Per moment the active set's first usable sequence, else the built-in one. A library built
-    /// for another segment count plays the built-ins.
-    // shortcut: rotation, Generated and per-drop palettes are plan 6.
-    fn from_library(lib: &Library, segments: u8) -> Self {
-        let fits = lib.segments() == segments;
-        let set = lib.current_set();
+    /// Per moment the active set's first sequence (generated ones built now, once), with rotators
+    /// for the rest. A library built for another segment count, or without an active set, plays the
+    /// built-ins. The popover's palette pins the palette until the next drop.
+    fn from_library(lib: &Library, segments: u8, seed: u64, generator: &mut Generator) -> Self {
+        let Some(set) = lib.current_set().filter(|_| lib.segments() == segments) else {
+            return Self {
+                palette: lib.current_palette(),
+                ..Self::builtin(segments)
+            };
+        };
+        let rots = MOMENTS.map(|m| {
+            let r = Rotator::new(moment_set(set, m), seed ^ (slot(m) as u64 + 1) << 56);
+            if m == Moment::Calm { r.per_entry() } else { r }
+        });
+        let rot = Rotation {
+            lib: lib.clone(),
+            groups: groups(&lib.shape),
+            rots,
+        };
         let seqs = MOMENTS.map(|m| {
-            let ms = set.map(|s| match m {
-                Moment::Rhythm => &s.rhythm,
-                Moment::Calm => &s.calm,
-                Moment::BuildUp => &s.buildup,
-            });
-            ms.filter(|_| fits)
-                .and_then(|ms| {
-                    ms.sequences.iter().find_map(|r| match r {
-                        SeqRef::Id(id) => lib
-                            .sequences
-                            .iter()
-                            .find(|(i, q)| i == id && q.validate(segments).is_ok())
-                            .map(|(_, q)| q.clone()),
-                        SeqRef::Generated => None,
-                    })
-                })
-                .unwrap_or_else(|| builtin::sequence(m, segments))
+            rot.rots[slot(m)].current().map_or_else(
+                || builtin::sequence(m, segments),
+                |sr| resolve_seq(&rot, generator, m, sr, segments),
+            )
         });
         Self {
             palette: lib.current_palette(),
             seqs,
+            rot: Some(Box::new(rot)),
         }
     }
 }
@@ -109,6 +145,10 @@ pub struct Engine {
     look: Look,
     /// A saved library waits for the next bar start so no step is cut and nothing bursts.
     pending: Option<Look>,
+    generator: Generator,
+    seed: u64,
+    /// The moment the last step was planned for, to see entries and drops.
+    rot_moment: Option<Moment>,
     playing: Option<Playing>,
     pos: Option<Position>,
     last_beat_us: Option<u64>,
@@ -119,7 +159,16 @@ pub struct Engine {
 impl Engine {
     #[must_use]
     pub fn new(cfg: EngineConfig) -> Self {
+        Self::with_seed(cfg, 0)
+    }
+
+    /// `seed` drives random order and generated sequences (the app passes the launch time).
+    #[must_use]
+    pub fn with_seed(cfg: EngineConfig, seed: u64) -> Self {
         Self {
+            generator: Generator::new(seed),
+            seed,
+            rot_moment: None,
             cfg,
             clock: ClockTracker::new(cfg.phrase),
             sched: Scheduler::new(cfg.segments),
@@ -205,7 +254,7 @@ impl Engine {
 
     /// A stopped show uses the library at once; a running one from its next bar start.
     pub fn set_library(&mut self, now_us: u64, lib: &Library) -> Vec<PaintCommand> {
-        let look = Look::from_library(lib, self.cfg.segments);
+        let look = Look::from_library(lib, self.cfg.segments, self.seed, &mut self.generator);
         if self.clock.running() {
             self.pending = Some(look);
         } else {
@@ -248,6 +297,20 @@ impl Engine {
             self.look = look;
             self.playing = None;
         }
+        let entered = self.rot_moment != Some(moment);
+        let dropped =
+            entered && self.rot_moment == Some(Moment::BuildUp) && moment == Moment::Rhythm;
+        self.rot_moment = Some(moment);
+        let bar = start || (pos.half && pos.beat_in_bar == 4);
+        if entered || bar {
+            // The step planned on that half pulse is the next bar's first: count it as the bar start.
+            let at_pos = if bar && pos.half {
+                self.clock.position_after(pos)
+            } else {
+                pos
+            };
+            self.rotate(moment, at_pos, entered, dropped);
+        }
         // Beat 1 cannot be announced: its step goes out now and the next position is counted too.
         // shortcut: a half-beat first step is skipped on Start; only a forced Build-up has one.
         let first = start.then(|| self.step_scene(moment, true));
@@ -266,6 +329,35 @@ impl Engine {
         let resend = std::mem::take(&mut self.resend);
         if let Some(desired) = desired.filter(|_| changed || resend) {
             self.sched.plan(at, show_at, self.cfg.lead_us, &desired);
+        }
+    }
+
+    /// Asks the moment's rotator (and, on a drop, the rhythm set's palette list) what changes now.
+    /// Called only on a bar start, or when the moment is entered, where its sequence restarts anyway.
+    /// A new sequence or palette restarts the step count so the strip shows it at once.
+    fn rotate(&mut self, moment: Moment, pos: Position, entered: bool, dropped: bool) {
+        let n = self.cfg.segments;
+        let i = slot(moment);
+        let Some(r) = self.look.rot.as_mut() else {
+            return;
+        };
+        let drop_pal = dropped
+            .then(|| r.rots[slot(Moment::Rhythm)].on_drop())
+            .flatten()
+            .map(Choice::Palette);
+        let picks = [drop_pal, r.rots[i].on_boundary(pos, entered)];
+        for c in picks.into_iter().flatten() {
+            match c {
+                Choice::Sequence(sr) => {
+                    self.look.seqs[i] = resolve_seq(r, &mut self.generator, moment, sr, n);
+                }
+                Choice::Palette(id) => {
+                    if let Some((_, p)) = r.lib.palettes.iter().find(|(x, _)| *x == id) {
+                        self.look.palette = p.clone();
+                    }
+                }
+            }
+            self.playing = None;
         }
     }
 
@@ -297,6 +389,7 @@ impl Engine {
 
     fn stopped(&mut self, now: u64) {
         self.playing = None;
+        self.rot_moment = None;
         self.pos = None;
         self.control.reset();
         if self.cfg.lights_on {

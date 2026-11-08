@@ -10,5 +10,6 @@ pub mod model;
 pub mod moments;
 pub mod paint;
 pub mod patterns;
+pub mod rotation;
 pub mod scene;
 pub mod scheduler;
