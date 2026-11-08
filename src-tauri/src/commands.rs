@@ -226,6 +226,18 @@ impl AppState {
         *lock(&self.library_path) = Some(path);
     }
 
+    /// A library that was never saved is just the first-run built-ins: rebuild it for the strip's new
+    /// segment count. A saved one is the user's and stays as it is (the editor adapts it).
+    fn rebuild_unsaved_library(&self, segments: u8) -> Option<Library> {
+        let path = lock(&self.library_path).clone()?;
+        let mut current = lock(&self.library);
+        if path.exists() || current.segments() == segments {
+            return None;
+        }
+        *current = Library::builtin(segments);
+        Some(current.clone())
+    }
+
     pub fn library(&self) -> Library {
         lock(&self.library).clone()
     }
@@ -624,6 +636,9 @@ pub fn wizard_save(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> 
     state
         .wizard
         .save(&state.strip_path()?, &wizard_emit(&app), |cfg| {
+            if let Some(lib) = state.rebuild_unsaved_library(cfg.segments) {
+                state.deliver(Input::Library(Box::new(lib)));
+            }
             state.send(Input::StripChanged(cfg)).map_err(|e| {
                 log::warn!("strip saved but not reloaded: {e}");
                 "Saved. Restart the app to use the new strip.".to_string()
@@ -805,6 +820,21 @@ mod tests {
         let state = AppState::default();
         state.init_library(dir.path().join("library.json"), 10);
         (dir, state)
+    }
+
+    #[test]
+    fn unsaved_builtin_library_follows_the_strip_but_a_saved_one_does_not() {
+        let (dir, state) = lib_state();
+        assert_eq!(state.rebuild_unsaved_library(10), None, "same count");
+        let lib = state.rebuild_unsaved_library(12).expect("rebuilt");
+        assert_eq!((lib.segments(), lib.validate()), (12, Ok(())));
+        assert_eq!(state.library(), lib);
+        assert_eq!(lib.sets[0].name, "Auto");
+        // Once saved it is the user's.
+        state.save_library(lib.clone()).unwrap();
+        assert!(dir.path().join("library.json").exists());
+        assert_eq!(state.rebuild_unsaved_library(6), None);
+        assert_eq!(state.library(), lib);
     }
 
     #[test]
