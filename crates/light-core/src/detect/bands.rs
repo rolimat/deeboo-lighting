@@ -50,8 +50,12 @@ impl BandAnalyzer {
     #[allow(clippy::cast_precision_loss)]
     pub fn process(&mut self, mono: &[f32], out: &mut impl FnMut(HopFrame)) {
         for &sample in mono {
-            // A driver glitch (NaN/inf) must not poison the filter state forever.
-            let clean = if sample.is_finite() { sample } else { 0.0 };
+            // A driver glitch (NaN/inf/huge) must not poison the filter state; real audio is within +-1, so +-4 never clips music.
+            let clean = if sample.is_finite() {
+                sample.clamp(-4.0, 4.0)
+            } else {
+                0.0
+            };
             let (k, s, h) = (
                 self.kick.process(clean),
                 self.sub.process(clean),
@@ -147,6 +151,8 @@ mod tests {
         dirty[20_000] = f32::NAN;
         dirty[20_001] = f32::INFINITY;
         dirty[20_002] = f32::NEG_INFINITY;
+        dirty[20_003] = 3e38;
+        dirty[20_004] = -3e38;
         let (a, b) = (run(&[4096], &clean, fs), run(&[4096], &dirty, fs));
         for (i, (c, d)) in a.iter().zip(&b).enumerate().skip(220) {
             // Onset is a difference of logs, so it gets an absolute tolerance.
