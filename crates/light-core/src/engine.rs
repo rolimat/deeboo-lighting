@@ -115,7 +115,8 @@ impl Look {
             };
         };
         let rots = MOMENTS.map(|m| {
-            let r = Rotator::new(moment_set(set, m), seed ^ (slot(m) as u64 + 1) << 56);
+            let r = Rotator::new(moment_set(set, m), seed ^ (slot(m) as u64 + 1) << 56)
+                .with_palette(lib.current_palette_id());
             if m == Moment::Calm { r.per_entry() } else { r }
         });
         let rot = Rotation {
@@ -296,6 +297,10 @@ impl Engine {
         {
             self.look = look;
             self.playing = None;
+        }
+        if start {
+            // A Start (also while running) begins a fresh show: rotation counts from here.
+            self.rot_moment = None;
         }
         let entered = self.rot_moment != Some(moment);
         let dropped =

@@ -49,6 +49,8 @@ fn buildup_changes_every_2_bars() {
 fn calm_one_sequence_per_break() {
     let mut r = Rotator::new(&set(3, 1, Order::InOrder, Interval::Phrases(1)), 7).per_entry();
     assert_eq!(changes(&mut r, 20), Vec::<u64>::new());
+    // The first entry plays the set's first sequence; later entries advance.
+    assert_eq!(r.on_boundary(pos(40, false, 4), true), None);
     assert_eq!(
         r.on_boundary(pos(80, false, 4), true),
         Some(Choice::Sequence(SeqRef::Id(2)))
@@ -125,4 +127,30 @@ fn lone_generated_is_new_each_interval() {
     ms.sequences = vec![SeqRef::Generated];
     let mut r = Rotator::new(&ms, 7);
     assert_eq!(changes(&mut r, 4), vec![1, 2, 3]);
+}
+
+#[test]
+fn beat_count_restart_does_not_freeze_the_interval() {
+    let mut r = Rotator::new(&set(2, 1, Order::InOrder, Interval::Phrases(1)), 7);
+    assert!(r.on_boundary(pos(2000, false, 4), true).is_none());
+    // A MIDI Start restarts the beat count at 0.
+    assert!(r.on_boundary(pos(0, false, 4), false).is_none());
+    assert!(r.on_boundary(pos(16, false, 4), false).is_some());
+}
+
+#[test]
+fn palette_position_starts_at_the_shown_palette() {
+    let mut r =
+        Rotator::new(&set(1, 3, Order::InOrder, Interval::Phrases(1)), 7).with_palette(Some(3));
+    assert_eq!(r.on_drop(), Some(1));
+    for seed in 0..20 {
+        let mut r = Rotator::new(&set(1, 3, Order::Random, Interval::Phrases(1)), seed)
+            .with_palette(Some(2));
+        let mut prev = 2;
+        for _ in 0..50 {
+            let p = r.on_drop().unwrap();
+            assert_ne!(p, prev);
+            prev = p;
+        }
+    }
 }

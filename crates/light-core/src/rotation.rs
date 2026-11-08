@@ -21,6 +21,8 @@ pub struct Rotator {
     /// Beat of the last change (or of the first bar start seen).
     last: Option<u64>,
     per_entry: bool,
+    /// Calm: the first entry plays the current sequence, later ones advance.
+    entered_once: bool,
 }
 
 impl Rotator {
@@ -36,6 +38,7 @@ impl Rotator {
             pal_i: 0,
             last: None,
             per_entry: false,
+            entered_once: false,
         }
     }
 
@@ -43,6 +46,15 @@ impl Rotator {
     #[must_use]
     pub fn per_entry(mut self) -> Self {
         self.per_entry = true;
+        self
+    }
+
+    /// Starts the palette position at the palette on show, so a drop always moves to another one.
+    #[must_use]
+    pub fn with_palette(mut self, shown: Option<u32>) -> Self {
+        if let Some(i) = shown.and_then(|id| self.pals.iter().position(|p| *p == id)) {
+            self.pal_i = i;
+        }
         self
     }
 
@@ -72,7 +84,9 @@ impl Rotator {
     /// one sequence rotates its palette instead, so the interval still shows.
     pub fn on_boundary(&mut self, pos: Position, entered: bool) -> Option<Choice> {
         let fire = if self.per_entry {
-            entered
+            let advance = entered && self.entered_once;
+            self.entered_once |= entered;
+            advance
         } else {
             if entered {
                 self.last = Some(pos.beat);
@@ -105,7 +119,9 @@ impl Rotator {
         if !ok {
             return false;
         }
-        let last = *self.last.get_or_insert(pos.beat);
+        // A MIDI Start restarts the beat count: a `last` in the future counts from now.
+        let last = (*self.last.get_or_insert(pos.beat)).min(pos.beat);
+        self.last = Some(last);
         let due = pos.beat.saturating_sub(last) >= beats.max(1);
         if due {
             self.last = Some(pos.beat);

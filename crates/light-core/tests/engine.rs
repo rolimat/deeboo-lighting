@@ -605,3 +605,52 @@ fn new_palette_on_drop() {
     s.beats_of(8, &mut none);
     assert_ne!(hue_sends(&s, 100), Vec::<u64>::new());
 }
+
+/// Rhythm alternates two sequences, `Suave` (hue 120) then `Contraste` (hue 240), every phrase.
+fn two_seq_lib() -> light_core::library::Library {
+    use light_core::library::Interval;
+    use light_core::model::Role;
+    let mut lib = plain(4);
+    let mut q2 = lib.sequences[0].1.clone();
+    for (q, role) in [
+        (&mut lib.sequences[0].1, Role::Suave),
+        (&mut q2, Role::Contraste),
+    ] {
+        for st in &mut q.steps {
+            st.roles = vec![role; 4];
+        }
+    }
+    lib.sequences.push((99, q2));
+    lib.sets[0].rhythm.sequences = vec![
+        light_core::library::SeqRef::Id(1),
+        light_core::library::SeqRef::Id(99),
+    ];
+    lib.sets[0].rhythm.interval = Interval::Phrases(1);
+    lib
+}
+
+fn colour_at(s: &Sim, hue: u16, from: u64, to: u64) -> bool {
+    s.sends_in(from, to).iter().any(|(_, c)| match c {
+        PaintCommand::Bucket(h) => h.h == hue,
+        PaintCommand::Pencil { color, .. } => color.h == hue,
+        PaintCommand::Eraser { .. } => false,
+    })
+}
+
+#[test]
+fn rotation_continues_after_a_start_while_playing() {
+    let mut s = sim125();
+    let lib = two_seq_lib();
+    let suave = lib.palettes[0].1.suave.h;
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(20, &mut none); // changed to Contraste at beat 16
+    s.start();
+    let restart = s.now;
+    s.beats_of(20, &mut none);
+    let beat = 480_000;
+    assert!(
+        colour_at(&s, suave, restart + 15 * beat, restart + 20 * beat),
+        "back to Suave one phrase after the restart"
+    );
+}
