@@ -137,6 +137,29 @@ pub fn load(path: &Path) -> Result<StripConfig, StoreError> {
     Ok(cfg)
 }
 
+/// Room for any valid config (name <= 63 chars x 4 bytes, id 64, key 16, ~150 of JSON), so the buffer
+/// never reallocates and leaves an unwiped copy of the key behind.
+const SERIALIZED_CAP: usize = 4096;
+
+/// Borrowed fields, wiped buffer: no other owned copy of the key is made here.
+fn serialize(cfg: &StripConfig) -> io::Result<Zeroizing<Vec<u8>>> {
+    let mut bytes = Zeroizing::new(Vec::with_capacity(SERIALIZED_CAP));
+    serde_json::to_writer(
+        &mut *bytes,
+        &StripFileOut {
+            version: 1,
+            id: &cfg.id,
+            name: &cfg.name,
+            local_key: cfg.local_key.expose_secret(),
+            segments: cfg.segments,
+            last_ip: cfg.last_ip,
+        },
+    )
+    .map_err(io::Error::other)?;
+    debug_assert_eq!(bytes.capacity(), SERIALIZED_CAP);
+    Ok(bytes)
+}
+
 /// Atomic: temp file created 0600, written, fsynced, then renamed over `path`.
 ///
 /// # Errors
@@ -152,20 +175,7 @@ pub fn save(path: &Path, cfg: &StripConfig) -> io::Result<()> {
     };
     let dir = path.parent().ok_or_else(bad)?;
     let name = path.file_name().ok_or_else(bad)?;
-    // Borrowed fields, wiped buffer: no other owned copy of the key is made here.
-    let mut bytes = Zeroizing::new(Vec::with_capacity(512));
-    serde_json::to_writer(
-        &mut *bytes,
-        &StripFileOut {
-            version: 1,
-            id: &cfg.id,
-            name: &cfg.name,
-            local_key: cfg.local_key.expose_secret(),
-            segments: cfg.segments,
-            last_ip: cfg.last_ip,
-        },
-    )
-    .map_err(io::Error::other)?;
+    let bytes = serialize(cfg)?;
     DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     let mut tmp_name = name.to_os_string();
     tmp_name.push(".tmp");
@@ -202,6 +212,25 @@ mod tests {
         fs::write(&p, body).unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(m)).unwrap();
         p
+    }
+
+    #[test]
+    fn maximal_config_serialises_without_reallocating() {
+        let cfg = StripConfig {
+            id: "a".repeat(64),
+            name: "\u{1F4A1}".repeat(63),
+            local_key: SecretString::from(KEY),
+            segments: 60,
+            last_ip: Some(Ipv4Addr::new(192, 168, 100, 200)),
+        };
+        cfg.validate().unwrap();
+        let bytes = serialize(&cfg).unwrap();
+        assert_eq!(bytes.capacity(), SERIALIZED_CAP);
+        let q = StripConfig {
+            name: "\"".repeat(63),
+            ..cfg
+        };
+        assert_eq!(serialize(&q).unwrap().capacity(), SERIALIZED_CAP);
     }
 
     #[test]
