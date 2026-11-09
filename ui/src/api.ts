@@ -22,6 +22,8 @@ export interface Hsv {
 /** The active set and the palette in force (Principal, Contraste, Suave). */
 export interface Selection {
   set: string;
+  /** Nothing pinned: the palette follows the set's rotation. */
+  paletteAuto: boolean;
   palette: { name: string; colours: [Hsv, Hsv, Hsv] };
 }
 
@@ -57,6 +59,8 @@ export interface Settings {
   calmKickDb: number;
   calmHighDb: number;
   riserDb: number;
+  /** Show the `?` help tooltips in the editor. */
+  helpTooltips: boolean;
 }
 
 export type MomentName = "rhythm" | "calm" | "buildUp";
@@ -74,6 +78,8 @@ export const api = {
   /** Steps the active set by -1 or 1 (wraps); resolves to the new selection. */
   selectSet: (delta: -1 | 1): Promise<Selection> => invoke("select_set", { delta }),
   selectPalette: (delta: -1 | 1): Promise<Selection> => invoke("select_palette", { delta }),
+  /** Makes a set live (Sets button); resolves to the new selection. */
+  setLiveSet: (id: number): Promise<Selection> => invoke("set_live_set", { id }),
   quit: (): Promise<void> => invoke("quit"),
   /** Opens (or focuses) the editor window on a section. */
   openEditor: (section: "strip"): Promise<void> => invoke("open_editor", { section }),

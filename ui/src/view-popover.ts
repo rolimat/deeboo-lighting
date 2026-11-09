@@ -132,7 +132,7 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
   palRow.row.querySelector(".swatches")?.append(...swatches);
   const showSel = (sel: Selection) => {
     setText(setRow.name, sel.set);
-    setText(palRow.name, sel.palette.name);
+    setText(palRow.name, sel.paletteAuto ? "Auto" : sel.palette.name);
     swatches.forEach((sw, i) => {
       const c = hsvCss(sel.palette.colours[i] as Hsv);
       if (sw.style.backgroundColor !== c) sw.style.backgroundColor = c;

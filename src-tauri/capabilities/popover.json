@@ -14,6 +14,7 @@
     "allow-open-editor",
     "allow-select-set",
     "allow-select-palette",
+    "allow-set-live-set",
     "core:window:allow-set-size",
     "core:event:allow-listen",
     "core:event:allow-unlisten"

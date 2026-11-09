@@ -12,7 +12,6 @@ import { SetEditor } from "./SetEditor";
 const hsv = (h: number) => ({ h, s: 1000, v: 1000 });
 const ms = (sequences: MomentSet["sequences"]): MomentSet => ({
   sequences,
-  palettes: [1],
   order: "inOrder",
   interval: { bars: 2 },
 });
@@ -22,7 +21,7 @@ const seq = (name: string, moment: string) => ({
   steps: [{ len: "one", roles: [] }],
 });
 const lib = (): Library => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   shape: { pieces: [] },
   palettes: [[1, { name: "Test", principal: hsv(0), contraste: hsv(240), suave: hsv(120) }]],
   sequences: [
@@ -37,6 +36,9 @@ const lib = (): Library => ({
       rhythm: ms([{ id: 10 }, "generated"]),
       calm: ms([{ id: 11 }]),
       buildup: ms([{ id: 12 }]),
+      palettes: [1],
+      paletteOrder: "inOrder",
+      paletteChange: "atDrop",
     },
     {
       id: 2,
@@ -44,6 +46,9 @@ const lib = (): Library => ({
       rhythm: ms(["generated"]),
       calm: ms(["generated"]),
       buildup: ms(["generated"]),
+      palettes: [1],
+      paletteOrder: "inOrder",
+      paletteChange: "atDrop",
     },
   ],
   activeSet: 1,
@@ -102,21 +107,20 @@ it("set_lists_only_matching_moment_sequences", () => {
 
 it("saves_edits_and_keeps_generated", async () => {
   await change(q("select[aria-label='Rhythm order']"), "random");
-  await change(q("select[aria-label='Rhythm interval unit']"), "phrases");
   await change(q("input[aria-label='Rhythm interval']"), "4");
   await click(button("Save"));
   const s = vi.mocked(api.saveLibrary).mock.calls[0]?.[0].sets[0];
   expect(s?.rhythm.order).toBe("random");
-  expect(s?.rhythm.interval).toEqual({ phrases: 4 });
+  expect(s?.rhythm.interval).toEqual({ bars: 4 });
   expect(s?.rhythm.sequences).toEqual([{ id: 10 }, "generated"]);
 });
 
 it("interval_validation", async () => {
-  for (const bad of ["0", "1000", ""]) {
+  for (const bad of ["0", "3", ""]) {
     await change(q("input[aria-label='Calm interval']"), bad);
     await click(button("Save"));
     expect(api.saveLibrary).not.toHaveBeenCalled();
-    expect(root.textContent).toContain("Interval must be a whole number from 1 to 999");
+    expect(root.textContent).toContain("Interval must be 1, 2, 4, 8 or 16 bars");
   }
 });
 

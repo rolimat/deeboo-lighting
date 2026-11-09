@@ -8,6 +8,8 @@ const COMMANDS: &[&str] = &[
     "save_library",
     "select_set",
     "select_palette",
+    "set_live_set",
+    "pattern_sequence",
     "save_settings",
     "list_midi_sources",
     "list_audio_inputs",

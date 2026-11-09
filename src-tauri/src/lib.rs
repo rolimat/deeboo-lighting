@@ -44,6 +44,8 @@ pub fn run() -> tauri::Result<()> {
             commands::save_library,
             commands::select_set,
             commands::select_palette,
+            commands::set_live_set,
+            commands::pattern_sequence,
             commands::save_settings,
             commands::list_midi_sources,
             commands::list_audio_inputs,

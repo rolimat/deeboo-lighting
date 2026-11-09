@@ -10,12 +10,11 @@ import { PaletteEditor } from "./PaletteEditor";
 const hsv = (h: number) => ({ h, s: 1000, v: 1000 });
 const ms = {
   sequences: ["generated" as const],
-  palettes: [2],
   order: "inOrder" as const,
   interval: { bars: 2 },
 };
 const lib = (): Library => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   shape: { pieces: [] },
   palettes: [
     [1, { name: "Test", principal: hsv(0), contraste: hsv(240), suave: hsv(120) }],
@@ -29,6 +28,9 @@ const lib = (): Library => ({
       rhythm: ms,
       calm: ms,
       buildup: ms,
+      palettes: [2],
+      paletteOrder: "inOrder" as const,
+      paletteChange: "atDrop" as const,
     },
   ],
   activeSet: 1,

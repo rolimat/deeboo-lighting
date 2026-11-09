@@ -125,6 +125,7 @@ mod tests {
                 "allow-wizard-save",
                 "allow-message-counts",
                 "allow-preview-generated",
+                "allow-pattern-sequence",
                 "allow-detection-watch",
                 "allow-set-detection-thresholds",
                 "core:event:allow-listen",

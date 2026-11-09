@@ -62,6 +62,8 @@ pub struct AudioStatus {
 #[serde(rename_all = "camelCase")]
 pub struct Selection {
     pub set: String,
+    /// The palette follows the set's rotation (nothing pinned).
+    pub palette_auto: bool,
     pub palette: PaletteView,
 }
 
@@ -80,6 +82,7 @@ impl Selection {
             set: lib
                 .current_set()
                 .map_or_else(String::new, |s| s.name.clone()),
+            palette_auto: lib.active_palette.is_none(),
             palette: PaletteView {
                 name: p.name,
                 colours: [p.principal, p.contraste, p.suave],
@@ -211,6 +214,19 @@ impl Default for AppState {
     }
 }
 
+/// The live set exists (else the first) and the pinned palette belongs to it (else Auto).
+fn keep_live_valid(lib: &mut Library) {
+    if lib.current_set().is_none()
+        && let Some(first) = lib.sets.first()
+    {
+        lib.active_set = first.id;
+    }
+    let pin = lib.active_palette;
+    if pin.is_some_and(|p| lib.current_set().is_none_or(|s| !s.palettes.contains(&p))) {
+        lib.active_palette = None;
+    }
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -253,35 +269,65 @@ impl AppState {
         }
         let mut current = lock(&self.library);
         let mut lib = current.clone();
-        let step = |ids: Vec<u32>, cur: Option<u32>| -> Option<u32> {
-            let at = cur
-                .and_then(|c| ids.iter().position(|i| *i == c))
-                .unwrap_or(0);
-            let len = ids.len().max(1);
-            let next = if delta > 0 {
+        let step = |len: usize, at: usize| {
+            if delta > 0 {
                 (at + 1) % len
             } else {
                 (at + len - 1) % len
-            };
-            ids.get(next).copied()
+            }
         };
         match pick {
             Pick::Set => {
-                let ids = lib.sets.iter().map(|s| s.id).collect();
-                lib.active_set = step(ids, Some(lib.active_set)).ok_or("no sets")?;
+                let at = lib
+                    .sets
+                    .iter()
+                    .position(|s| s.id == lib.active_set)
+                    .unwrap_or(0);
+                lib.active_set = lib.sets[step(lib.sets.len().max(1), at)..]
+                    .first()
+                    .ok_or("no sets")?
+                    .id;
+                keep_live_valid(&mut lib);
             }
             Pick::Palette => {
-                let ids = lib.palettes.iter().map(|p| p.0).collect();
-                lib.active_palette = step(ids, lib.current_palette_id());
+                // Auto sits at both ends of the wrap: Auto, p1 .. pn, Auto.
+                let mut ring = vec![None];
+                ring.extend(
+                    lib.current_set()
+                        .into_iter()
+                        .flat_map(|s| &s.palettes)
+                        .map(|p| Some(*p)),
+                );
+                let at = ring
+                    .iter()
+                    .position(|p| *p == lib.active_palette)
+                    .unwrap_or(0);
+                lib.active_palette = ring[step(ring.len(), at)];
             }
         }
         self.save_into(&mut current, lib).map(|l| Selection::of(&l))
     }
 
+    /// Makes `id` the live set (Sets button); a pin the new set does not hold goes back to Auto.
+    pub fn set_live_set(&self, id: u32) -> Result<Selection, String> {
+        let mut current = lock(&self.library);
+        if !current.sets.iter().any(|s| s.id == id) {
+            return Err("No such set.".into());
+        }
+        let mut lib = current.clone();
+        lib.active_set = id;
+        keep_live_valid(&mut lib);
+        self.save_into(&mut current, lib).map(|l| Selection::of(&l))
+    }
+
     /// Validates, assigns ids to new entries, persists, then swaps. Any failure keeps the previous
     /// library on disk and in memory; messages never echo the input.
-    fn save_library(&self, new: Library) -> Result<Library, String> {
+    fn save_library(&self, mut new: Library) -> Result<Library, String> {
         let mut current = lock(&self.library);
+        // The editor never moves the live selection; only the popover does.
+        new.active_set = current.active_set;
+        new.active_palette = current.active_palette;
+        keep_live_valid(&mut new);
         self.save_into(&mut current, new)
     }
 
@@ -480,6 +526,14 @@ fn select(state: &AppState, pick: Pick, delta: i8) -> Result<Selection, String> 
     Ok(sel)
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn set_live_set(state: tauri::State<'_, AppState>, id: u32) -> Result<Selection, String> {
+    let sel = state.set_live_set(id)?;
+    state.deliver(Input::Library(Box::new(state.library())));
+    Ok(sel)
+}
+
 fn save_to(state: &AppState, library: Library) -> Result<Library, String> {
     let saved = state.save_library(library)?;
     state.deliver(Input::Library(Box::new(saved.clone())));
@@ -531,6 +585,37 @@ pub fn message_counts(
     palette_id: u32,
 ) -> Result<Vec<u8>, String> {
     message_counts_of(&state.library(), &sequence, palette_id)
+}
+
+/// One example of `pattern` with random parameters, for the strip's `n` segments and the saved shape.
+fn pattern_sequence_of(
+    lib: &Library,
+    n: u8,
+    pattern: light_core::patterns::Pattern,
+    seed: u64,
+) -> Result<Sequence, String> {
+    if lib.segments() != n {
+        return Err("The library does not match the strip's segments.".into());
+    }
+    let groups = light_core::groups::groups(&lib.shape);
+    let seq = light_core::generator::Generator::new(seed).pattern(pattern, &groups, n);
+    seq.validate(n)
+        .map_err(|_| "Could not build that pattern for this strip.".to_string())?;
+    Ok(seq)
+}
+
+/// A named pattern as an editable sequence ("Duplicate to edit") or a read-only preview.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn pattern_sequence(
+    state: tauri::State<'_, AppState>,
+    pattern: light_core::patterns::Pattern,
+    seed: u64,
+) -> Result<Sequence, String> {
+    let StripStatus::Connected { segments, .. } = lock(&state.status).strip else {
+        return Err("Strip not connected.".into());
+    };
+    pattern_sequence_of(&state.library(), segments, pattern, seed)
 }
 
 /// One example of what Generated would play for `moment`, built for the saved shape and a fresh seed.
@@ -693,7 +778,7 @@ mod tests {
         let json = serde_json::to_string(&Status::initial()).unwrap_or_default();
         assert_eq!(
             json,
-            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}}}"#
+            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","paletteAuto":true,"palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}}}"#
         );
         let connected = StripStatus::Connected {
             name: "dj lights".into(),
@@ -740,7 +825,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 23);
+        assert_eq!(commands.len(), 25);
         assert_eq!(granted, commands);
     }
 
@@ -956,27 +1041,112 @@ mod tests {
     }
 
     #[test]
-    fn palette_cycles_and_persists() {
+    fn palette_cycle_includes_auto() {
         let (dir, state) = lib_state();
-        let mut lib = state.library();
-        let mut pal = lib.palettes[0].1.clone();
-        pal.name = "Second".into();
-        lib.palettes.push((900, pal));
-        state.save_library(lib).unwrap();
-        let name = |sel: Selection| sel.palette.name;
-        assert_eq!(name(state.select(Pick::Palette, 1).unwrap()), "Ocean");
-        assert_eq!(state.library().active_palette, Some(2));
+        let name = |sel: Selection| (sel.palette_auto, sel.palette.name);
+        assert!(state.library().active_palette.is_none());
+        // Auto -> p1 -> p2 ... -> p8 -> Auto, over the active set's palettes.
+        assert_eq!(
+            state.select(Pick::Palette, 1).unwrap().palette.name,
+            "Sunset"
+        );
+        assert_eq!(state.library().active_palette, Some(1));
+        assert_eq!(
+            name(state.select(Pick::Palette, 1).unwrap()),
+            (false, "Ocean".into())
+        );
         assert_eq!(
             crate::library_store::load(&dir.path().join("library.json"), 10, 8).active_palette,
             Some(2)
         );
-        // Wraps both ways.
-        assert_eq!(name(state.select(Pick::Palette, -1).unwrap()), "Sunset");
-        assert_eq!(name(state.select(Pick::Palette, -1).unwrap()), "Second");
+        state.select(Pick::Palette, -1).unwrap();
+        assert!(state.select(Pick::Palette, -1).unwrap().palette_auto);
+        assert_eq!(state.library().active_palette, None);
+        // Backwards from Auto lands on the last palette, forwards from it on Auto.
+        state.select(Pick::Palette, -1).unwrap();
+        assert_eq!(state.library().active_palette, Some(8));
+        assert!(state.select(Pick::Palette, 1).unwrap().palette_auto);
         for bad in [0, 2, -2] {
             assert!(state.select(Pick::Palette, bad).is_err());
             assert!(state.select(Pick::Set, bad).is_err());
         }
+    }
+
+    fn two_set_state() -> (tempfile::TempDir, AppState) {
+        let (dir, state) = lib_state();
+        let mut lib = state.library();
+        let mut set = lib.sets[0].clone();
+        set.name = "Club".into();
+        set.id = 900;
+        set.palettes = vec![3, 4];
+        lib.sets.push(set);
+        state.save_library(lib).unwrap();
+        (dir, state)
+    }
+
+    #[test]
+    fn save_keeps_live_selection() {
+        let (_dir, state) = two_set_state();
+        state.set_live_set(2).unwrap();
+        state.select(Pick::Palette, 1).unwrap(); // pins 3
+        let mut lib = state.library();
+        lib.active_set = 1;
+        lib.active_palette = None;
+        lib.sets[1].name = "Renamed".into();
+        let saved = state.save_library(lib).unwrap();
+        assert_eq!((saved.active_set, saved.active_palette), (2, Some(3)));
+        assert_eq!(saved.sets[1].name, "Renamed");
+        // Deleting the live set falls back to the first one.
+        let mut lib = saved;
+        lib.sets.pop();
+        let saved = state.save_library(lib).unwrap();
+        assert_eq!((saved.active_set, saved.active_palette), (1, Some(3)));
+    }
+
+    #[test]
+    fn save_drops_pin_not_in_active_set() {
+        let (_dir, state) = two_set_state();
+        state.set_live_set(2).unwrap();
+        state.select(Pick::Palette, 1).unwrap();
+        assert_eq!(state.library().active_palette, Some(3));
+        let mut lib = state.library();
+        lib.sets[1].palettes = vec![4];
+        let saved = state.save_library(lib).unwrap();
+        assert_eq!((saved.active_set, saved.active_palette), (2, None));
+    }
+
+    #[test]
+    fn set_live_set_validates_and_clears_foreign_pin() {
+        let (_dir, state) = two_set_state();
+        state.select(Pick::Palette, 1).unwrap(); // pins 1 in set 1
+        assert!(state.set_live_set(77).is_err());
+        assert_eq!(state.library().active_set, 1);
+        let sel = state.set_live_set(2).unwrap();
+        assert_eq!((sel.set.as_str(), sel.palette_auto), ("Club", true));
+        assert_eq!(state.library().active_palette, None);
+    }
+
+    #[test]
+    fn pattern_sequence_matches_strip_n() {
+        use light_core::patterns::Pattern;
+        let (_dir, state) = lib_state();
+        let lib = state.library();
+        let seq = pattern_sequence_of(&lib, 10, Pattern::Halves, 7).unwrap();
+        assert!(seq.validate(10).is_ok());
+        assert!(seq.steps.iter().all(|s| s.roles.len() == 10));
+        assert_eq!(
+            seq,
+            pattern_sequence_of(&lib, 10, Pattern::Halves, 7).unwrap()
+        );
+        let err = pattern_sequence_of(&lib, 6, Pattern::Halves, 7).unwrap_err();
+        assert!(err.contains("segments"), "{err}");
+    }
+
+    #[test]
+    fn pattern_sequence_rejects_unknown_pattern() {
+        use light_core::patterns::Pattern;
+        assert!(serde_json::from_str::<Pattern>(r#""nope""#).is_err());
+        assert!(serde_json::from_str::<Pattern>(r#""halves""#).is_ok());
     }
 
     #[test]
@@ -1023,7 +1193,8 @@ mod tests {
         assert_eq!(saved.sets[1].id, 2);
         assert_eq!(saved.sets[1].rhythm.sequences, [SeqRef::Id(11)]);
         assert_eq!(saved.sets[1].palettes, [9]);
-        assert_eq!((saved.active_set, saved.active_palette), (2, Some(9)));
+        // The editor's selection is ignored: the live one stays.
+        assert_eq!((saved.active_set, saved.active_palette), (1, None));
         assert_eq!(state.library(), saved);
         assert_eq!(
             crate::library_store::load(&dir.path().join("library.json"), 10, 8),

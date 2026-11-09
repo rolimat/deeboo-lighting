@@ -6,12 +6,14 @@ import {
   type Library,
   type LibrarySet,
   type MomentSet,
+  type SeqRef,
   type Sequence,
 } from "../api";
 
 const MAX_SETS = 16;
 const NAME_MSG = "Name must be 1 to 63 characters, without control characters.";
-const INTERVAL_MSG = "Interval must be a whole number from 1 to 999.";
+const INTERVAL_MSG = "Interval must be 1, 2, 4, 8 or 16 bars.";
+const BARS = [1, 2, 4, 8, 16];
 const MOMENTS = [
   ["rhythm", "rhythm", "Rhythm"],
   ["calm", "calm", "Calm"],
@@ -23,19 +25,17 @@ const ORDERS = [
   ["fixed", "Fixed"],
 ] as const;
 const UNITS = [
-  ["beats", "Beats"],
   ["bars", "Bars"],
-  ["phrases", "Phrases"],
+  ["oncePerBreak", "Once per break"],
 ] as const;
 
 type Unit = (typeof UNITS)[number][0];
-const unitOf = (i: Interval): Unit => ("beats" in i ? "beats" : "bars" in i ? "bars" : "phrases");
-const countOf = (i: Interval): number =>
-  "beats" in i ? i.beats : "bars" in i ? i.bars : i.phrases;
+const unitOf = (i: Interval): Unit => (i === "oncePerBreak" ? "oncePerBreak" : "bars");
+const countOf = (i: Interval): number => (i === "oncePerBreak" ? 1 : i.bars);
 const intervalOf = (unit: Unit, n: number): Interval =>
-  unit === "beats" ? { beats: n } : unit === "bars" ? { bars: n } : { phrases: n };
-const intervalOk = (i: Interval) =>
-  Number.isInteger(countOf(i)) && countOf(i) >= 1 && countOf(i) <= 999;
+  unit === "bars" ? { bars: n } : "oncePerBreak";
+const intervalOk = (i: Interval) => i === "oncePerBreak" || BARS.includes(i.bars);
+const hasId = (r: SeqRef, id: number) => typeof r === "object" && "id" in r && r.id === id;
 
 const nameOk = (n: string) => {
   const len = [...n].length;
@@ -147,9 +147,28 @@ export function SetEditor() {
                 Delete set
               </button>
             </div>
+            <fieldset aria-label="Palettes" class="flex flex-wrap gap-3">
+              {lib.palettes.map(([id, p]) => (
+                <label key={id} class="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    aria-label={p.name}
+                    checked={current.palettes.includes(id)}
+                    onChange={(e) => {
+                      const on = e.currentTarget.checked;
+                      edit((x) => ({
+                        ...x,
+                        palettes: toggle(x.palettes, id, on, (v) => v === id),
+                      }));
+                    }}
+                  />
+                  {p.name}
+                </label>
+              ))}
+            </fieldset>
             {MOMENTS.map(([key, seqMoment, label]) => {
               const m = current[key];
-              const pal = (lib.palettes.find(([id]) => id === m.palettes[0]) ??
+              const pal = (lib.palettes.find(([id]) => id === current.palettes[0]) ??
                 lib.palettes[0])?.[1];
               return (
                 <div key={key} class="space-y-2 rounded-card border border-border p-3">
@@ -162,17 +181,12 @@ export function SetEditor() {
                           <input
                             type="checkbox"
                             aria-label={s.name}
-                            checked={m.sequences.some((r) => typeof r === "object" && r.id === id)}
+                            checked={m.sequences.some((r) => hasId(r, id))}
                             onChange={(e) => {
                               const on = e.currentTarget.checked;
                               editMoment(key, (x) => ({
                                 ...x,
-                                sequences: toggle(
-                                  x.sequences,
-                                  { id },
-                                  on,
-                                  (r) => typeof r === "object" && r.id === id,
-                                ),
+                                sequences: toggle(x.sequences, { id }, on, (r) => hasId(r, id)),
                               }));
                             }}
                           />
@@ -222,25 +236,6 @@ export function SetEditor() {
                   {preview?.set === current.id && preview.key === key && pal && (
                     <Simulation sequence={preview.seq} pieces={lib.shape.pieces} palette={pal} />
                   )}
-                  <fieldset aria-label={`${label} palettes`} class="flex flex-wrap gap-3">
-                    {lib.palettes.map(([id, p]) => (
-                      <label key={id} class="flex items-center gap-1">
-                        <input
-                          type="checkbox"
-                          aria-label={p.name}
-                          checked={m.palettes.includes(id)}
-                          onChange={(e) => {
-                            const on = e.currentTarget.checked;
-                            editMoment(key, (x) => ({
-                              ...x,
-                              palettes: toggle(x.palettes, id, on, (v) => v === id),
-                            }));
-                          }}
-                        />
-                        {p.name}
-                      </label>
-                    ))}
-                  </fieldset>
                   <div class="flex items-center gap-2">
                     <select
                       aria-label={`${label} order`}
@@ -260,21 +255,23 @@ export function SetEditor() {
                       ))}
                     </select>
                     <span class="text-dim">changes every</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={999}
-                      aria-label={`${label} interval`}
-                      value={countOf(m.interval)}
-                      onInput={(e) => {
-                        const n = e.currentTarget.valueAsNumber;
-                        editMoment(key, (x) => ({
-                          ...x,
-                          interval: intervalOf(unitOf(x.interval), n),
-                        }));
-                      }}
-                      class={`${field} w-20`}
-                    />
+                    {m.interval !== "oncePerBreak" && (
+                      <input
+                        type="number"
+                        min={1}
+                        max={16}
+                        aria-label={`${label} interval`}
+                        value={countOf(m.interval)}
+                        onInput={(e) => {
+                          const n = e.currentTarget.valueAsNumber;
+                          editMoment(key, (x) => ({
+                            ...x,
+                            interval: intervalOf(unitOf(x.interval), n),
+                          }));
+                        }}
+                        class={`${field} w-20`}
+                      />
+                    )}
                     <select
                       aria-label={`${label} interval unit`}
                       value={unitOf(m.interval)}
@@ -286,7 +283,7 @@ export function SetEditor() {
                       }
                       class={field}
                     >
-                      {UNITS.map(([v, l]) => (
+                      {UNITS.filter(([v]) => v === "bars" || key === "calm").map(([v, l]) => (
                         <option key={v} value={v}>
                           {l}
                         </option>

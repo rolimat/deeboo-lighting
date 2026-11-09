@@ -24,6 +24,7 @@ const settings: Settings = {
   brightnessPct: 80,
   leadMs: 0,
   lightsOn: true,
+  helpTooltips: true,
   calmKickDb: 16,
   calmHighDb: 12,
   riserDb: 7,
@@ -43,6 +44,7 @@ const base: Status = {
   audio: { ok: false },
   selection: {
     set: "Default",
+    paletteAuto: false,
     palette: {
       name: "Test",
       colours: [
@@ -305,6 +307,7 @@ it("copy_is_english", async () => {
 it("set_and_palette_rows_cycle", async () => {
   const next: Selection = {
     set: "Club",
+    paletteAuto: false,
     palette: {
       name: "Sunset",
       colours: [
@@ -337,6 +340,12 @@ it("set_and_palette_rows_cycle", async () => {
   await flush();
   expect(text(".row-set .row-text")).toBe("Club");
   expect(text(".row-palette .row-text")).toBe("Sunset");
+});
+
+it("palette_row_reads_auto_when_nothing_is_pinned", () => {
+  const sel = base.selection;
+  view.update({ ...base, selection: { ...sel, paletteAuto: true } });
+  expect(text(".row-palette .row-text")).toBe("Auto");
 });
 
 it("open_editor_button", () => {

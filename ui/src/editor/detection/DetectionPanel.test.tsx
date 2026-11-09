@@ -25,6 +25,7 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   lightsOn: true,
   calmKickDb: 20,
   calmHighDb: 10,
+  helpTooltips: true,
   riserDb: 5,
   ...over,
 });

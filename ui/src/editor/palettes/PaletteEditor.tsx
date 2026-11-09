@@ -73,9 +73,7 @@ export function PaletteEditor() {
   if (!lib) return <p class="text-dim">{error || "Loading…"}</p>;
   const btn = "rounded-card border border-border px-3 py-1 disabled:opacity-40";
   const usedBy = lib.sets
-    .filter((set) =>
-      [set.rhythm, set.calm, set.buildup].some((m) => m.palettes.includes(pals[sel]?.[0] ?? -1)),
-    )
+    .filter((set) => set.palettes.includes(pals[sel]?.[0] ?? -1))
     .map((set) => set.name);
   return (
     <div class="space-y-4">

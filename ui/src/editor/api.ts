@@ -29,8 +29,22 @@ export type WizardState =
   | { kind: "saved"; device: DeviceDto; segments: number }
   | { kind: "failed"; step: WizardStep; message: string };
 
-export type Interval = { beats: number } | { bars: number } | { phrases: number };
-export type SeqRef = { id: number } | "generated";
+export type PatternName =
+  | "halves"
+  | "endsCentre"
+  | "oddEven"
+  | "quarters"
+  | "snake"
+  | "mirror"
+  | "drift"
+  | "sparse"
+  | "groupFlash"
+  | "fastSnake"
+  | "strobe";
+export type Interval = { bars: number } | "oncePerBreak";
+export type SeqRef = { id: number } | "generated" | { pattern: PatternName };
+export type PaletteChange = "atDrop" | { bars: number };
+export type Order = "inOrder" | "random" | "fixed";
 export interface Piece {
   x: number;
   y: number;
@@ -59,8 +73,7 @@ export interface Sequence {
 }
 export interface MomentSet {
   sequences: SeqRef[];
-  palettes: number[];
-  order: "inOrder" | "random" | "fixed";
+  order: Order;
   interval: Interval;
 }
 export interface LibrarySet {
@@ -69,6 +82,9 @@ export interface LibrarySet {
   rhythm: MomentSet;
   calm: MomentSet;
   buildup: MomentSet;
+  palettes: number[];
+  paletteOrder: Order;
+  paletteChange: PaletteChange;
 }
 /**
  * Mirrors `light_core::library::Library`. Ids are assigned by Rust: an id the saved library does not
@@ -77,7 +93,7 @@ export interface LibrarySet {
  * library with the real ids.
  */
 export interface Library {
-  schemaVersion: 1;
+  schemaVersion: 2;
   shape: { pieces: Piece[] };
   palettes: [number, Palette][];
   sequences: [number, Sequence][];
@@ -114,6 +130,9 @@ export const api = {
   /** An example of what Generated plays for a moment, built for the saved shape with a fresh seed. */
   previewGenerated: (moment: MomentName): Promise<Sequence> =>
     invoke("preview_generated", { moment }),
+  /** A pattern as an editable sequence for the strip's shape (Duplicate to edit) or a read-only preview. */
+  patternSequence: (pattern: PatternName, seed: number): Promise<Sequence> =>
+    invoke("pattern_sequence", { pattern, seed }),
   wizardStart: (userCode: string): Promise<void> => invoke("wizard_start", { userCode }),
   wizardChoose: (deviceId: string): Promise<void> => invoke("wizard_choose", { deviceId }),
   wizardRetry: (): Promise<void> => invoke("wizard_retry"),

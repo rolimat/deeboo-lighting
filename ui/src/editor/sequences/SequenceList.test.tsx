@@ -11,7 +11,7 @@ import { SequenceList } from "./SequenceList";
 
 const hsv = (h: number) => ({ h, s: 1000, v: 1000 });
 const lib = (): Library => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   shape: { pieces: Array.from({ length: 3 }, (_, i) => ({ x: i * 2, y: 0, angle: 0, len: 1 })) },
   palettes: [[1, { name: "Test", principal: hsv(0), contraste: hsv(240), suave: hsv(120) }]],
   sequences: [
@@ -134,11 +134,19 @@ it("shows_the_save_error", async () => {
 const seqSet = (id: number, name: string) => {
   const ms = {
     sequences: [{ id }],
-    palettes: [1],
     order: "inOrder" as const,
     interval: { bars: 2 },
   };
-  return { id: 1, name, rhythm: ms, calm: ms, buildup: ms };
+  return {
+    id: 1,
+    name,
+    rhythm: ms,
+    calm: ms,
+    buildup: ms,
+    palettes: [1],
+    paletteOrder: "inOrder" as const,
+    paletteChange: "atDrop" as const,
+  };
 };
 
 it("save_replaces_only_sequences_on_a_fresh_library", async () => {

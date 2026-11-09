@@ -101,7 +101,7 @@ export function SequenceList(props: { stripSegments?: number }) {
   const usedBy = lib.sets
     .filter((set) =>
       [set.rhythm, set.calm, set.buildup].some((m) =>
-        m.sequences.some((r) => typeof r === "object" && r.id === seqs[sel]?.[0]),
+        m.sequences.some((r) => typeof r === "object" && "id" in r && r.id === seqs[sel]?.[0]),
       ),
     )
     .map((set) => set.name);

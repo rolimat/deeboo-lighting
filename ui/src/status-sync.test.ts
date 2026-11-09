@@ -35,6 +35,7 @@ const base: Omit<Status, "strip"> = {
   audio: { ok: false },
   selection: {
     set: "Default",
+    paletteAuto: false,
     palette: {
       name: "Test",
       colours: [
