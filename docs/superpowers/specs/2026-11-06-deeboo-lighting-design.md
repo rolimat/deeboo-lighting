@@ -477,12 +477,12 @@ El repositorio remoto se crea igual que el de MIDI Sync *(constructor: confirmar
 ## 11. Pruebas de aceptación (manuales, en macOS, con la tira real)
 
 1. Asistente: con el User Code y el QR aparece "dj lights"; las bombillas salen como no compatibles. La app encuentra la
-   tira en la wifi. Tras pintar un segmento en Smart Life, detecta 10 segmentos.
+   tira en la wifi. Tras pintar un segmento en Smart Life, detecta el número real de segmentos de la tira.
 2. Tira solo por Bluetooth (o apagada): el asistente lo explica y avanza solo cuando la tira entra en la wifi.
 3. Forma: al pulsar cada pieza se enciende el segmento correcto en la tira.
 4. Simulación: una secuencia se ve en el editor igual que luego en la tira, con el mismo orden de segmentos y los mismos
    colores de paleta.
-5. Clock desde Deeboo MIDI Sync: al pulsar Play allí, el primer beat que recibe Deeboo Lighting es el beat 1. El popover
+5. Clock desde cualquier fuente MIDI (también una que arranque después de la app): al pulsar Play allí, el primer beat que recibe Deeboo Lighting es el beat 1. El popover
    muestra BPM, beat y compás de la frase, y la tira sigue los beats.
 6. Stop del clock o 500 ms sin clock: la tira pasa a reposo y el punto se pone en verde fijo (o rojo si se pierde la
    conexión).

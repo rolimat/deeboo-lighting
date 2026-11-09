@@ -160,7 +160,7 @@ it("settings_lists_sources_and_saves_changes", async () => {
   await flush();
   const midi = byLabel("MIDI input") as HTMLSelectElement;
   expect([...midi.options].map((o) => o.textContent)).toEqual([
-    "Deeboo Lighting In only",
+    "Virtual port (Deeboo Lighting In)",
     "IAC Bus 1",
     "Pioneer DJ",
   ]);
@@ -286,7 +286,7 @@ it("copy_is_english", async () => {
       "Strip · not connected",
       "Connect…",
       "MIDI input",
-      "Deeboo Lighting In only",
+      "Virtual port (Deeboo Lighting In)",
       "IAC Bus 1",
       "Pioneer DJ",
       "Audio input",

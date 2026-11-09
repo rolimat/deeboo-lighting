@@ -7,7 +7,7 @@ and paints the strip accordingly.
 ## Requirements
 - macOS on Apple Silicon.
 - A Tuya LED strip on your Wi-Fi, and the account of the app that set it up.
-- A MIDI clock source, such as Deeboo MIDI Sync. Point its clock output at the virtual port `Deeboo Lighting In`.
+- Any MIDI clock source (a DJ app, a DAW or a mixer). Pick it in Settings, or send its clock to the virtual port `Deeboo Lighting In`. Sources that start after the app are picked up without a restart.
 
 ## Install
 Download the `.dmg` and `SHA256SUMS` from the GitHub Releases page. The app is ad-hoc signed but not notarized, so macOS warns the first time.

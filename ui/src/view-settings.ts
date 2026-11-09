@@ -78,7 +78,12 @@ export function mountSettings(onBack: () => void): {
   const open = (strip: StripStatus) => {
     Promise.all([api.getSettings(), api.listMidiSources(), api.listAudioInputs()]).then(
       ([s, midi, audio]) => {
-        const midiSel = select("MIDI input", "Deeboo Lighting In only", midi, s.midiSource);
+        const midiSel = select(
+          "MIDI input",
+          "Virtual port (Deeboo Lighting In)",
+          midi,
+          s.midiSource,
+        );
         midiSel.onchange = () => save((c) => ({ ...c, midiSource: midiSel.value || null }));
         const audioSel = select("Audio input", "System default", audio, s.audioInput);
         audioSel.onchange = () => save((c) => ({ ...c, audioInput: audioSel.value || null }));
