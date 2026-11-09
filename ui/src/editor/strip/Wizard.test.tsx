@@ -189,7 +189,7 @@ it("renders_identify_step_and_lights_a_piece", async () => {
     button("Save").click();
     await settle();
   });
-  expect(api.wizardSave).toHaveBeenCalled();
+  expect(api.wizardSave).toHaveBeenCalledWith(3);
 });
 
 it("shows_the_error_when_save_is_rejected", async () => {

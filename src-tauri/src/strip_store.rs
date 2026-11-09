@@ -15,7 +15,10 @@ pub struct StripConfig {
     pub id: String,
     pub name: String,
     pub local_key: SecretString,
+    /// Wired segments (N): the ones painted.
     pub segments: u8,
+    /// What the controller reports in DP 61 (M >= N): the header always carries it.
+    pub reported: u8,
     /// Hint only: callers re-check it against the local subnets before use.
     pub last_ip: Option<Ipv4Addr>,
 }
@@ -26,6 +29,7 @@ impl fmt::Debug for StripConfig {
         f.debug_struct("StripConfig")
             .field("name", &self.name)
             .field("segments", &self.segments)
+            .field("reported", &self.reported)
             .finish_non_exhaustive()
     }
 }
@@ -45,7 +49,10 @@ impl StripConfig {
         if self.local_key.expose_secret().len() != 16 {
             return Err(StoreError::Invalid("key"));
         }
-        if !(1..=60).contains(&self.segments) {
+        if !(1..=60).contains(&self.reported) {
+            return Err(StoreError::Invalid("reported"));
+        }
+        if !(1..=self.reported).contains(&self.segments) {
             return Err(StoreError::Invalid("segments"));
         }
         Ok(())
@@ -95,6 +102,9 @@ struct StripFile {
     local_key: Zeroizing<String>,
     #[serde(default = "default_segments")]
     segments: u8,
+    /// Old files: every segment is wired.
+    #[serde(default)]
+    reported: Option<u8>,
     #[serde(default)]
     last_ip: Option<Ipv4Addr>,
 }
@@ -106,6 +116,7 @@ struct StripFileOut<'a> {
     name: &'a str,
     local_key: &'a str,
     segments: u8,
+    reported: u8,
     last_ip: Option<Ipv4Addr>,
 }
 
@@ -131,6 +142,7 @@ pub fn load(path: &Path) -> Result<StripConfig, StoreError> {
         name: f.name,
         local_key: SecretString::from(f.local_key.as_str()),
         segments: f.segments,
+        reported: f.reported.unwrap_or(f.segments),
         last_ip: f.last_ip,
     };
     cfg.validate()?;
@@ -152,6 +164,7 @@ fn serialize(cfg: &StripConfig) -> io::Result<Zeroizing<Vec<u8>>> {
             name: &cfg.name,
             local_key: cfg.local_key.expose_secret(),
             segments: cfg.segments,
+            reported: cfg.reported,
             last_ip: cfg.last_ip,
         },
     )
@@ -221,6 +234,7 @@ mod tests {
             name: "\u{1F4A1}".repeat(63),
             local_key: SecretString::from(KEY),
             segments: 60,
+            reported: 60,
             last_ip: Some(Ipv4Addr::new(192, 168, 100, 200)),
         };
         cfg.validate().unwrap();
@@ -242,6 +256,7 @@ mod tests {
             name: "dj lights".into(),
             local_key: SecretString::from(KEY),
             segments: 24,
+            reported: 24,
             last_ip: Some(Ipv4Addr::new(192, 168, 1, 7)),
         };
         save(&p, &cfg).unwrap();
@@ -315,6 +330,7 @@ mod tests {
             name: "dj".into(),
             local_key: SecretString::from(KEY),
             segments: 4,
+            reported: 4,
             last_ip: None,
         };
         let mut short_key = good();
@@ -337,6 +353,43 @@ mod tests {
         let body = format!(r#"{{"id":"abc","name":"dj lights","local_key":"{KEY}"}}"#);
         let cfg = load(&put(d.path(), &body, 0o600)).unwrap();
         assert_eq!((cfg.segments, cfg.last_ip), (10, None));
+    }
+
+    #[test]
+    fn old_strip_file_reported_defaults_to_segments() {
+        let d = tempfile::tempdir().unwrap();
+        let body = format!(r#"{{"id":"abc","name":"n","local_key":"{KEY}","segments":8}}"#);
+        let cfg = load(&put(d.path(), &body, 0o600)).unwrap();
+        assert_eq!((cfg.segments, cfg.reported), (8, 8));
+    }
+
+    #[test]
+    fn wired_above_reported_rejected() {
+        let d = tempfile::tempdir().unwrap();
+        let body =
+            format!(r#"{{"id":"abc","name":"n","local_key":"{KEY}","segments":9,"reported":8}}"#);
+        assert!(matches!(
+            load(&put(d.path(), &body, 0o600)),
+            Err(StoreError::Invalid("segments"))
+        ));
+    }
+
+    #[test]
+    fn wired_and_reported_round_trip() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("strip.json");
+        let cfg = StripConfig {
+            id: "abc".into(),
+            name: "n".into(),
+            local_key: SecretString::from(KEY),
+            segments: 8,
+            reported: 10,
+            last_ip: None,
+        };
+        save(&p, &cfg).unwrap();
+        let back = load(&p).unwrap();
+        assert_eq!((back.segments, back.reported), (8, 10));
+        assert_eq!(mode(&p), 0o600);
     }
 
     #[test]
@@ -385,6 +438,7 @@ mod tests {
                     name: name.clone(),
                     local_key: SecretString::from(key.clone()),
                     segments,
+                    reported: segments,
                     last_ip: ip,
                 };
                 save(&p, &cfg).unwrap();

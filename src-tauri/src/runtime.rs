@@ -1029,6 +1029,7 @@ mod tests {
             name: name.into(),
             local_key: secrecy::SecretString::from("0123456789abcdef"),
             segments,
+            reported: segments,
             last_ip: None,
         }
     }

@@ -123,6 +123,7 @@ mod tests {
                 "allow-strip-identify",
                 "allow-identify-segment",
                 "allow-wizard-save",
+                "allow-set-wired-segments",
                 "allow-message-counts",
                 "allow-preview-generated",
                 "allow-pattern-sequence",

@@ -140,7 +140,9 @@ export const api = {
   stripIdentify: (segment: number): Promise<void> => invoke("strip_identify", { segment }),
   /** Flashes a segment (1-based) through the app's own strip connection; rejects with a short message. */
   identifySegment: (segment: number): Promise<void> => invoke("identify_segment", { segment }),
-  wizardSave: (): Promise<void> => invoke("wizard_save"),
+  wizardSave: (wired: number): Promise<void> => invoke("wizard_save", { wired }),
+  /** Changes how many segments are wired (1..=what the controller reports); returns the resized library. */
+  setWiredSegments: (n: number): Promise<Library> => invoke("set_wired_segments", { n }),
   getSettings: (): Promise<Settings> => invoke("get_settings"),
   /** The editor's Detection section is open (`true`) or closed: `detector` events flow only while open. */
   detectionWatch: (on: boolean): Promise<void> => invoke("detection_watch", { on }),

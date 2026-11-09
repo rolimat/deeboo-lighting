@@ -265,6 +265,33 @@ async fn listen_in(frames: &mut impl Frames, window: Duration) -> Result<u8, Str
         .ok_or(StripError::NoSegments)
 }
 
+/// Full-strip fills would light the unwired tail, so they become a pencil on the wired segments.
+fn wired_cmd(c: &StripConfig, cmd: &PaintCommand) -> PaintCommand {
+    match cmd {
+        PaintCommand::Bucket(color) if c.segments < c.reported => PaintCommand::Pencil {
+            color: *color,
+            segments: (1..=c.segments).collect(),
+        },
+        other => other.clone(),
+    }
+}
+
+/// Switches the unwired tail (N+1..=M) off; `None` when every reported segment is wired.
+fn park_tail(c: &StripConfig) -> Option<PaintCommand> {
+    (c.segments < c.reported).then(|| PaintCommand::Eraser {
+        segments: (c.segments + 1..=c.reported).collect(),
+    })
+}
+
+async fn park_unwired<P: Painter>(p: &P, c: &StripConfig) {
+    if let Some(off) = park_tail(c) {
+        if let Err(e) = p.paint(c.reported, &off).await {
+            log::warn!("strip tail not switched off: {e}");
+        }
+        tokio::time::sleep(MESSAGE_GAP).await;
+    }
+}
+
 /// Eraser on every segment, then white on `segment` (spec §6.7.5).
 async fn identify_via<P: Painter>(p: &P, segment: u8, segments: u8) -> Result<(), StripError> {
     let all = PaintCommand::Eraser {
@@ -497,6 +524,7 @@ pub async fn run<P, Fut>(
                     if restart {
                         continue;
                     }
+                    park_unwired(&p, &c).await;
                     painter = Some(p);
                     report(StripStatus::Connected {
                         name: c.name.clone(),
@@ -526,14 +554,14 @@ pub async fn run<P, Fut>(
                     continue 'connect;
                 }
                 (Some(p), StripMsg::Paint(cmd)) => {
-                    if let Err(e) = p.paint(c.segments, &cmd).await {
+                    if let Err(e) = p.paint(c.reported, &wired_cmd(&c, &cmd)).await {
                         log::warn!("strip paint failed: {e}");
                         report(StripStatus::Error);
                         painter = None;
                     }
                 }
                 (Some(p), StripMsg::Identify(n)) => {
-                    if let Err(e) = identify_via(p, n, c.segments).await {
+                    if let Err(e) = identify_via(p, n, c.reported).await {
                         log::warn!("strip identify failed: {e}");
                         report(StripStatus::Error);
                         painter = None;
@@ -851,6 +879,39 @@ mod tests {
         })
     }
 
+    fn wired(n: u8, m: u8) -> StripConfig {
+        StripConfig {
+            segments: n,
+            reported: m,
+            ..cfg("w", None)
+        }
+    }
+
+    #[test]
+    fn header_keeps_reported_count() {
+        let c = wired(8, 10);
+        let red = Hsv {
+            h: 0,
+            s: 1000,
+            v: 1000,
+        };
+        let bytes = encode(c.reported, &wired_cmd(&c, &PaintCommand::Bucket(red))).unwrap();
+        // Header 10, pencil on 1..=8 only.
+        assert_eq!(hex(&bytes), "0001000a01000003e803e8880102030405060708");
+        let tail = park_tail(&c).unwrap();
+        assert_eq!(
+            hex(&encode(c.reported, &tail).unwrap()),
+            "0001000a0200000000000082090a"
+        );
+        // Every segment wired: nothing changes.
+        let full = wired(10, 10);
+        assert_eq!(
+            wired_cmd(&full, &PaintCommand::Bucket(red)),
+            PaintCommand::Bucket(red)
+        );
+        assert!(park_tail(&full).is_none());
+    }
+
     #[test]
     fn identify_sends_eraser_then_pencil_with_gap() {
         let rec = Recorder(Mutex::default());
@@ -886,6 +947,7 @@ mod tests {
             name: name.into(),
             local_key: secrecy::SecretString::from("0123456789abcdef"),
             segments: 10,
+            reported: 10,
             last_ip,
         }
     }

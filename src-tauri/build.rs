@@ -23,6 +23,7 @@ const COMMANDS: &[&str] = &[
     "strip_identify",
     "identify_segment",
     "wizard_save",
+    "set_wired_segments",
     "message_counts",
     "preview_generated",
     "detection_watch",

@@ -289,7 +289,7 @@ impl Wizard {
             Phase::Identify => {
                 let back = g.ready.as_ref().map(|r| WizardState::Identify {
                     device: r.device.clone(),
-                    segments: r.cfg.segments,
+                    segments: r.cfg.reported,
                 });
                 drop(g);
                 if let Some(state) = back {
@@ -327,7 +327,7 @@ impl Wizard {
                 .as_ref()
                 .filter(|_| g.phase == Phase::Identify)
                 .ok_or("Not ready to identify.")?;
-            (r.conn.clone(), r.cfg.segments)
+            (r.conn.clone(), r.cfg.reported)
         };
         if !(1..=segments).contains(&segment) {
             return Err("No such segment.".into());
@@ -355,13 +355,18 @@ impl Wizard {
         &self,
         path: &Path,
         emit: &Emit,
+        wired: u8,
         deliver: impl FnOnce(StripConfig) -> Result<(), String>,
     ) -> Result<(), String> {
         let mut g = lock(&self.0);
         if g.phase != Phase::Identify {
             return Err("Not ready to save.".into());
         }
-        let r = g.ready.as_ref().ok_or("Not ready to save.")?;
+        let r = g.ready.as_mut().ok_or("Not ready to save.")?;
+        if !(1..=r.cfg.reported).contains(&wired) {
+            return Err("Wired segments must be between 1 and what the strip reports.".into());
+        }
+        r.cfg.segments = wired;
         if let Err(e) = strip_store::save(path, &r.cfg) {
             log::warn!("strip file not saved: {e}");
             drop(g);
@@ -396,6 +401,7 @@ async fn lan_phase<L: Lan>(
         name: store_name(&device.name),
         local_key: key,
         segments: 10,
+        reported: 10,
         last_ip: None,
     };
     // The same rules the strip file enforces, checked before the network is touched.
@@ -432,6 +438,7 @@ async fn lan_phase<L: Lan>(
         Err(e) => return Err((Step::Segments, e.to_string())),
     };
     cfg.segments = segments;
+    cfg.reported = segments;
     let conn = lan
         .connect(&cfg)
         .await
@@ -687,7 +694,7 @@ mod tests {
         let (emit, log) = at_identify(&w, &l).await;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("strip.json");
-        w.save(&path, &emit, |_| Ok(())).unwrap();
+        w.save(&path, &emit, 3, |_| Ok(())).unwrap();
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
@@ -700,7 +707,22 @@ mod tests {
             Some(WizardState::Saved { segments: 3, .. })
         ));
         // Done: a second save has nothing to write.
-        assert!(w.save(&path, &emit, |_| Ok(())).is_err());
+        assert!(w.save(&path, &emit, 1, |_| Ok(())).is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn save_takes_the_wired_count_and_keeps_the_reported_one() {
+        let w = Wizard::default();
+        let l = lan(vec![Ok(IP)], Ok(10));
+        let (emit, _) = at_identify(&w, &l).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("strip.json");
+        assert!(w.save(&path, &emit, 11, |_| Ok(())).is_err());
+        assert!(w.save(&path, &emit, 0, |_| Ok(())).is_err());
+        assert!(!path.exists());
+        w.save(&path, &emit, 8, |_| Ok(())).unwrap();
+        let cfg = strip_store::load(&path).unwrap();
+        assert_eq!((cfg.segments, cfg.reported), (8, 10));
     }
 
     #[tokio::test]
@@ -708,7 +730,7 @@ mod tests {
         let (emit, _) = recorder();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("strip.json");
-        assert!(Wizard::default().save(&path, &emit, |_| Ok(())).is_err());
+        assert!(Wizard::default().save(&path, &emit, 1, |_| Ok(())).is_err());
         assert!(!path.exists());
     }
 
@@ -1037,7 +1059,7 @@ mod tests {
         let blocker = dir.path().join("blocked");
         std::fs::write(&blocker, b"x").unwrap();
         let path = blocker.join("strip.json");
-        assert!(w.save(&path, &emit, |_| Ok(())).is_err());
+        assert!(w.save(&path, &emit, 1, |_| Ok(())).is_err());
         assert!(matches!(
             log.lock().unwrap().last(),
             Some(WizardState::Failed {
@@ -1054,7 +1076,7 @@ mod tests {
             Some(WizardState::Identify { segments: 3, .. })
         ));
         let ok = dir.path().join("strip.json");
-        w.save(&ok, &emit, |_| Ok(())).unwrap();
+        w.save(&ok, &emit, 1, |_| Ok(())).unwrap();
         assert!(ok.exists());
     }
 
@@ -1074,7 +1096,7 @@ mod tests {
         let got = Arc::new(Mutex::new(None));
         let g2 = got.clone();
         let lg = log.clone();
-        w.save(&path, &emit, move |cfg| {
+        w.save(&path, &emit, 3, move |cfg| {
             *g2.lock().unwrap() = Some((cfg.segments, saved(&lg)));
             Ok(())
         })
@@ -1089,7 +1111,7 @@ mod tests {
         let l = lan(vec![Ok(IP)], Ok(3));
         let (emit, log) = at_identify(&w, &l).await;
         let err = w
-            .save(&path, &emit, |_| Err("engine busy".into()))
+            .save(&path, &emit, 1, |_| Err("engine busy".into()))
             .unwrap_err();
         assert_eq!(err, "engine busy");
         assert!(!saved(&log), "no success is announced");
@@ -1178,7 +1200,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let during = Arc::new(Mutex::new(Vec::new()));
         let (d2, l2) = (during.clone(), l.clone());
-        w.save(&dir.path().join("strip.json"), &emit, move |_| {
+        w.save(&dir.path().join("strip.json"), &emit, 1, move |_| {
             *d2.lock().unwrap() = l2.holds.lock().unwrap().clone();
             Ok(())
         })
@@ -1226,7 +1248,7 @@ mod tests {
             w.retry(&emit);
             wait_for(&log, |s| matches!(s, WizardState::Identify { .. })).await;
             w.identify(2).await.unwrap();
-            w.save(&path, &emit, |_| Ok(())).unwrap();
+            w.save(&path, &emit, 1, |_| Ok(())).unwrap();
             let states = format!("{:?}", log.lock().unwrap());
             states
         });

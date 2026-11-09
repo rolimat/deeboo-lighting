@@ -13,6 +13,7 @@ use crate::runtime::{Input, RuntimeHandle};
 
 use crate::library_store;
 use crate::settings::{self, Settings};
+use crate::strip_store;
 use crate::wizard::session::{Emit, RealLan, Wizard};
 use light_core::library::Library;
 use light_core::model::{Sequence, resolve};
@@ -741,12 +742,16 @@ pub fn identify_segment(state: tauri::State<'_, AppState>, segment: u8) -> Resul
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
-pub fn wizard_save(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub fn wizard_save(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    wired: u8,
+) -> Result<(), String> {
     // `Saved` goes out only once the engine has the new strip; if it cannot take the news now, the
     // file is safe on disk and a restart still picks it up.
     state
         .wizard
-        .save(&state.strip_path()?, &wizard_emit(&app), |cfg| {
+        .save(&state.strip_path()?, &wizard_emit(&app), wired, |cfg| {
             if let Some(lib) = state.rebuild_unsaved_library(cfg.segments) {
                 state.deliver(Input::Library(Box::new(lib)));
             }
@@ -755,6 +760,64 @@ pub fn wizard_save(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> 
                 "Saved. Restart the app to use the new strip.".to_string()
             })
         })
+}
+
+/// The shape with exactly `n` pieces: the first ones stay; new ones continue from the last piece in
+/// its direction (one cell per step). shortcut: clamps at the grid edge instead of wrapping a row.
+fn with_wired(lib: &Library, n: u8) -> Library {
+    use light_core::library::{GRID, Piece};
+    let mut out = lib.clone();
+    out.shape.pieces.truncate(usize::from(n));
+    while out.shape.pieces.len() < usize::from(n) {
+        let last = out.shape.pieces.last().copied().unwrap_or(Piece {
+            x: 0.0,
+            y: 0.0,
+            angle: 0,
+            len: 1,
+        });
+        let (dx, dy): (f32, f32) = match last.angle {
+            90 => (0.0, 1.0),
+            180 => (-1.0, 0.0),
+            270 => (0.0, -1.0),
+            _ => (1.0, 0.0),
+        };
+        let step = f32::from(last.len.max(1));
+        out.shape.pieces.push(Piece {
+            x: dx.mul_add(step, last.x).clamp(0.0, GRID),
+            y: dy.mul_add(step, last.y).clamp(0.0, GRID),
+            ..last
+        });
+    }
+    out
+}
+
+impl AppState {
+    /// Saves the wired count in `strip.json` (mode and key untouched), then resizes the shape and the
+    /// sequences like a re-pair does (`save_library`).
+    fn set_wired(&self, n: u8) -> Result<Library, String> {
+        let path = self.strip_path()?;
+        let mut cfg = strip_store::load(&path).map_err(|_| "No strip saved yet.".to_string())?;
+        if !(1..=cfg.reported).contains(&n) {
+            return Err("Wired segments must be between 1 and what the strip reports.".into());
+        }
+        cfg.segments = n;
+        strip_store::save(&path, &cfg).map_err(|e| {
+            log::warn!("strip file not saved: {e}");
+            "Strip not saved.".to_string()
+        })?;
+        let lib = self.save_library(with_wired(&self.library(), n))?;
+        self.deliver(Input::StripChanged(cfg));
+        Ok(lib)
+    }
+}
+
+/// How many segments are wired (the strip may report more). Returns the resized library.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn set_wired_segments(state: tauri::State<'_, AppState>, n: u8) -> Result<Library, String> {
+    let lib = state.set_wired(n)?;
+    state.deliver(Input::Library(Box::new(lib.clone())));
+    Ok(lib)
 }
 
 /// The settings view's Quit button; `RunEvent::Exit` then stops the engine.
@@ -820,7 +883,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 25);
+        assert_eq!(commands.len(), 26);
         assert_eq!(granted, commands);
     }
 
@@ -958,6 +1021,51 @@ mod tests {
         assert!(dir.path().join("library.json").exists());
         assert_eq!(state.rebuild_unsaved_library(6), None);
         assert_eq!(state.library(), lib);
+    }
+
+    fn state_with_strip(n: u8, m: u8) -> (tempfile::TempDir, AppState) {
+        let (dir, state) = lib_state();
+        *lock(&state.settings_path) = Some(dir.path().join("settings.json"));
+        let cfg = strip_store::StripConfig {
+            id: "abc".into(),
+            name: "n".into(),
+            local_key: secrecy::SecretString::from("0123456789abcdef"),
+            segments: n,
+            reported: m,
+            last_ip: None,
+        };
+        strip_store::save(&dir.path().join("strip.json"), &cfg).unwrap();
+        (dir, state)
+    }
+
+    #[test]
+    fn set_wired_segments_keeps_existing_pieces() {
+        let (dir, state) = state_with_strip(10, 10);
+        let before = state.library();
+        let lib = state.set_wired(8).unwrap();
+        assert_eq!(lib.shape.pieces, before.shape.pieces[..8]);
+        assert_eq!(lib.sequences[0].1.steps[0].roles.len(), 8);
+        let cfg = strip_store::load(&dir.path().join("strip.json")).unwrap();
+        assert_eq!((cfg.segments, cfg.reported), (8, 10));
+        // Growing continues the row after the last piece; the others are untouched.
+        let lib = state.set_wired(10).unwrap();
+        assert_eq!(lib.shape.pieces[..8], before.shape.pieces[..8]);
+        assert_eq!((lib.shape.pieces[9].x, lib.shape.pieces[9].y), (9.0, 0.0));
+        assert_eq!(lib.validate(), Ok(()));
+        assert!(state.set_wired(0).is_err());
+        assert!(state.set_wired(11).is_err());
+    }
+
+    #[test]
+    fn key_file_mode_stays_0600_after_resize() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, state) = state_with_strip(10, 10);
+        state.set_wired(6).unwrap();
+        let mode = std::fs::metadata(dir.path().join("strip.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]
