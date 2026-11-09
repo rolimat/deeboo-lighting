@@ -253,7 +253,6 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     emit: E,
     last: EngineStatus,
     tray: Option<TrayLink>,
-    play_start_us: Option<u64>,
     tray_due: Option<u64>,
     /// The OS listed the configured source at the last check (popover show or settings change).
     source_present: bool,
@@ -326,7 +325,6 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             emit,
             last,
             tray: None,
-            play_start_us: None,
             tray_due: None,
             source_present,
             strip_paused: false,
@@ -516,11 +514,6 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     fn update_tray(&mut self, now_us: u64) {
         let midi_ok = self.midi_ok();
         let s = &self.last;
-        if !s.playing {
-            self.play_start_us = None;
-        } else if self.play_start_us.is_none() {
-            self.play_start_us = Some(now_us);
-        }
         let Some(link) = &mut self.tray else { return };
         let input = TrayInput {
             midi_ok,
@@ -528,7 +521,6 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             playing: s.playing,
             bpm: s.bpm,
             last_beat_us: s.last_beat_us,
-            play_start_us: self.play_start_us,
             moment: s.moment,
             forced: !s.auto,
         };

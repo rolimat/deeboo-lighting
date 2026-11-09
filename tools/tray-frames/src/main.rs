@@ -1,14 +1,24 @@
-//! Generates the menu bar PNG frames (18 px tall, @1x and @2x). Output is committed:
+//! Generates the menu bar PNGs (18 px tall, @1x and @2x): the fixed 6-segment LED glyph, with the
+//! moment icon (and an "F" badge when forced) beside it. Output is committed:
 //! `cargo run -p tray-frames [dir]` (default `src-tauri/icons/tray`). Deterministic.
 
 use std::path::Path;
 
-const W: f32 = 24.0;
 const H: f32 = 18.0;
-const FRAMES: usize = 8;
+/// Glyph only (stopped).
+const W_GLYPH: usize = 15;
+/// Glyph + moment icon + "F" badge.
+const W_FULL: usize = 33;
+/// Moment icon between beats.
+const DIM: f32 = 0.35;
 
 type Rgb = [u8; 3];
-type Shape = Box<dyn Fn(f32, f32) -> (Rgb, f32)>;
+/// (colour, signed distance to the shape edge, opacity).
+type Shape = Box<dyn Fn(f32, f32) -> (Rgb, f32, f32)>;
+
+const BLACK: Rgb = [0, 0, 0]; // template images: only alpha matters
+const GREY: Rgb = [142, 142, 147]; // mid grey: legible on light and dark bars (non-template lost variants)
+const RED: Rgb = [255, 69, 58];
 
 /// Distance from `(px, py)` to the polyline.
 fn dist_line(pts: &[(f32, f32)], px: f32, py: f32) -> f32 {
@@ -23,47 +33,63 @@ fn dist_line(pts: &[(f32, f32)], px: f32, py: f32) -> f32 {
         .fold(f32::MAX, f32::min)
 }
 
-/// The wave's centre line for `kind` at animation `frame` (logical px).
-#[allow(clippy::cast_precision_loss)] // small indices
-fn wave_points(kind: &str, frame: usize) -> Vec<(f32, f32)> {
-    let phase = frame as f32 / FRAMES as f32;
-    (0..=96)
+/// Points of a cubic Bezier, excluding the start point.
+fn cubic(p0: (f32, f32), c1: (f32, f32), c2: (f32, f32), p1: (f32, f32)) -> Vec<(f32, f32)> {
+    (1_u8..=16)
         .map(|i| {
-            let x = 1.5 + (W - 3.0) * i as f32 / 96.0;
-            let u = x / W;
-            let y = match kind {
-                // square wave, period 12 px
-                "rhythm" => {
-                    let c = (x / 12.0 + phase).fract();
-                    if c < 0.5 { 5.0 } else { 13.0 }
-                }
-                // one slow sine across the icon
-                "calm" => 8.0 - 3.0 * (std::f32::consts::TAU * (u + phase)).sin(),
-                // triangle zigzag (period 6 px) growing in amplitude
-                _ => {
-                    let c = (x / 6.0 + phase).fract();
-                    let tri = if c < 0.5 {
-                        4.0 * c - 1.0
-                    } else {
-                        3.0 - 4.0 * c
-                    };
-                    8.0 - tri * (1.0 + 4.0 * u)
-                }
+            let t = f32::from(i) / 16.0;
+            let u = 1.0 - t;
+            let f = |a: f32, b: f32, c: f32, d: f32| {
+                u * u * u * a + 3.0 * u * u * t * b + 3.0 * u * t * t * c + t * t * t * d
             };
-            (x, y)
+            (f(p0.0, c1.0, c2.0, p1.0), f(p0.1, c1.1, c2.1, p1.1))
         })
         .collect()
 }
 
-/// Straight-alpha RGBA, `scale` px per logical px; `cover(x, y)` gives (rgb, signed distance).
+/// The moment icons as polylines in the 24x24 line-icon space (the SVG paths of the spec).
+fn moment_paths(kind: &str) -> Vec<Vec<(f32, f32)>> {
+    match kind {
+        // M3 12h3l3-7 4 14 3-7h5
+        "rhythm" => vec![vec![
+            (3.0, 12.0),
+            (6.0, 12.0),
+            (9.0, 5.0),
+            (13.0, 19.0),
+            (16.0, 12.0),
+            (21.0, 12.0),
+        ]],
+        // M2 12c3-4 5-4 8 0s5 4 8 0 3-2 4-1
+        "calm" => {
+            let mut p = vec![(2.0, 12.0)];
+            p.extend(cubic((2.0, 12.0), (5.0, 8.0), (7.0, 8.0), (10.0, 12.0)));
+            p.extend(cubic(
+                (10.0, 12.0),
+                (13.0, 16.0),
+                (15.0, 16.0),
+                (18.0, 12.0),
+            ));
+            p.extend(cubic((18.0, 12.0), (21.0, 8.0), (21.0, 10.0), (22.0, 11.0)));
+            vec![p]
+        }
+        // M3 20 21 4M21 4v7M21 4h-7
+        _ => vec![
+            vec![(3.0, 20.0), (21.0, 4.0)],
+            vec![(21.0, 4.0), (21.0, 11.0)],
+            vec![(21.0, 4.0), (14.0, 4.0)],
+        ],
+    }
+}
+
+/// Straight-alpha RGBA, `scale` px per logical px.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::many_single_char_names
 )]
-fn render(scale: usize, shapes: &[&dyn Fn(f32, f32) -> (Rgb, f32)]) -> Vec<u8> {
-    let (w, h) = ((W as usize) * scale, (H as usize) * scale);
+fn render(scale: usize, width: usize, shapes: &[Shape]) -> Vec<u8> {
+    let (w, h) = (width * scale, (H as usize) * scale);
     let mut out = Vec::with_capacity(w * h * 4);
     for py in 0..h {
         for px in 0..w {
@@ -74,8 +100,8 @@ fn render(scale: usize, shapes: &[&dyn Fn(f32, f32) -> (Rgb, f32)]) -> Vec<u8> {
             // Source-over of every shape, in premultiplied floats.
             let (mut c, mut a) = ([0.0_f32; 3], 0.0_f32);
             for s in shapes {
-                let (rgb, d) = s(x, y);
-                let sa = (0.5 - d * scale as f32).clamp(0.0, 1.0);
+                let (rgb, d, op) = s(x, y);
+                let sa = (0.5 - d * scale as f32).clamp(0.0, 1.0) * op;
                 for i in 0..3 {
                     c[i] = f32::from(rgb[i]) * sa + c[i] * (1.0 - sa);
                 }
@@ -90,11 +116,11 @@ fn render(scale: usize, shapes: &[&dyn Fn(f32, f32) -> (Rgb, f32)]) -> Vec<u8> {
     out
 }
 
-fn encode(scale: usize, rgba: &[u8]) -> Vec<u8> {
+fn encode(scale: usize, width: usize, rgba: &[u8]) -> Vec<u8> {
     let mut buf = Vec::new();
     {
-        #[allow(clippy::cast_possible_truncation)] // 48 at most
-        let mut enc = png::Encoder::new(&mut buf, (24 * scale) as u32, (18 * scale) as u32);
+        #[allow(clippy::cast_possible_truncation)] // 66 at most
+        let mut enc = png::Encoder::new(&mut buf, (width * scale) as u32, (18 * scale) as u32);
         enc.set_color(png::ColorType::Rgba);
         enc.set_depth(png::BitDepth::Eight);
         // Fixed settings keep the bytes identical run to run.
@@ -106,66 +132,112 @@ fn encode(scale: usize, rgba: &[u8]) -> Vec<u8> {
     buf
 }
 
-fn circle(cx: f32, cy: f32, r: f32, rgb: Rgb) -> impl Fn(f32, f32) -> (Rgb, f32) {
-    move |x, y| (rgb, (x - cx).hypot(y - cy) - r)
+/// Rounded bar `[x0,x1] x [y0,y1]`.
+fn bar(x0: f32, y0: f32, x1: f32, y1: f32, rgb: Rgb) -> Shape {
+    let (cx, cy, hx, hy) = (
+        f32::midpoint(x0, x1),
+        f32::midpoint(y0, y1),
+        (x1 - x0) / 2.0,
+        (y1 - y0) / 2.0,
+    );
+    let r = hy.min(hx).min(1.2);
+    Box::new(move |x, y| {
+        let (qx, qy) = ((x - cx).abs() - (hx - r), (y - cy).abs() - (hy - r));
+        (
+            rgb,
+            qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r,
+            1.0,
+        )
+    })
 }
 
-/// App icon silhouette centred at `(cx, 9)`: 10 LED segments around a vinyl with a hole for the label.
-fn silhouette(cx: f32) -> Vec<Shape> {
-    const GREY: Rgb = [142, 142, 147]; // mid grey: legible on light and dark menu bars
-    let cy = H / 2.0;
-    let mut out: Vec<Shape> = Vec::new();
-    for i in 0..10_u8 {
-        let mid = (f32::from(i) * 36.0 + 18.0).to_radians();
-        let pts: Vec<_> = (-2_i8..=2)
-            .map(|k| {
-                let a = mid + f32::from(k) * 4.5_f32.to_radians();
-                (cx + 6.6 * a.cos(), cy + 6.6 * a.sin())
-            })
-            .collect();
-        out.push(Box::new(move |x, y| (GREY, dist_line(&pts, x, y) - 0.75)));
+/// 2 rows x 3 rounded LED bars, never animated.
+fn glyph(rgb: Rgb) -> Vec<Shape> {
+    let mut out = Vec::new();
+    for row in 0..2_u8 {
+        for col in 0..3_u8 {
+            let (x, y) = (1.0 + f32::from(col) * 4.5, 3.0 + f32::from(row) * 6.0);
+            out.push(bar(x, y, x + 3.5, y + 5.0, rgb));
+        }
     }
-    // Vinyl: annulus 1.7..4.5 px (the hole is the label).
-    out.push(Box::new(move |x, y| {
-        (GREY, ((x - cx).hypot(y - cy) - 3.1).abs() - 1.4)
-    }));
     out
 }
 
-/// Every frame as (file name, PNG bytes).
+/// The moment icon (24-unit space scaled to 12 px) at x = 16.
+fn moment_icon(kind: &str, rgb: Rgb, opacity: f32) -> Shape {
+    let paths: Vec<Vec<(f32, f32)>> = moment_paths(kind)
+        .into_iter()
+        .map(|p| {
+            p.into_iter()
+                .map(|(x, y)| (16.0 + x * 0.5, 3.0 + y * 0.5))
+                .collect()
+        })
+        .collect();
+    Box::new(move |x, y| {
+        let d = paths
+            .iter()
+            .map(|p| dist_line(p, x, y))
+            .fold(f32::MAX, f32::min);
+        (rgb, d - 0.65, opacity)
+    })
+}
+
+/// A small "F" (4 x 7 px) at the right of the icon.
+fn forced_badge(rgb: Rgb) -> Shape {
+    let strokes = [
+        vec![(28.5, 5.5), (28.5, 12.5)],
+        vec![(28.5, 5.5), (31.5, 5.5)],
+        vec![(28.5, 8.7), (31.0, 8.7)],
+    ];
+    Box::new(move |x, y| {
+        let d = strokes
+            .iter()
+            .map(|p| dist_line(p, x, y))
+            .fold(f32::MAX, f32::min);
+        (rgb, d - 0.55, 1.0)
+    })
+}
+
+/// Variant name suffix and the shapes of one image.
+fn image(kind: Option<&str>, forced: bool, dim: bool, lost: bool) -> (usize, Vec<Shape>) {
+    let ink = if lost { GREY } else { BLACK };
+    let mut shapes = glyph(ink);
+    if lost {
+        // Top-right corner of the glyph, over the bars.
+        shapes.push(Box::new(|x, y| (RED, (x - 12.3).hypot(y - 3.4) - 2.6, 1.0)));
+    }
+    let Some(kind) = kind else {
+        return (W_GLYPH, shapes);
+    };
+    shapes.push(moment_icon(kind, ink, if dim { DIM } else { 1.0 }));
+    if forced {
+        shapes.push(forced_badge(ink));
+    }
+    (W_FULL, shapes)
+}
+
+/// Every image as (file name, PNG bytes).
 fn frames() -> Vec<(String, Vec<u8>)> {
-    const BLACK: Rgb = [0, 0, 0]; // template images: only alpha matters
     let mut out = Vec::new();
     for scale in [1, 2] {
         let at = if scale == 1 { "" } else { "@2x" };
-        let icon = silhouette(9.0);
-        for (name, rgb) in [
-            ("red", [255, 69, 58]),
-            ("green-on", [48, 209, 88]),
-            ("green-dim", [22, 100, 42]),
-        ] {
-            let dot = circle(19.5, 9.0, 3.0, rgb);
-            let mut shapes: Vec<&dyn Fn(f32, f32) -> (Rgb, f32)> =
-                icon.iter().map(AsRef::as_ref).collect();
-            shapes.push(&dot);
+        for lost in [false, true] {
+            let l = if lost { "-lost" } else { "" };
+            let (w, shapes) = image(None, false, false, lost);
             out.push((
-                format!("dot-{name}{at}.png"),
-                encode(scale, &render(scale, &shapes)),
+                format!("tray-stopped{l}{at}.png"),
+                encode(scale, w, &render(scale, w, &shapes)),
             ));
-        }
-        for kind in ["rhythm", "calm", "buildup"] {
-            for frame in 0..FRAMES {
-                let pts = wave_points(kind, frame);
-                let line = move |x: f32, y: f32| (BLACK, dist_line(&pts, x, y) - 0.8);
-                let forced = circle(W / 2.0, 16.2, 1.3, BLACK);
-                out.push((
-                    format!("{kind}-{frame}{at}.png"),
-                    encode(scale, &render(scale, &[&line])),
-                ));
-                out.push((
-                    format!("{kind}-{frame}-forced{at}.png"),
-                    encode(scale, &render(scale, &[&line, &forced])),
-                ));
+            for kind in ["rhythm", "calm", "buildup"] {
+                for (forced, dim) in [(false, false), (false, true), (true, false), (true, true)] {
+                    let name = format!(
+                        "tray-{kind}{}{}{l}{at}.png",
+                        if forced { "-forced" } else { "" },
+                        if dim { "-dim" } else { "" }
+                    );
+                    let (w, shapes) = image(Some(kind), forced, dim, lost);
+                    out.push((name, encode(scale, w, &render(scale, w, &shapes))));
+                }
             }
         }
     }
@@ -187,60 +259,99 @@ fn main() -> std::io::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn tray_frames_tool_is_deterministic() {
-        let a = frames();
-        assert_eq!(a.len(), 2 * (3 + 3 * FRAMES * 2));
-        assert_eq!(a, frames());
-        assert!(a.iter().any(|(n, _)| n == "rhythm-7-forced@2x.png"));
-    }
-
-    /// Template images: every pixel is black, only alpha varies. Dot frames are coloured on purpose.
-    #[test]
-    fn tray_template_is_monochrome() {
-        let all = frames();
-        for (name, bytes) in all.iter().filter(|(n, _)| !n.starts_with("dot-")) {
-            let mut r = png::Decoder::new(std::io::Cursor::new(bytes.as_slice()))
-                .read_info()
-                .unwrap();
-            let mut buf = vec![0; r.output_buffer_size().unwrap()];
-            r.next_frame(&mut buf).unwrap();
-            assert!(
-                buf.chunks(4).all(|p| p[..3] == [0, 0, 0]),
-                "{name} is not black + alpha"
-            );
-            assert!(buf.chunks(4).any(|p| p[3] > 0), "{name} is empty");
-        }
-    }
-
-    fn alpha(bytes: &[u8]) -> Vec<u8> {
+    fn decode(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
         let mut r = png::Decoder::new(std::io::Cursor::new(bytes))
             .read_info()
             .unwrap();
         let mut buf = vec![0; r.output_buffer_size().unwrap()];
-        r.next_frame(&mut buf).unwrap();
-        buf.chunks(4).map(|p| p[3]).collect()
+        let i = r.next_frame(&mut buf).unwrap();
+        (i.width, i.height, buf)
     }
 
-    /// The dot frames draw the app icon silhouette (not a plain ring) next to the dot.
-    #[test]
-    fn dot_frames_contain_the_silhouette() {
-        let all = frames();
-        let dot = alpha(
+    fn get(all: &[(String, Vec<u8>)], name: &str) -> (u32, u32, Vec<u8>) {
+        decode(
             &all.iter()
-                .find(|(n, _)| n == "dot-green-on@2x.png")
-                .unwrap()
+                .find(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
                 .1,
-        );
-        let shapes = silhouette(9.0);
-        let refs: Vec<&dyn Fn(f32, f32) -> (Rgb, f32)> = shapes.iter().map(AsRef::as_ref).collect();
-        let icon = alpha(&encode(2, &render(2, &refs)));
-        let solid: Vec<_> = (0..icon.len()).filter(|&i| icon[i] == 255).collect();
-        assert!(solid.len() > 100);
+        )
+    }
+
+    fn alpha_sum(b: &[u8]) -> u32 {
+        b.chunks(4).map(|p| u32::from(p[3])).sum()
+    }
+
+    #[test]
+    fn tray_frames_tool_is_deterministic() {
+        let a = frames();
+        // (3 moments x forced x dim x lost) + stopped x lost, at two scales
+        assert_eq!(a.len(), 2 * (3 * 8 + 2));
+        assert_eq!(a, frames());
         assert!(
-            solid.iter().all(|&i| dot[i] > 0),
-            "silhouette missing from the dot frame"
+            a.iter()
+                .any(|(n, _)| n == "tray-buildup-forced-dim-lost@2x.png")
         );
+        assert!(a.iter().any(|(n, _)| n == "tray-stopped.png"));
+        assert!(
+            !a.iter()
+                .any(|(n, _)| n.starts_with("dot-") || n.starts_with("rhythm-"))
+        );
+    }
+
+    /// Template images: every pixel is black, only alpha varies. Lost variants are grey + red on purpose.
+    #[test]
+    fn tray_template_is_monochrome_and_lost_has_red() {
+        let all = frames();
+        for (name, bytes) in &all {
+            let (_, _, buf) = decode(bytes);
+            assert!(buf.chunks(4).any(|p| p[3] > 0), "{name} is empty");
+            let red = buf
+                .chunks(4)
+                .any(|p| p[3] > 200 && p[0] > 200 && p[1] < 100);
+            if name.contains("-lost") {
+                assert!(red, "{name} has no red dot");
+            } else {
+                assert!(
+                    !red && buf.chunks(4).all(|p| p[..3] == [0, 0, 0]),
+                    "{name} is not black + alpha"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn heights_widths_and_scales() {
+        let all = frames();
+        let (w1, h1, _) = get(&all, "tray-rhythm.png");
+        let (w2, h2, _) = get(&all, "tray-rhythm@2x.png");
+        assert_eq!((h1, h2, w2), (18, 36, 2 * w1));
+        assert!(w1 <= 36, "compact: {w1}");
+        let (ws, _, _) = get(&all, "tray-stopped.png");
+        assert!(ws < w1, "stopped is the glyph only");
+    }
+
+    /// The glyph is fixed: left part identical across moments and dim states; dim only lowers the icon.
+    #[test]
+    fn glyph_fixed_dim_lowers_icon_forced_adds_badge() {
+        let all = frames();
+        let (w, _, rh) = get(&all, "tray-rhythm@2x.png");
+        let (_, _, calm) = get(&all, "tray-calm@2x.png");
+        let (_, _, dim) = get(&all, "tray-rhythm-dim@2x.png");
+        let (_, _, forced) = get(&all, "tray-rhythm-forced@2x.png");
+        let (ws, _, stopped) = get(&all, "tray-stopped@2x.png");
+        // glyph columns of the playing images equal the stopped image
+        let rows = |b: &[u8], w: u32, cols: u32| -> Vec<u8> {
+            b.chunks((w * 4) as usize)
+                .flat_map(|r| r[..(cols * 4) as usize].to_vec())
+                .collect()
+        };
+        assert_eq!(rows(&rh, w, ws), stopped);
+        assert_eq!(rows(&calm, w, ws), stopped);
+        assert_eq!(rows(&dim, w, ws), stopped);
+        assert_ne!(rh, calm);
+        assert!(alpha_sum(&dim) < alpha_sum(&rh));
+        assert!(alpha_sum(&dim) > alpha_sum(&stopped));
+        assert!(alpha_sum(&forced) > alpha_sum(&rh));
     }
 
     /// Bundle PNGs (written by `tauri icon`) have their nominal sizes; the SVG source ships beside them.
