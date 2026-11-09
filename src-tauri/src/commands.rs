@@ -587,20 +587,18 @@ pub fn message_counts(
     message_counts_of(&state.library(), &sequence, palette_id)
 }
 
-/// One example of `pattern` with random parameters, for the strip's `n` segments and the saved shape.
+/// One example of `pattern` with random parameters, for the library's own segment count and shape
+/// (every sequence in the library matches it; no strip needed).
 fn pattern_sequence_of(
     lib: &Library,
-    n: u8,
     pattern: light_core::patterns::Pattern,
     seed: u64,
 ) -> Result<Sequence, String> {
-    if lib.segments() != n {
-        return Err("The library does not match the strip's segments.".into());
-    }
+    let n = lib.segments();
     let groups = light_core::groups::groups(&lib.shape);
     let seq = light_core::generator::Generator::new(seed).pattern(pattern, &groups, n);
     seq.validate(n)
-        .map_err(|_| "Could not build that pattern for this strip.".to_string())?;
+        .map_err(|_| "Could not build that pattern for this library.".to_string())?;
     Ok(seq)
 }
 
@@ -612,10 +610,7 @@ pub fn pattern_sequence(
     pattern: light_core::patterns::Pattern,
     seed: u64,
 ) -> Result<Sequence, String> {
-    let StripStatus::Connected { segments, .. } = lock(&state.status).strip else {
-        return Err("Strip not connected.".into());
-    };
-    pattern_sequence_of(&state.library(), segments, pattern, seed)
+    pattern_sequence_of(&state.library(), pattern, seed)
 }
 
 /// One example of what Generated would play for `moment`, built for the saved shape and a fresh seed.
@@ -1127,19 +1122,14 @@ mod tests {
     }
 
     #[test]
-    fn pattern_sequence_matches_strip_n() {
+    fn pattern_sequence_works_without_strip() {
         use light_core::patterns::Pattern;
-        let (_dir, state) = lib_state();
-        let lib = state.library();
-        let seq = pattern_sequence_of(&lib, 10, Pattern::Halves, 7).unwrap();
-        assert!(seq.validate(10).is_ok());
-        assert!(seq.steps.iter().all(|s| s.roles.len() == 10));
-        assert_eq!(
-            seq,
-            pattern_sequence_of(&lib, 10, Pattern::Halves, 7).unwrap()
-        );
-        let err = pattern_sequence_of(&lib, 6, Pattern::Halves, 7).unwrap_err();
-        assert!(err.contains("segments"), "{err}");
+        // No strip connected: the library's own segment count rules.
+        let lib = Library::builtin(8);
+        let seq = pattern_sequence_of(&lib, Pattern::Halves, 7).unwrap();
+        assert!(seq.validate(8).is_ok());
+        assert!(seq.steps.iter().all(|s| s.roles.len() == 8));
+        assert_eq!(seq, pattern_sequence_of(&lib, Pattern::Halves, 7).unwrap());
     }
 
     #[test]
