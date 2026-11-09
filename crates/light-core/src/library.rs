@@ -1,14 +1,21 @@
 //! The user library: shape, palettes, sequences and sets, with strict validation (plan 5).
 use crate::builtin::{self, test_palette};
+use crate::detect::Moment;
 use crate::model::{Palette, Sequence};
 use crate::paint::Hsv;
+use crate::patterns::Pattern;
 use std::fmt;
 
-pub const SCHEMA_VERSION: u16 = 1;
+pub const SCHEMA_VERSION: u16 = 2;
 pub const MAX_PALETTES: usize = 32;
 pub const MAX_SEQUENCES: usize = 64;
 pub const MAX_SETS: usize = 16;
-pub const MAX_STEPS: usize = 64;
+pub const MAX_STEPS: usize = 128;
+pub const MAX_BARS: u16 = 16;
+/// Half beats in a bar.
+pub const BAR_HALF_BEATS: u32 = 8;
+/// Bar counts allowed for intervals and palette changes.
+pub const INTERVAL_BARS: [u16; 5] = [1, 2, 4, 8, 16];
 pub const MAX_NAME_CHARS: usize = 63;
 pub const GRID: f32 = 64.0;
 
@@ -65,9 +72,9 @@ pub enum Order {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum Interval {
-    Beats(u16),
     Bars(u16),
-    Phrases(u16),
+    /// Calm only: advances once each time the moment is entered.
+    OncePerBreak,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,7 +82,18 @@ pub enum Interval {
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum SeqRef {
     Id(u32),
+    /// Any pattern of the moment, freshly generated.
     Generated,
+    /// This pattern, with new parameters each time.
+    Pattern(Pattern),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub enum PaletteChange {
+    AtDrop,
+    Bars(u16),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -86,7 +104,6 @@ pub enum SeqRef {
 )]
 pub struct MomentSet {
     pub sequences: Vec<SeqRef>,
-    pub palettes: Vec<u32>,
     pub order: Order,
     pub interval: Interval,
 }
@@ -103,6 +120,9 @@ pub struct Set {
     pub rhythm: MomentSet,
     pub calm: MomentSet,
     pub buildup: MomentSet,
+    pub palettes: Vec<u32>,
+    pub palette_order: Order,
+    pub palette_change: PaletteChange,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -118,6 +138,7 @@ pub struct Library {
     pub sequences: Vec<(u32, Sequence)>,
     pub sets: Vec<Set>,
     pub active_set: u32,
+    /// `None` = Auto: follow the active set's palette rotation.
     pub active_palette: Option<u32>,
 }
 
@@ -187,7 +208,7 @@ impl Library {
             sequences: (1..).zip(seqs).collect(),
             sets: vec![builtin::auto_set(1, &ids)],
             active_set: 1,
-            active_palette: Some(1),
+            active_palette: None,
         }
     }
 
@@ -201,7 +222,7 @@ impl Library {
     #[must_use]
     pub fn current_palette_id(&self) -> Option<u32> {
         self.active_palette
-            .or_else(|| self.current_set()?.rhythm.palettes.first().copied())
+            .or_else(|| self.current_set()?.palettes.first().copied())
     }
 
     /// The palette to show; the test palette when the library has none.
@@ -277,7 +298,20 @@ impl Library {
         for (i, (_, s)) in self.sequences.iter().enumerate() {
             check_name(format!("sequences[{i}].name"), &s.name)?;
             if s.steps.is_empty() || s.steps.len() > MAX_STEPS {
-                return err(format!("sequences[{i}].steps"), "must have 1 to 64 steps");
+                return err(format!("sequences[{i}].steps"), "must have 1 to 128 steps");
+            }
+            let half_beats: u32 = s
+                .steps
+                .iter()
+                .map(|st| u32::from(st.len.half_beats()))
+                .sum();
+            if !half_beats.is_multiple_of(BAR_HALF_BEATS)
+                || half_beats > u32::from(MAX_BARS) * BAR_HALF_BEATS
+            {
+                return err(
+                    format!("sequences[{i}].steps"),
+                    "must last a whole number of bars, 16 at most",
+                );
             }
             if let Some(j) = s.steps.iter().position(|st| st.roles.len() != segments) {
                 return err(
@@ -287,26 +321,25 @@ impl Library {
             }
         }
         let has_pal = |id: &u32| self.palettes.iter().any(|(p, _)| p == id);
-        let has_seq = |r: &SeqRef| match r {
+        let has_seq = |r: &SeqRef, m: Moment| match r {
             SeqRef::Generated => true,
+            SeqRef::Pattern(p) => p.moment() == m,
             SeqRef::Id(id) => self.sequences.iter().any(|(s, _)| s == id),
         };
         for (i, set) in self.sets.iter().enumerate() {
             check_name(format!("sets[{i}].name"), &set.name)?;
-            for (n, m) in [
-                ("rhythm", &set.rhythm),
-                ("calm", &set.calm),
-                ("buildup", &set.buildup),
+            for (n, m, moment) in [
+                ("rhythm", &set.rhythm, Moment::Rhythm),
+                ("calm", &set.calm, Moment::Calm),
+                ("buildup", &set.buildup, Moment::BuildUp),
             ] {
-                let (Interval::Beats(v) | Interval::Bars(v) | Interval::Phrases(v)) = m.interval;
-                if v == 0 {
-                    return err(format!("sets[{i}].{n}.interval"), "must be at least 1");
+                match m.interval {
+                    Interval::Bars(v) if INTERVAL_BARS.contains(&v) => {}
+                    Interval::OncePerBreak if moment == Moment::Calm => {}
+                    _ => return err(format!("sets[{i}].{n}.interval"), "is not allowed here"),
                 }
                 if m.sequences.len() > MAX_SEQUENCES {
                     return err(format!("sets[{i}].{n}.sequences"), "has too many entries");
-                }
-                if m.palettes.len() > MAX_PALETTES {
-                    return err(format!("sets[{i}].{n}.palettes"), "has too many entries");
                 }
                 if m.sequences.is_empty() {
                     return err(
@@ -314,24 +347,27 @@ impl Library {
                         "needs at least one sequence",
                     );
                 }
-                if m.palettes.is_empty() {
-                    return err(
-                        format!("sets[{i}].{n}.palettes"),
-                        "needs at least one palette",
-                    );
-                }
-                if !m.sequences.iter().all(has_seq) {
+                if !m.sequences.iter().all(|r| has_seq(r, moment)) {
                     return err(
                         format!("sets[{i}].{n}.sequences"),
                         "references an unknown sequence",
                     );
                 }
-                if !m.palettes.iter().all(has_pal) {
-                    return err(
-                        format!("sets[{i}].{n}.palettes"),
-                        "references an unknown palette",
-                    );
-                }
+            }
+            if set.palettes.len() > MAX_PALETTES {
+                return err(format!("sets[{i}].palettes"), "has too many entries");
+            }
+            if set.palettes.is_empty() {
+                return err(format!("sets[{i}].palettes"), "needs at least one palette");
+            }
+            if !set.palettes.iter().all(has_pal) {
+                return err(
+                    format!("sets[{i}].palettes"),
+                    "references an unknown palette",
+                );
+            }
+            if matches!(set.palette_change, PaletteChange::Bars(v) if !INTERVAL_BARS.contains(&v)) {
+                return err(format!("sets[{i}].palette_change"), "is not allowed");
             }
         }
         if !self.sets.iter().any(|s| s.id == self.active_set) {

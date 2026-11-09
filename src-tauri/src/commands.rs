@@ -499,7 +499,7 @@ pub fn save_library(
 /// so the editor can flag steps the strip would show in several parts. Messages never echo input.
 fn message_counts_of(lib: &Library, seq: &Sequence, palette_id: u32) -> Result<Vec<u8>, String> {
     if seq.steps.len() > light_core::library::MAX_STEPS {
-        return Err("A sequence has at most 64 steps.".into());
+        return Err("A sequence has at most 128 steps.".into());
     }
     seq.validate(lib.segments())
         .map_err(|_| "Every step needs one role per segment.".to_string())?;
@@ -884,7 +884,7 @@ mod tests {
         let (dir, state) = lib_state();
         let before = state.library();
         let mut bad = before.clone();
-        bad.sets[0].rhythm.palettes = vec![4242];
+        bad.sets[0].palettes = vec![4242];
         let msg = state.save_library(bad).unwrap_err();
         assert!(msg.contains("palettes") && !msg.contains("4242"), "{msg}");
         assert_eq!(state.library(), before);
@@ -1005,7 +1005,7 @@ mod tests {
         let mut set = lib.sets[0].clone();
         set.id = 902;
         set.rhythm.sequences = vec![SeqRef::Id(901)];
-        set.rhythm.palettes = vec![900];
+        set.palettes = vec![900];
         lib.sets.push(set);
         lib.active_set = 902;
         lib.active_palette = Some(900);
@@ -1021,7 +1021,7 @@ mod tests {
         );
         assert_eq!(saved.sets[1].id, 2);
         assert_eq!(saved.sets[1].rhythm.sequences, [SeqRef::Id(11)]);
-        assert_eq!(saved.sets[1].rhythm.palettes, [9]);
+        assert_eq!(saved.sets[1].palettes, [9]);
         assert_eq!((saved.active_set, saved.active_palette), (2, Some(9)));
         assert_eq!(state.library(), saved);
         assert_eq!(

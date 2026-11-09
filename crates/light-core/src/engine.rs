@@ -93,7 +93,8 @@ fn resolve_seq(r: &Rotation, generator: &mut Generator, m: Moment, sr: SeqRef, n
             .iter()
             .find(|(i, q)| *i == id && q.validate(n).is_ok())
             .map(|(_, q)| q.clone()),
-        SeqRef::Generated => Some(generator.next(m, &r.groups, n)),
+        // Task 3 will make a pattern ref play that pattern; for now it plays like `Generated`.
+        SeqRef::Generated | SeqRef::Pattern(_) => Some(generator.next(m, &r.groups, n)),
     }
     .unwrap_or_else(|| builtin::sequence(m, n))
 }
@@ -119,6 +120,7 @@ impl Look {
         };
         let rots = MOMENTS.map(|m| {
             let r = Rotator::new(moment_set(set, m), seed ^ (slot(m) as u64 + 1) << 56)
+                .with_palettes(&set.palettes, set.palette_order)
                 .with_palette(lib.current_palette_id());
             if m == Moment::Calm { r.per_entry() } else { r }
         });
@@ -424,7 +426,7 @@ impl Engine {
                     self.look.seqs[i] = resolve_seq(r, &mut self.generator, moment, sr, n);
                     r.seq_ids[i] = match sr {
                         SeqRef::Id(id) => Some(id),
-                        SeqRef::Generated => None,
+                        SeqRef::Generated | SeqRef::Pattern(_) => None,
                     };
                 }
                 Choice::Palette(id) => {

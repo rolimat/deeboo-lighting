@@ -62,7 +62,7 @@ fn shown_steps(seq: &Sequence) -> Vec<usize> {
     lib.sequences[0].1 = seq.clone();
     lib.sets[0].rhythm.sequences = vec![SeqRef::Id(1)];
     lib.sets[0].rhythm.order = light_core::library::Order::InOrder;
-    lib.sets[0].rhythm.palettes = vec![1];
+    lib.sets[0].palettes = vec![1];
     let mut e = Engine::new(EngineConfig {
         segments: SEGMENTS,
         phrase: PhraseBars::Four,

@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use light_core::library::{Library, SeqRef};
 
 /// A hand-edited multi-GB file must not blow memory: larger files count as invalid.
-/// The largest library `validate` accepts is ~2.3 MB compact.
-const MAX_BYTES: u64 = 4 << 20;
+/// The largest library `validate` accepts is ~4.7 MB compact (128 steps).
+const MAX_BYTES: u64 = 8 << 20;
 /// Kept-aside invalid files: `.bad`, `.bad.1` .. `.bad.4`.
 const BAD_KEPT: u32 = 5;
 const BACKUPS: u32 = 5;
@@ -135,10 +135,10 @@ pub fn assign_ids(prev: &Library, new: &mut Library) -> Result<(), &'static str>
     let prev_sets: Vec<u32> = prev.sets.iter().map(|s| s.id).collect();
     let set = remap(&prev_sets, &mut new.sets, |s| &mut s.id)?;
     for s in &mut new.sets {
+        for p in &mut s.palettes {
+            *p = *pal.get(p).unwrap_or(p);
+        }
         for m in [&mut s.rhythm, &mut s.calm, &mut s.buildup] {
-            for p in &mut m.palettes {
-                *p = *pal.get(p).unwrap_or(p);
-            }
             for r in &mut m.sequences {
                 if let SeqRef::Id(i) = r {
                     *i = *seq.get(i).unwrap_or(i);
@@ -187,7 +187,7 @@ mod tests {
             with(|v| v["shape"]["pieces"][0]["x"] = json!(null)),
             with(|v| v["extra"] = json!(1)),
             "not json".to_string(),
-            " ".repeat(5 << 20),
+            " ".repeat(9 << 20),
         ];
         for text in tampered {
             let (dir, p) = tmp();
@@ -205,7 +205,9 @@ mod tests {
         let mut lib = Library::builtin(60);
         let seq = lib.sequences[0].1.clone();
         let mut big = seq.clone();
-        big.steps = vec![seq.steps[0].clone(); light_core::library::MAX_STEPS];
+        let mut half = seq.steps[0].clone();
+        half.len = light_core::model::StepLen::Half; // 128 half beats: 16 bars
+        big.steps = vec![half; light_core::library::MAX_STEPS];
         lib.sequences = (1..=64).map(|i| (i, big.clone())).collect();
         lib.sets[0].rhythm.sequences = vec![SeqRef::Id(1)];
         lib.sets[0].calm.sequences = vec![SeqRef::Id(1)];
@@ -272,9 +274,7 @@ mod tests {
         lib.palettes.truncate(1);
         lib.active_palette = Some(lib.palettes[0].0);
         for s in &mut lib.sets {
-            for m in [&mut s.rhythm, &mut s.calm, &mut s.buildup] {
-                m.palettes = vec![lib.palettes[0].0];
-            }
+            s.palettes = vec![lib.palettes[0].0];
         }
         lib.sets[0].name = "Mine".into();
         save(&p, &lib).unwrap();

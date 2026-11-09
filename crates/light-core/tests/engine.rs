@@ -472,13 +472,13 @@ fn plain(n: u8) -> light_core::library::Library {
     lib.palettes.truncate(1);
     lib.active_palette = Some(1);
     let set = &mut lib.sets[0];
+    set.palettes = vec![1];
     for (ms, id) in [
         (&mut set.rhythm, 1),
         (&mut set.calm, 5),
         (&mut set.buildup, 8),
     ] {
         ms.sequences = vec![SeqRef::Id(id)];
-        ms.palettes = vec![1];
         ms.order = Order::InOrder;
     }
     lib
@@ -594,7 +594,7 @@ fn new_palette_on_drop() {
     let mut p2 = lib.palettes[0].1.clone();
     p2.principal.h = 100;
     lib.palettes.push((2, p2));
-    lib.sets[0].rhythm.palettes = vec![1, 2];
+    lib.sets[0].palettes = vec![1, 2];
     let mut s = sim125();
     s.e.set_library(s.now, &lib);
     s.start();
@@ -625,7 +625,7 @@ fn two_seq_lib() -> light_core::library::Library {
         light_core::library::SeqRef::Id(1),
         light_core::library::SeqRef::Id(99),
     ];
-    lib.sets[0].rhythm.interval = Interval::Phrases(1);
+    lib.sets[0].rhythm.interval = Interval::Bars(4);
     lib
 }
 
@@ -671,7 +671,8 @@ fn gen_lib() -> light_core::library::Library {
     let ms = &mut lib.sets[0].rhythm;
     ms.sequences = vec![SeqRef::Generated];
     ms.order = light_core::library::Order::Fixed;
-    ms.interval = Interval::Phrases(100);
+    ms.interval = Interval::Bars(16);
+    lib.sets[0].palette_order = light_core::library::Order::Fixed;
     lib
 }
 
@@ -724,7 +725,7 @@ fn edited_shown_palette_shows_from_the_next_bar() {
     let mut p2 = lib.palettes[0].1.clone();
     p2.principal.h = 100;
     lib.palettes.push((2, p2));
-    lib.sets[0].rhythm.palettes = vec![1, 2];
+    lib.sets[0].palettes = vec![1, 2];
     let mut edited = lib.clone();
     edited.palettes[0].1.principal.h = 77;
     edited.palettes[0].1.contraste.h = 77;

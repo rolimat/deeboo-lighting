@@ -13,6 +13,7 @@ pub enum Choice {
 pub struct Rotator {
     seqs: Vec<SeqRef>,
     pals: Vec<u32>,
+    pal_order: Order,
     order: Order,
     interval: Interval,
     rng: SplitMix64,
@@ -30,16 +31,25 @@ impl Rotator {
     pub fn new(set: &MomentSet, seed: u64) -> Self {
         Self {
             seqs: set.sequences.clone(),
-            pals: set.palettes.clone(),
+            pals: Vec::new(),
+            pal_order: Order::Fixed,
             order: set.order,
             interval: set.interval,
             rng: SplitMix64::new(seed),
             seq_i: 0,
             pal_i: 0,
             last: None,
-            per_entry: false,
+            per_entry: set.interval == Interval::OncePerBreak,
             entered_once: false,
         }
+    }
+
+    /// The set's palettes and their order, rotated by `on_drop`.
+    #[must_use]
+    pub fn with_palettes(mut self, pals: &[u32], order: Order) -> Self {
+        self.pals = pals.to_vec();
+        self.pal_order = order;
+        self
     }
 
     /// Calm: advance once each time the moment is entered, ignoring the interval.
@@ -84,7 +94,7 @@ impl Rotator {
     }
 
     /// Called at bar starts (and on entering the moment, `entered`). An interval counts from the
-    /// last change; it fires only on a bar start, or a phrase start for phrase intervals. A set with
+    /// last change; it fires only on a bar start. A set with
     /// one sequence rotates its palette instead, so the interval still shows.
     pub fn on_boundary(&mut self, pos: Position, entered: bool) -> Option<Choice> {
         let fire = if self.per_entry {
@@ -112,15 +122,11 @@ impl Rotator {
     }
 
     fn due(&mut self, pos: Position) -> bool {
-        let (beats, ok) = match self.interval {
-            Interval::Beats(n) => (u64::from(n), pos.is_bar_start()),
-            Interval::Bars(n) => (u64::from(n) * 4, pos.is_bar_start()),
-            Interval::Phrases(n) => (
-                u64::from(n) * u64::from(pos.phrase_bars) * 4,
-                pos.is_phrase_start(),
-            ),
+        let beats = match self.interval {
+            Interval::Bars(n) => u64::from(n) * 4,
+            Interval::OncePerBreak => return false,
         };
-        if !ok {
+        if !pos.is_bar_start() {
             return false;
         }
         // A MIDI Start restarts the beat count: a `last` in the future counts from now.
@@ -135,7 +141,7 @@ impl Rotator {
 
     /// The next palette, on a drop. `None` when the set has fewer than two or is fixed.
     pub fn on_drop(&mut self) -> Option<u32> {
-        let i = Self::advance(self.order, &mut self.rng, self.pals.len(), self.pal_i)?;
+        let i = Self::advance(self.pal_order, &mut self.rng, self.pals.len(), self.pal_i)?;
         self.pal_i = i;
         Some(self.pals[i])
     }
