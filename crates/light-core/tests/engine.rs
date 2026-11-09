@@ -589,8 +589,9 @@ fn generated_sequence_plays_and_changes() {
 }
 
 #[test]
-fn new_palette_on_drop() {
+fn palette_changes_on_drop_when_at_drop() {
     let mut lib = plain(4);
+    lib.active_palette = None;
     let mut p2 = lib.palettes[0].1.clone();
     p2.principal.h = 100;
     lib.palettes.push((2, p2));
@@ -722,6 +723,7 @@ fn only_the_pinned_palette_changing_keeps_the_sequence() {
 #[test]
 fn edited_shown_palette_shows_from_the_next_bar() {
     let mut lib = plain(4);
+    lib.active_palette = None;
     let mut p2 = lib.palettes[0].1.clone();
     p2.principal.h = 100;
     lib.palettes.push((2, p2));
@@ -761,4 +763,141 @@ fn edited_playing_sequence_shows_from_the_next_bar() {
     s.beats_of(6, &mut none);
     let got = apply_all(&s.sends, vec![None; 4]);
     assert_eq!(got, vec![hsv(280, 900, 950); 4]);
+}
+
+/// `plain` with a second palette (principal hue 100), in Auto, rotating as `change` says.
+fn two_pal_lib(change: light_core::library::PaletteChange) -> light_core::library::Library {
+    let mut lib = plain(4);
+    let mut p2 = lib.palettes[0].1.clone();
+    p2.principal.h = 100;
+    lib.palettes.push((2, p2));
+    lib.active_palette = None;
+    lib.sets[0].palettes = vec![1, 2];
+    lib.sets[0].palette_change = change;
+    lib
+}
+
+fn force_a_drop(s: &mut Sim) {
+    s.cmd(UiCommand::Force(BuildUp));
+    s.beats_of(8, &mut none);
+    s.cmd(UiCommand::Force(Rhythm));
+    s.beats_of(8, &mut none);
+}
+
+#[test]
+fn palette_rotates_every_n_bars_in_auto() {
+    use light_core::library::PaletteChange::Bars;
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_pal_lib(Bars(2)));
+    s.start();
+    s.beats_of(6, &mut none);
+    assert_eq!(hue_sends(&s, 100), Vec::<u64>::new());
+    s.beats_of(6, &mut none);
+    assert_ne!(hue_sends(&s, 100), Vec::<u64>::new());
+    assert_eq!(s.e.status().palette, Some(2));
+}
+
+#[test]
+fn a_drop_does_not_change_the_palette_when_the_set_changes_by_bars() {
+    use light_core::library::PaletteChange::Bars;
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_pal_lib(Bars(16)));
+    s.start();
+    s.beats_of(2, &mut none);
+    force_a_drop(&mut s);
+    assert_eq!(hue_sends(&s, 100), Vec::<u64>::new());
+}
+
+#[test]
+fn manual_palette_survives_drops_until_auto() {
+    use light_core::library::PaletteChange::AtDrop;
+    let mut pinned = two_pal_lib(AtDrop);
+    pinned.active_palette = Some(1);
+    let mut s = sim125();
+    s.e.set_library(s.now, &pinned);
+    s.start();
+    s.beats_of(2, &mut none);
+    force_a_drop(&mut s);
+    assert_eq!(hue_sends(&s, 100), Vec::<u64>::new());
+    let st = s.e.status();
+    assert!(!st.palette_auto);
+    assert_eq!(st.palette, Some(1));
+    // Back to Auto: the rotation (which kept counting drops) takes over.
+    s.e.set_library(s.now, &two_pal_lib(AtDrop));
+    s.beats_of(8, &mut none);
+    assert!(s.e.status().palette_auto);
+    assert_ne!(hue_sends(&s, 100), Vec::<u64>::new());
+}
+
+/// Calm alternates `Suave` (hue 120) and `Contraste` (hue 240) sequences; rhythm plays only Suave.
+fn calm_lib(interval: light_core::library::Interval) -> light_core::library::Library {
+    use light_core::library::SeqRef;
+    let mut lib = two_seq_lib();
+    lib.sets[0].rhythm.sequences = vec![SeqRef::Id(1)];
+    lib.sets[0].calm.sequences = vec![SeqRef::Id(1), SeqRef::Id(99)];
+    lib.sets[0].calm.interval = interval;
+    lib
+}
+
+#[test]
+fn calm_once_per_break_advances_per_entry() {
+    let lib = calm_lib(light_core::library::Interval::OncePerBreak);
+    let contraste = lib.palettes[0].1.contraste.h;
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(40, &mut none);
+    assert_eq!(
+        hue_sends(&s, contraste),
+        Vec::<u64>::new(),
+        "one break, one sequence"
+    );
+    s.cmd(UiCommand::Force(Rhythm));
+    s.beats_of(4, &mut none);
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(8, &mut none);
+    assert_ne!(hue_sends(&s, contraste), Vec::<u64>::new());
+}
+
+#[test]
+fn calm_bars_rotates_inside_a_long_break() {
+    let lib = calm_lib(light_core::library::Interval::Bars(2));
+    let contraste = lib.palettes[0].1.contraste.h;
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(24, &mut none);
+    assert_ne!(hue_sends(&s, contraste), Vec::<u64>::new());
+}
+
+#[test]
+fn pattern_ref_plays_that_pattern_with_new_params() {
+    use light_core::library::{Interval, Library, Order, SeqRef};
+    use light_core::patterns::Pattern;
+    let mut lib = Library::builtin(4);
+    let ms = &mut lib.sets[0].rhythm;
+    ms.sequences = vec![SeqRef::Pattern(Pattern::Halves)];
+    ms.order = Order::InOrder;
+    ms.interval = Interval::Bars(1);
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(64, &mut none);
+    let seen = shapes(&s);
+    assert_ne!(seen.len(), 0);
+    assert!(
+        seen.iter().all(|p| *p == [1, 2] || *p == [3, 4]),
+        "only halves: {seen:?}"
+    );
+    let bars: Vec<String> = (1..15u64)
+        .map(|bar| {
+            let from = T0 + bar * 4 * 480_000 - LEAD;
+            format!("{:?}", s.sends_in(from, from + 4 * 480_000))
+        })
+        .collect();
+    assert!(bars.iter().any(|b| *b != bars[0]), "fresh params each bar");
 }

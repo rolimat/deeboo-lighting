@@ -1,6 +1,6 @@
 use light_core::clock::Position;
-use light_core::library::{Interval, MomentSet, Order, SeqRef};
-use light_core::rotation::{Choice, Rotator};
+use light_core::library::{Interval, MomentSet, Order, PaletteChange, SeqRef, Set};
+use light_core::rotation::{PaletteRotator, Rotator};
 
 #[allow(clippy::cast_possible_truncation)] // remainders < 16
 fn pos(beat: u64, half: bool, phrase_bars: u8) -> Position {
@@ -21,9 +21,36 @@ fn set(n_seq: u32, order: Order, interval: Interval) -> MomentSet {
     }
 }
 
-fn rot(n_seq: u32, n_pal: u32, order: Order, interval: Interval, seed: u64) -> Rotator {
-    let pals: Vec<u32> = (1..=n_pal).collect();
-    Rotator::new(&set(n_seq, order, interval), seed).with_palettes(&pals, order)
+fn rot(n_seq: u32, order: Order, interval: Interval, seed: u64) -> Rotator {
+    Rotator::new(&set(n_seq, order, interval), seed)
+}
+
+fn pal_rot(
+    n_pal: u32,
+    order: Order,
+    change: PaletteChange,
+    seed: u64,
+    shown: Option<u32>,
+) -> PaletteRotator {
+    let ms = set(1, Order::Fixed, Interval::Bars(4));
+    let set = Set {
+        id: 1,
+        name: "t".into(),
+        rhythm: ms.clone(),
+        calm: ms.clone(),
+        buildup: ms,
+        palettes: (1..=n_pal).collect(),
+        palette_order: order,
+        palette_change: change,
+    };
+    PaletteRotator::new(&set, seed, shown)
+}
+
+/// Bar indexes (of `bars`) where the palette changed on a bar start.
+fn pal_changes(r: &mut PaletteRotator, bars: u64) -> Vec<u64> {
+    (0..bars)
+        .filter(|b| r.on_bar(pos(b * 4, false, 4)).is_some())
+        .collect()
 }
 
 /// Runs bar starts 0..bars (phrase of 4 bars) and returns the bar indexes that changed.
@@ -45,31 +72,25 @@ fn rhythm_changes_every_phrase_by_default() {
 
 #[test]
 fn buildup_changes_every_2_bars() {
-    let mut r = rot(3, 1, Order::InOrder, Interval::Bars(2), 7);
+    let mut r = rot(3, Order::InOrder, Interval::Bars(2), 7);
     assert_eq!(changes(&mut r, 7), vec![2, 4, 6]);
 }
 
 #[test]
 fn calm_one_sequence_per_break() {
-    let mut r = rot(3, 1, Order::InOrder, Interval::OncePerBreak, 7);
+    let mut r = rot(3, Order::InOrder, Interval::OncePerBreak, 7);
     assert_eq!(changes(&mut r, 20), Vec::<u64>::new());
     // The first entry plays the set's first sequence; later entries advance.
     assert_eq!(r.on_boundary(pos(40, false, 4), true), None);
-    assert_eq!(
-        r.on_boundary(pos(80, false, 4), true),
-        Some(Choice::Sequence(SeqRef::Id(2)))
-    );
+    assert_eq!(r.on_boundary(pos(80, false, 4), true), Some(SeqRef::Id(2)));
     assert_eq!(changes(&mut r, 20), Vec::<u64>::new());
-    assert_eq!(
-        r.on_boundary(pos(160, false, 4), true),
-        Some(Choice::Sequence(SeqRef::Id(3)))
-    );
+    assert_eq!(r.on_boundary(pos(160, false, 4), true), Some(SeqRef::Id(3)));
 }
 
 #[test]
 fn change_waits_for_bar_boundary() {
     // Interval of one beat, but nothing happens off a bar start .
-    let mut r = rot(3, 1, Order::InOrder, Interval::Bars(1), 7);
+    let mut r = rot(3, Order::InOrder, Interval::Bars(1), 7);
     for beat in 0..16u64 {
         for half in [false, true] {
             let got = r.on_boundary(pos(beat, half, 4), false);
@@ -77,7 +98,7 @@ fn change_waits_for_bar_boundary() {
             assert!(bar_start || got.is_none(), "beat {beat} half {half}");
         }
     }
-    let mut r = rot(3, 1, Order::InOrder, Interval::Bars(4), 7);
+    let mut r = rot(3, Order::InOrder, Interval::Bars(4), 7);
     assert!(r.on_boundary(pos(0, false, 4), false).is_none());
     assert!(r.on_boundary(pos(12, false, 4), false).is_none());
     assert!(r.on_boundary(pos(16, false, 4), false).is_some());
@@ -85,22 +106,25 @@ fn change_waits_for_bar_boundary() {
 
 #[test]
 fn single_option_random_is_stable() {
-    let mut r = rot(1, 1, Order::Random, Interval::Bars(1), 7);
+    let mut r = rot(1, Order::Random, Interval::Bars(1), 7);
     assert_eq!(changes(&mut r, 20), Vec::<u64>::new());
-    assert_eq!(r.on_drop(), None);
+    let mut p = pal_rot(1, Order::Random, PaletteChange::AtDrop, 7, None);
+    assert_eq!(p.on_drop(), None);
+    let mut p = pal_rot(1, Order::Random, PaletteChange::Bars(1), 7, None);
+    assert_eq!(pal_changes(&mut p, 20), Vec::<u64>::new());
 }
 
 #[test]
 fn random_never_repeats_previous() {
-    let mut r = rot(3, 1, Order::Random, Interval::Bars(1), 99);
+    let mut r = rot(3, Order::Random, Interval::Bars(1), 99);
     let mut prev = SeqRef::Id(1);
     for b in 0..200 {
-        if let Some(Choice::Sequence(s)) = r.on_boundary(pos(b * 4, false, 4), false) {
+        if let Some(s) = r.on_boundary(pos(b * 4, false, 4), false) {
             assert_ne!(s, prev);
             prev = s;
         }
     }
-    let mut r = rot(1, 3, Order::Random, Interval::Bars(1), 5);
+    let mut r = pal_rot(3, Order::Random, PaletteChange::AtDrop, 5, None);
     let mut prev = 1;
     for _ in 0..200 {
         let p = r.on_drop().unwrap();
@@ -111,18 +135,54 @@ fn random_never_repeats_previous() {
 
 #[test]
 fn fixed_never_changes() {
-    let mut r = rot(3, 3, Order::Fixed, Interval::Bars(1), 7);
+    let mut r = rot(3, Order::Fixed, Interval::Bars(1), 7);
     assert_eq!(changes(&mut r, 20), Vec::<u64>::new());
-    assert_eq!(r.on_drop(), None);
+    let mut p = pal_rot(3, Order::Fixed, PaletteChange::AtDrop, 7, None);
+    assert_eq!(p.on_drop(), None);
 }
 
 #[test]
 fn new_palette_on_each_drop() {
-    let mut r = rot(1, 3, Order::InOrder, Interval::Bars(4), 7);
+    let mut r = pal_rot(3, Order::InOrder, PaletteChange::AtDrop, 7, None);
+    assert_eq!(r.current(), Some(1));
     assert_eq!(
         [r.on_drop(), r.on_drop(), r.on_drop()],
         [Some(2), Some(3), Some(1)]
     );
+}
+
+#[test]
+fn palette_rotates_every_n_bars_in_auto() {
+    let mut r = pal_rot(3, Order::InOrder, PaletteChange::Bars(2), 7, None);
+    assert_eq!(pal_changes(&mut r, 7), vec![2, 4, 6]);
+    assert_eq!(r.current(), Some(1));
+    // Not on a drop, and never off a bar start.
+    assert_eq!(r.on_drop(), None);
+    let mut r = pal_rot(3, Order::InOrder, PaletteChange::Bars(1), 7, None);
+    assert!(r.on_bar(pos(4, false, 4)).is_none());
+    assert!(r.on_bar(pos(5, false, 4)).is_none());
+    assert!(r.on_bar(pos(6, true, 4)).is_none());
+}
+
+#[test]
+fn palette_bars_count_survives_a_midi_start() {
+    let mut r = pal_rot(2, Order::InOrder, PaletteChange::Bars(4), 7, None);
+    assert!(r.on_bar(pos(2000, false, 4)).is_none());
+    assert!(r.on_bar(pos(0, false, 4)).is_none());
+    assert!(r.on_bar(pos(16, false, 4)).is_some());
+}
+
+#[test]
+fn at_drop_never_changes_on_bars() {
+    let mut r = pal_rot(3, Order::InOrder, PaletteChange::AtDrop, 7, None);
+    assert_eq!(pal_changes(&mut r, 40), Vec::<u64>::new());
+}
+
+#[test]
+fn calm_bars_rotates_inside_a_long_break() {
+    let mut r = rot(3, Order::InOrder, Interval::Bars(2), 7);
+    assert_eq!(r.on_boundary(pos(0, false, 4), true), None);
+    assert_eq!(changes(&mut r, 7), vec![2, 4, 6]);
 }
 
 #[test]
@@ -135,7 +195,7 @@ fn lone_generated_is_new_each_interval() {
 
 #[test]
 fn beat_count_restart_does_not_freeze_the_interval() {
-    let mut r = rot(2, 1, Order::InOrder, Interval::Bars(4), 7);
+    let mut r = rot(2, Order::InOrder, Interval::Bars(4), 7);
     assert!(r.on_boundary(pos(2000, false, 4), true).is_none());
     // A MIDI Start restarts the beat count at 0.
     assert!(r.on_boundary(pos(0, false, 4), false).is_none());
@@ -144,10 +204,11 @@ fn beat_count_restart_does_not_freeze_the_interval() {
 
 #[test]
 fn palette_position_starts_at_the_shown_palette() {
-    let mut r = rot(1, 3, Order::InOrder, Interval::Bars(4), 7).with_palette(Some(3));
+    let mut r = pal_rot(3, Order::InOrder, PaletteChange::AtDrop, 7, Some(3));
+    assert_eq!(r.current(), Some(3));
     assert_eq!(r.on_drop(), Some(1));
     for seed in 0..20 {
-        let mut r = rot(1, 3, Order::Random, Interval::Bars(4), seed).with_palette(Some(2));
+        let mut r = pal_rot(3, Order::Random, PaletteChange::AtDrop, seed, Some(2));
         let mut prev = 2;
         for _ in 0..50 {
             let p = r.on_drop().unwrap();

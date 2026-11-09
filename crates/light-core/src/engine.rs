@@ -8,7 +8,7 @@ use crate::library::{Library, MomentSet, SeqRef, Set};
 use crate::model::{Colour, Palette, Role, Sequence, resolve};
 use crate::moments::MomentControl;
 use crate::paint::PaintCommand;
-use crate::rotation::{Choice, Rotator};
+use crate::rotation::{PaletteRotator, Rotator};
 use crate::scheduler::Scheduler;
 
 #[derive(Clone, Copy, Debug)]
@@ -39,6 +39,10 @@ pub struct EngineStatus {
     pub phrase: PhraseBars,
     pub moment: Moment,
     pub auto: bool,
+    /// The palette follows the set's rotation (not pinned from the popover).
+    pub palette_auto: bool,
+    /// Library id of the palette in force (`None`: built-in).
+    pub palette: Option<u32>,
     pub predicted: bool,
     pub lights_on: bool,
     pub last_beat_us: Option<u64>,
@@ -65,6 +69,7 @@ struct Rotation {
     lib: Library,
     groups: Groups,
     rots: [Rotator; 3],
+    pal: PaletteRotator,
     /// Library ids of what plays now (`None`: generated or built-in), to refresh edited data.
     shown_pal: Option<u32>,
     seq_ids: [Option<u32>; 3],
@@ -93,8 +98,8 @@ fn resolve_seq(r: &Rotation, generator: &mut Generator, m: Moment, sr: SeqRef, n
             .iter()
             .find(|(i, q)| *i == id && q.validate(n).is_ok())
             .map(|(_, q)| q.clone()),
-        // Task 3 will make a pattern ref play that pattern; for now it plays like `Generated`.
-        SeqRef::Generated | SeqRef::Pattern(_) => Some(generator.next(m, &r.groups, n)),
+        SeqRef::Pattern(p) => Some(generator.pattern(p, &r.groups, n)),
+        SeqRef::Generated => Some(generator.next(m, &r.groups, n)),
     }
     .unwrap_or_else(|| builtin::sequence(m, n))
 }
@@ -109,8 +114,8 @@ impl Look {
     }
 
     /// Per moment the active set's first sequence (generated ones built now, once), with rotators
-    /// for the rest. A library built for another segment count, or without an active set, plays the
-    /// built-ins. The popover's palette pins the palette until the next drop.
+    /// for the rest and one for the set's palettes. A library built for another segment count, or without an active set, plays the
+    /// built-ins. The popover's palette pins the palette until it is set back to Auto.
     fn from_library(lib: &Library, segments: u8, seed: u64, generator: &mut Generator) -> Self {
         let Some(set) = lib.current_set().filter(|_| lib.segments() == segments) else {
             return Self {
@@ -118,12 +123,8 @@ impl Look {
                 ..Self::builtin(segments)
             };
         };
-        let rots = MOMENTS.map(|m| {
-            let r = Rotator::new(moment_set(set, m), seed ^ (slot(m) as u64 + 1) << 56)
-                .with_palettes(&set.palettes, set.palette_order)
-                .with_palette(lib.current_palette_id());
-            if m == Moment::Calm { r.per_entry() } else { r }
-        });
+        let rots =
+            MOMENTS.map(|m| Rotator::new(moment_set(set, m), seed ^ (slot(m) as u64 + 1) << 56));
         let rot = Rotation {
             lib: lib.clone(),
             groups: groups(&lib.shape),
@@ -133,6 +134,7 @@ impl Look {
                 _ => None,
             }),
             rots,
+            pal: PaletteRotator::new(set, seed ^ 4 << 56, lib.current_palette_id()),
         };
         let seqs = MOMENTS.map(|m| {
             rot.rots[slot(m)].current().map_or_else(
@@ -162,20 +164,13 @@ impl Look {
         }
         let mut look = self.clone();
         let r = look.rot.as_mut()?;
-        if old.active_palette == lib.active_palette {
-            // Edited colours of the palette on show.
-            if let Some((_, p)) = r
-                .shown_pal
-                .and_then(|id| lib.palettes.iter().find(|(i, _)| *i == id))
-            {
-                look.palette = p.clone();
-            }
-        } else {
-            look.palette = lib.current_palette();
-            r.shown_pal = lib.current_palette_id();
-            for rot in &mut r.rots {
-                rot.sync_palette(lib.current_palette_id());
-            }
+        // A pin, or back to Auto (the rotation's palette), and edited colours of the one on show.
+        r.shown_pal = lib.active_palette.or_else(|| r.pal.current());
+        if let Some((_, p)) = r
+            .shown_pal
+            .and_then(|id| lib.palettes.iter().find(|(i, _)| *i == id))
+        {
+            look.palette = p.clone();
         }
         // Edited steps of a playing library sequence (same id).
         for (i, id) in r.seq_ids.iter().enumerate() {
@@ -304,6 +299,12 @@ impl Engine {
             phrase: self.cfg.phrase,
             moment: self.control.applied(),
             auto: self.control.auto(),
+            palette_auto: self
+                .look
+                .rot
+                .as_ref()
+                .is_none_or(|r| r.lib.active_palette.is_none()),
+            palette: self.look.rot.as_ref().and_then(|r| r.shown_pal),
             predicted: self.control.predicted(),
             lights_on: self.cfg.lights_on,
             last_beat_us: self.last_beat_us,
@@ -383,7 +384,7 @@ impl Engine {
             } else {
                 pos
             };
-            self.rotate(moment, at_pos, entered, dropped);
+            self.rotate(moment, at_pos, entered, dropped, bar);
         }
         // Beat 1 cannot be announced: its step goes out now and the next position is counted too.
         // shortcut: a half-beat first step is skipped on Start; only a forced Build-up has one.
@@ -406,36 +407,36 @@ impl Engine {
         }
     }
 
-    /// Asks the moment's rotator (and, on a drop, the rhythm set's palette list) what changes now.
-    /// Called only on a bar start, or when the moment is entered, where its sequence restarts anyway.
-    /// A new sequence or palette restarts the step count so the strip shows it at once.
-    fn rotate(&mut self, moment: Moment, pos: Position, entered: bool, dropped: bool) {
+    /// Asks the moment's rotator and the set's palette rotator what changes now. Called only on a bar
+    /// start, or when the moment is entered, where its sequence restarts anyway. A new sequence or
+    /// palette restarts the step count so the strip shows it at once. A pinned palette stays.
+    fn rotate(&mut self, moment: Moment, pos: Position, entered: bool, dropped: bool, bar: bool) {
         let n = self.cfg.segments;
         let i = slot(moment);
         let Some(r) = self.look.rot.as_mut() else {
             return;
         };
-        let drop_pal = dropped
-            .then(|| r.rots[slot(Moment::Rhythm)].on_drop())
-            .flatten()
-            .map(Choice::Palette);
-        let picks = [drop_pal, r.rots[i].on_boundary(pos, entered)];
-        for c in picks.into_iter().flatten() {
-            match c {
-                Choice::Sequence(sr) => {
-                    self.look.seqs[i] = resolve_seq(r, &mut self.generator, moment, sr, n);
-                    r.seq_ids[i] = match sr {
-                        SeqRef::Id(id) => Some(id),
-                        SeqRef::Generated | SeqRef::Pattern(_) => None,
-                    };
-                }
-                Choice::Palette(id) => {
-                    if let Some((_, p)) = r.lib.palettes.iter().find(|(x, _)| *x == id) {
-                        self.look.palette = p.clone();
-                        r.shown_pal = Some(id);
-                    }
-                }
-            }
+        let pal = [
+            dropped.then(|| r.pal.on_drop()).flatten(),
+            bar.then(|| r.pal.on_bar(pos)).flatten(),
+        ]
+        .into_iter()
+        .flatten()
+        .last();
+        if let Some(sr) = r.rots[i].on_boundary(pos, entered) {
+            self.look.seqs[i] = resolve_seq(r, &mut self.generator, moment, sr, n);
+            r.seq_ids[i] = match sr {
+                SeqRef::Id(id) => Some(id),
+                SeqRef::Generated | SeqRef::Pattern(_) => None,
+            };
+            self.playing = None;
+        }
+        let found = pal
+            .filter(|_| r.lib.active_palette.is_none())
+            .and_then(|id| r.lib.palettes.iter().find(|(x, _)| *x == id));
+        if let Some((id, p)) = found {
+            self.look.palette = p.clone();
+            r.shown_pal = Some(*id);
             self.playing = None;
         }
     }
