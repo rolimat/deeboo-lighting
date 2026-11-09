@@ -1,6 +1,6 @@
 #![cfg(feature = "serde")]
 #![allow(clippy::expect_used)]
-use light_core::library::{Interval, Order, PaletteChange, SeqRef};
+use light_core::library::{Interval, Library, Order, PaletteChange, SeqRef};
 use light_core::migrate::{IntervalV1, LibraryV1, migrate_v1};
 use light_core::model::StepLen;
 
@@ -125,4 +125,72 @@ fn a_library_that_cannot_validate_is_an_error() {
         m.palettes.clear();
     }
     assert!(migrate_v1(x, 8).is_err());
+}
+
+fn half_beats(l: &Library, i: usize) -> u32 {
+    l.sequences[i]
+        .1
+        .steps
+        .iter()
+        .map(|s| u32::from(s.len.half_beats()))
+        .sum()
+}
+
+#[test]
+fn truncates_sequences_over_sixteen_bars() {
+    let mut x = v1();
+    let step = x.sequences[0].1.steps[0].clone();
+    x.sequences[0].1.steps = vec![
+        light_core::model::Step {
+            len: StepLen::Four,
+            ..step
+        };
+        64
+    ];
+    let lib = migrate_v1(x, 8).expect("migrates");
+    assert_eq!(lib.validate(), Ok(()));
+    assert_eq!(half_beats(&lib, 0), 128);
+    assert_eq!(lib.sequences[0].1.steps.len(), 16);
+    assert!(
+        lib.sequences[0]
+            .1
+            .steps
+            .iter()
+            .all(|s| s.len == StepLen::Four)
+    );
+}
+
+#[test]
+fn odd_long_sequence_pads_or_truncates_to_valid() {
+    let mut x = v1();
+    let step = x.sequences[0].1.steps[0].clone();
+    x.sequences[0].1.steps = vec![
+        light_core::model::Step {
+            len: StepLen::Half,
+            ..step.clone()
+        };
+        37
+    ];
+    // 127 half beats of Four then a Two: the crossing step is shortened to fit.
+    let mut long = vec![
+        light_core::model::Step {
+            len: StepLen::Four,
+            ..step.clone()
+        };
+        15
+    ];
+    long.push(light_core::model::Step {
+        len: StepLen::Four,
+        ..step.clone()
+    });
+    long.push(light_core::model::Step {
+        len: StepLen::Two,
+        ..step
+    });
+    x.sequences[1].1.steps = long;
+    let lib = migrate_v1(x, 8).expect("migrates");
+    assert_eq!(lib.validate(), Ok(()));
+    assert_eq!(half_beats(&lib, 0), 40, "37 padded to 5 bars");
+    assert_eq!(half_beats(&lib, 1), 128, "132 cut to 16 bars");
+    assert_eq!(lib.sequences[1].1.steps.len(), 16);
 }

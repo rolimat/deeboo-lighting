@@ -1,9 +1,9 @@
 //! Library schema 1 → 2 (redesign spec §6.5). The v1 shapes live here only to be read once.
 use crate::library::{
-    BAR_HALF_BEATS, INTERVAL_BARS, Interval, Library, LibraryError, MAX_STEPS, MomentSet, Order,
+    BAR_HALF_BEATS, INTERVAL_BARS, Interval, Library, LibraryError, MAX_BARS, MomentSet, Order,
     PaletteChange, SCHEMA_VERSION, SeqRef, Set, Shape,
 };
-use crate::model::{Palette, Sequence};
+use crate::model::{Palette, Sequence, Step, StepLen};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,20 +83,40 @@ fn moment(m: &MomentSetV1, phrase_bars: u8) -> MomentSet {
     }
 }
 
-/// Appends steps repeating from the first until the sequence fills whole bars.
+/// Appends steps repeating from the first until the sequence fills whole bars, then cuts it to
+/// 16 bars; the step that crosses the limit is shortened (largest lengths first) to fit exactly.
 fn pad_to_bars(seq: &mut Sequence) {
-    let total = |s: &Sequence| -> u32 {
-        s.steps
-            .iter()
-            .map(|st| u32::from(st.len.half_beats()))
-            .sum()
-    };
+    const MAX: u32 = MAX_BARS as u32 * BAR_HALF_BEATS;
+    let hb = |s: &Step| u32::from(s.len.half_beats());
     let n = seq.steps.len();
+    let mut total: u32 = seq.steps.iter().map(hb).sum();
     let mut i = 0;
-    // The length cap stops a runaway; `validate` then rejects the sequence.
-    while n > 0 && total(seq) % BAR_HALF_BEATS != 0 && seq.steps.len() <= MAX_STEPS {
+    while n > 0 && !total.is_multiple_of(BAR_HALF_BEATS) && total < MAX {
         seq.steps.push(seq.steps[i % n].clone());
+        total += hb(&seq.steps[n + i]);
         i += 1;
+    }
+    if total <= MAX {
+        return;
+    }
+    let mut kept = 0;
+    let mut sum = 0;
+    while sum + hb(&seq.steps[kept]) <= MAX {
+        sum += hb(&seq.steps[kept]);
+        kept += 1;
+    }
+    let cross = seq.steps[kept].clone();
+    seq.steps.truncate(kept);
+    while sum < MAX {
+        let len = [StepLen::Four, StepLen::Two, StepLen::One, StepLen::Half]
+            .into_iter()
+            .find(|l| sum + u32::from(l.half_beats()) <= MAX)
+            .unwrap_or(StepLen::Half);
+        sum += u32::from(len.half_beats());
+        seq.steps.push(Step {
+            len,
+            ..cross.clone()
+        });
     }
 }
 
