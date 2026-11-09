@@ -36,6 +36,11 @@ cpal = "0.15"
 rtrb = "0.3"
 qrcode = { version = "0.14", default-features = false }
 
+# Same versions midir already pulls: a notification client needs a thread with a run loop.
+[target.'cfg(target_os = "macos")'.dependencies]
+coremidi = "0.9.2"
+core-foundation = "0.10.1"
+
 [dev-dependencies]
 tuya-cloud = { path = "../crates/tuya-cloud", features = ["test-support"] }
 tokio = { version = "1", features = ["test-util"] }

@@ -25,6 +25,8 @@ use crate::tray::{TrayInput, TrayView, tray_deadline, tray_view};
 /// Everything that can wake the engine thread.
 pub enum Input {
     Midi(MidiEvent),
+    /// The OS's MIDI sources changed (our own virtual port excluded).
+    SourcesChanged(Vec<String>),
     Ui(UiCommand),
     Settings(Settings),
     /// The editor saved the library (already validated and persisted).
@@ -141,6 +143,7 @@ type MeterSink = Box<dyn FnMut(&DetectorEvent)>;
 /// The editor gets at most 15 detector events per second.
 const MIN_METER_GAP_US: u64 = 66_667;
 const DETECTOR_EVENT: &str = "detector";
+const MIDI_SOURCES_EVENT: &str = "midi-sources";
 
 /// How long an identify flash stays before the scene is repainted.
 const IDENTIFY_FLASH_US: u64 = 1_200_000;
@@ -267,7 +270,14 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     /// Told the strip state on every change, popover visible or not (the editor reads it).
     strip_sink: Option<StripSink>,
     strip_told: Option<StripStatus>,
+    sources_sink: Option<SourcesSink>,
+    choice_sink: Option<ChoiceSink>,
 }
+
+/// Told every new list of MIDI sources (the UI listens).
+type SourcesSink = Box<dyn FnMut(&[String])>;
+/// Told the source the engine chose by itself (to persist it).
+type ChoiceSink = Box<dyn FnMut(&str)>;
 
 type StripSink = Box<dyn FnMut(&StripStatus)>;
 
@@ -327,9 +337,46 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             meter_last_us: None,
             strip_sink: None,
             strip_told: None,
+            sources_sink: None,
+            choice_sink: None,
         };
         core.replan(now_us);
         core
+    }
+
+    pub fn set_midi_sinks(&mut self, sources: SourcesSink, choice: ChoiceSink) {
+        self.sources_sink = Some(sources);
+        self.choice_sink = Some(choice);
+    }
+
+    /// The list is the truth: connect a source that showed up (or came back), pick the only one
+    /// when none is chosen. Repeated notifications change nothing.
+    fn on_sources(&mut self, list: &[String]) {
+        if let Some(sink) = &mut self.sources_sink {
+            sink(list);
+        }
+        match self.settings.midi_source.clone() {
+            None => {
+                if let [only] = list {
+                    self.settings.midi_source = Some(only.clone());
+                    if let Some(sink) = &mut self.choice_sink {
+                        sink(only);
+                    }
+                    self.midi.reconnect(Some(only));
+                    self.source_present = true;
+                }
+            }
+            Some(wanted) => {
+                let present = list.contains(&wanted);
+                let stale = !self.source_present
+                    || needs_reconnect(Some(&wanted), self.midi.connected_source().as_deref());
+                if present && stale {
+                    self.midi.reconnect(Some(&wanted));
+                }
+                self.source_present = present;
+            }
+        }
+        self.publisher.touch();
     }
 
     /// The scene for the current state (rest, or all off); the live clock replans on its next beat.
@@ -516,6 +563,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                     self.meter(&f, moment, now_us);
                 }
             }
+            Input::SourcesChanged(list) => self.on_sources(&list),
             Input::Ui(cmd) => {
                 // A rejected key is not retried: only pairing again helps.
                 if let (
@@ -781,6 +829,7 @@ pub fn spawn(
         Some(stx)
     };
     let midi_tx = tx.clone();
+    let midi_watch_tx = tx.clone();
     let visible = app.state::<AppState>().visible_flag();
     let spawned = std::thread::Builder::new()
         .name("engine".into())
@@ -814,6 +863,17 @@ pub fn spawn(
                     log::debug!("detector event not delivered: {ee}");
                 }
             }));
+            let list_app = app.clone();
+            let choice_app = app.clone();
+            core.set_midi_sinks(
+                Box::new(move |l| {
+                    if let Err(e) = list_app.emit(MIDI_SOURCES_EVENT, l) {
+                        log::debug!("midi-sources event not delivered: {e}");
+                    }
+                }),
+                Box::new(move |n| choice_app.state::<AppState>().remember_midi_source(n)),
+            );
+            crate::midi::watch_sources(&midi_watch_tx);
             core.handle(Input::Library(Box::new(library)), clock.now_us());
             app.state::<AppState>().set_status(core.status());
             let tray_app = app.clone();
@@ -1225,6 +1285,70 @@ mod tests {
         c.handle(Input::PopoverShown, 2);
         assert!(c.status().midi.ok);
         assert_eq!(calls.borrow().len(), 3);
+    }
+
+    fn sources(names: &[&str]) -> Input {
+        Input::SourcesChanged(names.iter().map(|n| (*n).to_string()).collect())
+    }
+
+    #[test]
+    fn source_appearing_later_is_connected() {
+        let (mut c, _rx, _) = core(false);
+        let calls = Rc::clone(&c.midi.reconnects);
+        let ports = Rc::clone(&c.midi.ports);
+        assert!(!c.status().midi.ok);
+        ports.borrow_mut().push(SOURCE.into());
+        c.handle(sources(&[SOURCE]), 0);
+        assert_eq!(*calls.borrow(), vec![Some(SOURCE.to_string())]);
+        assert!(c.status().midi.ok);
+    }
+
+    #[test]
+    fn vanished_source_reconnects_when_back() {
+        let (mut c, _rx, _) = core(false);
+        let calls = Rc::clone(&c.midi.reconnects);
+        let ports = Rc::clone(&c.midi.ports);
+        ports.borrow_mut().push(SOURCE.into());
+        c.handle(sources(&[SOURCE]), 0);
+        ports.borrow_mut().clear();
+        c.handle(sources(&[]), 1);
+        assert!(!c.status().midi.ok, "red while it is gone");
+        ports.borrow_mut().push(SOURCE.into());
+        c.handle(sources(&[SOURCE]), 2);
+        assert!(c.status().midi.ok);
+        assert_eq!(calls.borrow().len(), 2, "connected again once it is back");
+    }
+
+    #[test]
+    fn no_duplicate_connection_on_repeated_notifications() {
+        let (mut c, _rx, _) = core(false);
+        let calls = Rc::clone(&c.midi.reconnects);
+        c.midi.ports.borrow_mut().push(SOURCE.into());
+        for t in 0..3 {
+            c.handle(sources(&[SOURCE]), t);
+        }
+        assert_eq!(calls.borrow().len(), 1);
+    }
+
+    #[test]
+    fn single_source_auto_selected_and_remembered() {
+        let (mut c, _rx, _) = core(false);
+        c.settings.midi_source = None;
+        let chosen = Rc::new(RefCell::new(Vec::new()));
+        let listed = Rc::new(RefCell::new(Vec::new()));
+        let (ch, li) = (Rc::clone(&chosen), Rc::clone(&listed));
+        c.set_midi_sinks(
+            Box::new(move |l| li.borrow_mut().push(l.to_vec())),
+            Box::new(move |n| ch.borrow_mut().push(n.to_string())),
+        );
+        c.midi.ports.borrow_mut().push("Mixer".into());
+        c.handle(sources(&["Mixer", "Other"]), 0);
+        assert!(chosen.borrow().is_empty(), "two sources: the user picks");
+        c.handle(sources(&["Mixer"]), 1);
+        assert_eq!(*chosen.borrow(), vec!["Mixer".to_string()]);
+        assert_eq!(c.settings.midi_source.as_deref(), Some("Mixer"));
+        assert!(c.status().midi.ok);
+        assert_eq!(listed.borrow().len(), 2, "every change reaches the UI");
     }
 
     #[test]

@@ -367,6 +367,14 @@ impl AppState {
         Ok(new)
     }
 
+    /// The engine picked the only MIDI source by itself: keep it (a failed save is logged by
+    /// `save_settings`; the choice still holds until restart).
+    pub fn remember_midi_source(&self, name: &str) {
+        let mut s = self.settings();
+        s.midi_source = Some(name.to_string());
+        let _ = self.save_settings(s);
+    }
+
     /// Saves the Detection panel's thresholds (range-checked by `Settings::validate`); the rest of
     /// the settings stay as they are.
     fn set_thresholds(&self, t: Thresholds) -> Result<Settings, String> {

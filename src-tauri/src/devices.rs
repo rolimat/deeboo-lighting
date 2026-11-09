@@ -3,8 +3,7 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use midir::MidiInput;
 
-/// Our own virtual port is not a source.
-const OWN_PORT: &str = "Deeboo Lighting In";
+use crate::midi::VIRTUAL_PORT as OWN_PORT;
 
 #[must_use]
 pub fn midi_sources() -> Vec<String> {
