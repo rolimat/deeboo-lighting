@@ -224,7 +224,8 @@ impl AppState {
 
     /// Loads the library file (built-ins for `segments` on any problem) and remembers its path.
     pub fn init_library(&self, path: std::path::PathBuf, segments: u8) {
-        *lock(&self.library) = library_store::load(&path, segments);
+        let phrase_bars = lock(&self.settings).phrase_bars;
+        *lock(&self.library) = library_store::load(&path, segments, phrase_bars);
         *lock(&self.library_path) = Some(path);
     }
 
@@ -909,7 +910,7 @@ mod tests {
                 assert_eq!(saved.sequences[0].1.steps[0].roles[10..], [Role::Off; 2]);
             }
             assert_eq!(
-                crate::library_store::load(&dir.path().join("library.json"), 10),
+                crate::library_store::load(&dir.path().join("library.json"), 10, 8),
                 saved
             );
         }
@@ -966,7 +967,7 @@ mod tests {
         assert_eq!(name(state.select(Pick::Palette, 1).unwrap()), "Ocean");
         assert_eq!(state.library().active_palette, Some(2));
         assert_eq!(
-            crate::library_store::load(&dir.path().join("library.json"), 10).active_palette,
+            crate::library_store::load(&dir.path().join("library.json"), 10, 8).active_palette,
             Some(2)
         );
         // Wraps both ways.
@@ -1025,7 +1026,7 @@ mod tests {
         assert_eq!((saved.active_set, saved.active_palette), (2, Some(9)));
         assert_eq!(state.library(), saved);
         assert_eq!(
-            crate::library_store::load(&dir.path().join("library.json"), 10),
+            crate::library_store::load(&dir.path().join("library.json"), 10, 8),
             saved
         );
     }

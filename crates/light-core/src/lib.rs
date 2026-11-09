@@ -6,6 +6,8 @@ pub mod engine;
 pub mod generator;
 pub mod groups;
 pub mod library;
+#[cfg(feature = "serde")]
+pub mod migrate;
 pub mod model;
 pub mod moments;
 pub mod paint;

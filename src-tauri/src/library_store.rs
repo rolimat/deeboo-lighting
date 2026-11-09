@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
 use light_core::library::{Library, SeqRef};
+use light_core::migrate::{LibraryV1, migrate_v1};
 
 /// A hand-edited multi-GB file must not blow memory: larger files count as invalid.
 /// The largest library `validate` accepts is ~4.7 MB compact (128 steps).
@@ -57,14 +58,41 @@ fn bad_slot(path: &Path) -> PathBuf {
         .unwrap_or_else(|| sibling(path, ".bad"))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Version {
+    schema_version: u16,
+}
+
+/// A schema-1 file is migrated (spec §6.5): backed up once as `.v1`, then saved as schema 2. A failed
+/// migration is an error like any invalid file; a failed backup or save keeps the file and the
+/// migrated library is used in memory.
+fn parse(path: &Path, text: &str, phrase_bars: u8) -> Result<Library, String> {
+    if matches!(
+        serde_json::from_str(text),
+        Ok(Version { schema_version: 1 })
+    ) {
+        let v1 = serde_json::from_str::<LibraryV1>(text).map_err(|e| describe(&e))?;
+        let lib = migrate_v1(v1, phrase_bars).map_err(|e| e.to_string())?;
+        let backup = sibling(path, ".v1");
+        // `copy` keeps the file's own permissions, as for every other file of the store.
+        let kept = backup.exists() || std::fs::copy(path, &backup).is_ok();
+        if !kept || save(path, &lib).is_err() {
+            log::warn!("library migrated in memory only: cannot back up or save it");
+        }
+        return Ok(lib);
+    }
+    serde_json::from_str::<Library>(text)
+        .map_err(|e| describe(&e))
+        .and_then(|l| l.validate().map(|()| l).map_err(|e| e.to_string()))
+}
+
 /// Built-ins for `segments` on a missing, corrupt or invalid file. A valid library built for a
 /// different segment count is kept as is (the engine falls back, see plan 5).
 #[must_use]
-pub fn load(path: &Path, segments: u8) -> Library {
+pub fn load(path: &Path, segments: u8, phrase_bars: u8) -> Library {
     let parsed = match read_capped(path) {
-        Ok(Some(t)) => serde_json::from_str::<Library>(&t)
-            .map_err(|e| describe(&e))
-            .and_then(|l| l.validate().map(|()| l).map_err(|e| e.to_string())),
+        Ok(Some(t)) => parse(path, &t, phrase_bars),
         Ok(None) => Err("file too large".to_string()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Library::builtin(segments),
         Err(e) => Err(e.to_string()),
@@ -174,6 +202,46 @@ mod tests {
         v.to_string()
     }
 
+    const V1: &str = include_str!("../../crates/light-core/tests/fixtures/library-v1.json");
+
+    #[test]
+    fn load_v1_writes_backup_once_and_saves_v2() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, p) = tmp();
+        std::fs::write(&p, V1).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let lib = load(&p, 4, 8);
+        assert_eq!(lib.validate(), Ok(()));
+        assert_eq!(lib.sets[0].name, "Club night");
+        let backup = dir.path().join("library.json.v1");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), V1);
+        let mode = |f: &Path| std::fs::metadata(f).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&backup), 0o640, "same permissions as the file");
+        assert_eq!(load(&p, 4, 8), lib, "v2 was saved over the original");
+        assert!(!dir.path().join("library.json.bad").exists());
+        // A second v1 file (e.g. restored by hand) must not replace the first backup.
+        std::fs::write(&p, V1.replace("Club night", "Other")).unwrap();
+        assert_eq!(load(&p, 4, 8).sets[0].name, "Other");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), V1);
+    }
+
+    #[test]
+    fn failed_migration_leaves_file_untouched() {
+        let (dir, p) = tmp();
+        let mut v: Value = serde_json::from_str(V1).unwrap();
+        v["sets"][0]["rhythm"]["interval"] = json!({"weeks": 1});
+        let text = v.to_string();
+        std::fs::write(&p, &text).unwrap();
+        assert_eq!(load(&p, 4, 8), Library::builtin(4));
+        // Kept aside byte for byte like any invalid file; no backup, no half-migrated v2.
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("library.json.bad")).unwrap(),
+            text
+        );
+        assert!(!dir.path().join("library.json.v1").exists());
+        assert!(!p.exists());
+    }
+
     #[test]
     fn invalid_library_is_kept_aside_and_defaults_load() {
         let steps: Vec<Value> = (0..10_000)
@@ -192,7 +260,7 @@ mod tests {
         for text in tampered {
             let (dir, p) = tmp();
             std::fs::write(&p, &text).unwrap();
-            assert_eq!(load(&p, 10), Library::builtin(10));
+            assert_eq!(load(&p, 10, 8), Library::builtin(10));
             assert_eq!(
                 std::fs::read_to_string(dir.path().join("library.json.bad")).unwrap(),
                 text
@@ -219,7 +287,7 @@ mod tests {
             std::fs::metadata(&p).unwrap().len() > 1 << 20,
             "past the old cap"
         );
-        assert_eq!(load(&p, 10), lib);
+        assert_eq!(load(&p, 10, 8), lib);
     }
 
     #[test]
@@ -237,7 +305,7 @@ mod tests {
         let (dir, p) = tmp();
         let bad = |n: u32| {
             std::fs::write(&p, format!("not json {n}")).unwrap();
-            let _ = load(&p, 10);
+            let _ = load(&p, 10, 8);
         };
         (0..5).for_each(bad);
         let read = |s: &str| std::fs::read_to_string(dir.path().join(s));
@@ -262,9 +330,9 @@ mod tests {
     #[test]
     fn missing_loads_builtin_and_valid_other_size_is_kept() {
         let (_d, p) = tmp();
-        assert_eq!(load(&p, 4), Library::builtin(4));
+        assert_eq!(load(&p, 4, 8), Library::builtin(4));
         save(&p, &Library::builtin(6)).unwrap();
-        assert_eq!(load(&p, 10), Library::builtin(6));
+        assert_eq!(load(&p, 10, 8), Library::builtin(6));
     }
 
     #[test]
@@ -278,7 +346,7 @@ mod tests {
         }
         lib.sets[0].name = "Mine".into();
         save(&p, &lib).unwrap();
-        assert_eq!(load(&p, 6), lib);
+        assert_eq!(load(&p, 6, 8), lib);
     }
 
     #[test]
@@ -287,7 +355,7 @@ mod tests {
         for n in 1..=8u8 {
             save(&p, &Library::builtin(n)).unwrap();
         }
-        assert_eq!(load(&p, 1), Library::builtin(8));
+        assert_eq!(load(&p, 1, 8), Library::builtin(8));
         for i in 1..=5u8 {
             let f = dir.path().join(format!("library.json.{i}"));
             let lib: Library = serde_json::from_str(&std::fs::read_to_string(f).unwrap()).unwrap();
@@ -302,7 +370,7 @@ mod tests {
         let (dir, _) = tmp();
         let p = dir.path().join("a/b/library.json");
         save(&p, &Library::builtin(3)).unwrap();
-        assert_eq!(load(&p, 3), Library::builtin(3));
+        assert_eq!(load(&p, 3, 8), Library::builtin(3));
     }
 
     mod props {
@@ -320,7 +388,7 @@ mod tests {
                 let d = tempfile::tempdir().unwrap();
                 let p = d.path().join("library.json");
                 std::fs::write(&p, &raw).unwrap();
-                let lib = load(&p, segments);
+                let lib = load(&p, segments, 8);
                 prop_assert!(lib.validate().is_ok());
                 // Not a valid library: the built-ins come back and the original is kept aside.
                 let valid = serde_json::from_slice::<Library>(&raw).is_ok_and(|l| l.validate().is_ok());
@@ -336,7 +404,7 @@ mod tests {
                 let p = d.path().join("library.json");
                 let lib = Library::builtin(segments);
                 save(&p, &lib).unwrap();
-                prop_assert_eq!(load(&p, segments), lib);
+                prop_assert_eq!(load(&p, segments, 8), lib);
             }
         }
     }
