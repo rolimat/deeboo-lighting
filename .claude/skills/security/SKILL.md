@@ -56,7 +56,7 @@ Supply chain and repo
 - [ ] GitHub Actions pinned by commit SHA, read-only `permissions` by default, publish separate from build,
       no `pull_request_target`, Dependabot on.
 - [ ] `gitleaks` clean (pre-commit and CI) and it actually scanned ("N commits scanned", N > 0 for `just lint`); the recipes fail closed when git cannot read the repo. Recordings, labels and dev keys are git-ignored.
-- [ ] Acceptance session log scanned clean: the app logs to stderr via `env_logger` (no file), so capture with `RUST_LOG=debug "target/release/bundle/macos/Deeboo Lighting.app/Contents/MacOS/deeboo-lighting" 2> session.log`, then `just log-scan session.log "$HOME/Library/Application Support/com.deeboo.lighting/strip.json"` (the strip file lets it catch the bare local key).
+- [ ] Acceptance session log scanned clean: the app logs to stderr via `env_logger` (no file), so capture with `RUST_LOG=debug "/Applications/Deeboo Lighting.app/Contents/MacOS/deeboo-lighting" 2> session.log` (the app is sandboxed: its data lives in the container), then `just log-scan session.log "$HOME/Library/Containers/com.deeboo.lighting/Data/Library/Application Support/com.deeboo.lighting/strip.json"` (the strip file lets it catch the bare local key).
 - [ ] `/security-review` run before each release.
 
 Dev-only key loading via environment variable exists only in debug builds and has no UI.
