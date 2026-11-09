@@ -6,9 +6,9 @@ use std::path::Path;
 
 const H: f32 = 18.0;
 /// Glyph only (stopped).
-const W_GLYPH: usize = 15;
+const W_GLYPH: usize = 19;
 /// Glyph + moment icon + "F" badge.
-const W_FULL: usize = 33;
+const W_FULL: usize = 37;
 /// Moment icon between beats.
 const DIM: f32 = 0.35;
 
@@ -140,7 +140,7 @@ fn bar(x0: f32, y0: f32, x1: f32, y1: f32, rgb: Rgb) -> Shape {
         (x1 - x0) / 2.0,
         (y1 - y0) / 2.0,
     );
-    let r = hy.min(hx).min(1.2);
+    let r = hy.min(hx); // full pill
     Box::new(move |x, y| {
         let (qx, qy) = ((x - cx).abs() - (hx - r), (y - cy).abs() - (hy - r));
         (
@@ -151,25 +151,27 @@ fn bar(x0: f32, y0: f32, x1: f32, y1: f32, rgb: Rgb) -> Shape {
     })
 }
 
-/// 2 rows x 3 rounded LED bars, never animated.
+/// The mockup glyph (22x15 viewBox: 5x3 pills, rx 1.5, at x = 1 / 8.5 / 16 and y = 2 / 10), scaled 0.8
+/// and centred vertically. Never animated.
 fn glyph(rgb: Rgb) -> Vec<Shape> {
+    const K: f32 = 0.8;
     let mut out = Vec::new();
-    for row in 0..2_u8 {
-        for col in 0..3_u8 {
-            let (x, y) = (1.0 + f32::from(col) * 4.5, 3.0 + f32::from(row) * 6.0);
-            out.push(bar(x, y, x + 3.5, y + 5.0, rgb));
+    for y in [2.0_f32, 10.0] {
+        for x in [1.0_f32, 8.5, 16.0] {
+            let (x0, y0) = (1.0 + x * K, 3.0 + y * K);
+            out.push(bar(x0, y0, x0 + 5.0 * K, y0 + 3.0 * K, rgb));
         }
     }
     out
 }
 
-/// The moment icon (24-unit space scaled to 12 px) at x = 16.
+/// The moment icon (24-unit space scaled to 12 px) at x = 20.
 fn moment_icon(kind: &str, rgb: Rgb, opacity: f32) -> Shape {
     let paths: Vec<Vec<(f32, f32)>> = moment_paths(kind)
         .into_iter()
         .map(|p| {
             p.into_iter()
-                .map(|(x, y)| (16.0 + x * 0.5, 3.0 + y * 0.5))
+                .map(|(x, y)| (20.0 + x * 0.5, 3.0 + y * 0.5))
                 .collect()
         })
         .collect();
@@ -185,9 +187,9 @@ fn moment_icon(kind: &str, rgb: Rgb, opacity: f32) -> Shape {
 /// A small "F" (4 x 7 px) at the right of the icon.
 fn forced_badge(rgb: Rgb) -> Shape {
     let strokes = [
-        vec![(28.5, 5.5), (28.5, 12.5)],
-        vec![(28.5, 5.5), (31.5, 5.5)],
-        vec![(28.5, 8.7), (31.0, 8.7)],
+        vec![(32.5, 5.5), (32.5, 12.5)],
+        vec![(32.5, 5.5), (35.5, 5.5)],
+        vec![(32.5, 8.7), (35.0, 8.7)],
     ];
     Box::new(move |x, y| {
         let d = strokes
@@ -204,7 +206,7 @@ fn image(kind: Option<&str>, forced: bool, dim: bool, lost: bool) -> (usize, Vec
     let mut shapes = glyph(ink);
     if lost {
         // Top-right corner of the glyph, over the bars.
-        shapes.push(Box::new(|x, y| (RED, (x - 12.3).hypot(y - 3.4) - 2.6, 1.0)));
+        shapes.push(Box::new(|x, y| (RED, (x - 16.8).hypot(y - 4.2) - 2.6, 1.0)));
     }
     let Some(kind) = kind else {
         return (W_GLYPH, shapes);
@@ -325,7 +327,7 @@ mod tests {
         let (w1, h1, _) = get(&all, "tray-rhythm.png");
         let (w2, h2, _) = get(&all, "tray-rhythm@2x.png");
         assert_eq!((h1, h2, w2), (18, 36, 2 * w1));
-        assert!(w1 <= 36, "compact: {w1}");
+        assert!(w1 <= 38, "compact: {w1}");
         let (ws, _, _) = get(&all, "tray-stopped.png");
         assert!(ws < w1, "stopped is the glyph only");
     }
