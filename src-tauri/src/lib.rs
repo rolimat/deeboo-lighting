@@ -79,6 +79,9 @@ pub fn run() -> tauri::Result<()> {
             let state = app.state::<commands::AppState>();
             state.init_settings(dir.join("settings.json"));
             let strip = strip::load(&dir);
+            if editor_window::first_launch_section(strip.is_some()).is_some() {
+                editor_window::open_at_launch(app.handle());
+            }
             state.init_library(
                 dir.join("library.json"),
                 strip

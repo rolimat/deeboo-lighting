@@ -15,7 +15,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::commands::StripStatus;
 use crate::lan::on_local_subnet;
-use crate::strip_store::{self, StripConfig};
+use crate::strip_store::{self, StoreError, StripConfig};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Measured: the strip announces itself every ~5 s, but wifi drops some (gaps of 15 s seen).
@@ -66,8 +66,17 @@ pub fn load(config_dir: &Path) -> Option<StripConfig> {
 
 fn load_logged(path: &Path) -> Option<StripConfig> {
     strip_store::load(path)
-        .inspect_err(|e| log::warn!("strip file ignored: {e}"))
+        .inspect_err(|e| log::log!(load_level(e), "strip file ignored: {e}"))
         .ok()
+}
+
+/// A fresh install has no strip file; a corrupt or unreadable one must still be reported.
+fn load_level(e: &StoreError) -> log::Level {
+    if matches!(e, StoreError::Missing) {
+        log::Level::Debug
+    } else {
+        log::Level::Warn
+    }
 }
 
 pub struct Strip {
@@ -594,6 +603,14 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_strip_file_is_not_a_warning() {
+        assert_eq!(load_level(&StoreError::Missing), log::Level::Debug);
+        for e in [StoreError::Io, StoreError::Mode, StoreError::Invalid("id")] {
+            assert_eq!(load_level(&e), log::Level::Warn);
+        }
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 

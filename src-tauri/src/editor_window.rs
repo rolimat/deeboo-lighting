@@ -26,6 +26,21 @@ fn open(w: &impl Windows) -> Result<(), String> {
     w.create()
 }
 
+/// Where the editor opens by itself at launch: on Strip while no strip is saved.
+#[must_use]
+pub const fn first_launch_section(has_strip: bool) -> Option<Section> {
+    if has_strip {
+        None
+    } else {
+        Some(Section::Strip)
+    }
+}
+
+/// Opens (or focuses) the editor; the window shows Strip by default, so the section is not sent.
+pub fn open_at_launch(app: &AppHandle) {
+    let _ = open(app);
+}
+
 impl Windows for AppHandle {
     fn focus(&self) -> bool {
         self.get_webview_window(EDITOR)
@@ -86,6 +101,12 @@ mod tests {
         assert!(open(&w).is_ok());
         assert!(open(&w).is_ok());
         assert_eq!((w.created.get(), w.focused.get()), (1, 1));
+    }
+
+    #[test]
+    fn first_launch_without_strip_opens_strip_section() {
+        assert_eq!(first_launch_section(false), Some(Section::Strip));
+        assert_eq!(first_launch_section(true), None);
     }
 
     #[test]

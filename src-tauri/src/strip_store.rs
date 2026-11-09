@@ -68,6 +68,8 @@ pub fn valid_id(id: &str) -> bool {
 /// Never carries file contents or the key.
 #[derive(Debug)]
 pub enum StoreError {
+    /// No strip saved yet (not an error for the user).
+    Missing,
     Io,
     Mode,
     Invalid(&'static str),
@@ -76,6 +78,7 @@ pub enum StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Missing => f.write_str("no strip saved yet"),
             Self::Io => f.write_str("strip file cannot be read"),
             Self::Mode => f.write_str("strip file mode must be 0600"),
             Self::Invalid(field) => write!(f, "strip file has an invalid {field}"),
@@ -124,7 +127,13 @@ struct StripFileOut<'a> {
 /// Fails if the file is unreadable, not mode 0600, or any field is invalid.
 pub fn load(path: &Path) -> Result<StripConfig, StoreError> {
     let mode = fs::metadata(path)
-        .map_err(|_| StoreError::Io)?
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                StoreError::Missing
+            } else {
+                StoreError::Io
+            }
+        })?
         .permissions()
         .mode()
         & 0o777;
@@ -317,7 +326,7 @@ mod tests {
         }
         assert!(matches!(
             load(&d.path().join("missing.json")),
-            Err(StoreError::Io)
+            Err(StoreError::Missing)
         ));
     }
 
