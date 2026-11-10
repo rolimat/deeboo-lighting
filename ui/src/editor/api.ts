@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { StripStatus, Status, Settings, MomentName } from "../api";
+import type { StripStatus, Status, Settings, MomentName, Selection } from "../api";
 
 export interface QrMatrix {
   size: number;
@@ -136,6 +136,15 @@ export const api = {
   /** "Show on strip": plays `sequence` (a library id) in `palette` on the real strip until switched off. */
   previewPalette: (on: boolean, palette: Palette, sequence: number): Promise<void> =>
     invoke("preview_palette", { on, palette, sequence }),
+  /** Makes a set live (the engine, not the library); resolves to the new selection. */
+  setLiveSet: (id: number): Promise<Selection> => invoke("set_live_set", { id }),
+  /** Hold-to-preview: plays one set clip in `palette` on the real strip until switched off. */
+  previewSequence: (
+    on: boolean,
+    palette: Palette,
+    sequence: SeqRef,
+    moment: MomentName,
+  ): Promise<void> => invoke("preview_sequence", { on, palette, sequence, moment }),
   wizardStart: (userCode: string): Promise<void> => invoke("wizard_start", { userCode }),
   wizardChoose: (deviceId: string): Promise<void> => invoke("wizard_choose", { deviceId }),
   wizardRetry: (): Promise<void> => invoke("wizard_retry"),

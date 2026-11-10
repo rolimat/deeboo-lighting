@@ -704,6 +704,57 @@ pub fn preview_palette(
     state.send(Input::PreviewPalette(p))
 }
 
+/// What holding a set clip plays: the palette as sent (range-checked) with the clip's sequence, a
+/// pattern or a generated one, built for the saved shape; it must fit the strip.
+fn preview_sequence_of(
+    lib: &Library,
+    palette: light_core::model::Palette,
+    clip: light_core::library::SeqRef,
+    moment: Moment,
+    seed: u64,
+) -> Result<Box<(light_core::model::Palette, Sequence)>, String> {
+    use light_core::library::SeqRef;
+    light_core::library::validate_palette(&palette).map_err(|e| e.to_string())?;
+    let seq = match clip {
+        SeqRef::Id(id) => return preview_palette_of(lib, palette, id),
+        SeqRef::Pattern(p) => pattern_sequence_of(lib, p, seed)?,
+        SeqRef::Generated => preview_generated_of(lib, moment, seed)?,
+    };
+    Ok(Box::new((palette, seq)))
+}
+
+/// Hold-to-preview in Sets: plays one clip in `palette` on the strip (`on`), or hands the strip back.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn preview_sequence(
+    state: tauri::State<'_, AppState>,
+    on: bool,
+    palette: light_core::model::Palette,
+    sequence: light_core::library::SeqRef,
+    moment: MomentDto,
+) -> Result<(), String> {
+    let p = if on {
+        let moment = match moment {
+            MomentDto::Rhythm => Moment::Rhythm,
+            MomentDto::Calm => Moment::Calm,
+            MomentDto::BuildUp => Moment::BuildUp,
+        };
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| u64::try_from(d.as_micros()).unwrap_or(1));
+        Some(preview_sequence_of(
+            &state.library(),
+            palette,
+            sequence,
+            moment,
+            seed,
+        )?)
+    } else {
+        None
+    };
+    state.send(Input::PreviewPalette(p))
+}
+
 #[tauri::command]
 pub async fn list_midi_sources() -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(crate::devices::midi_sources)
@@ -911,6 +962,26 @@ mod tests {
     }
 
     #[test]
+    fn preview_sequence_resolves_every_kind_of_clip() {
+        use light_core::library::SeqRef;
+        use light_core::paint::Hsv;
+        let lib = Library::builtin(10);
+        let id = lib.sequences[0].0;
+        let pal = lib.palettes[0].1.clone();
+        let m = Moment::Rhythm;
+        let (_, s) = *preview_sequence_of(&lib, pal.clone(), SeqRef::Id(id), m, 1).unwrap();
+        assert_eq!(s.name, lib.sequences[0].1.name);
+        assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Generated, m, 1).is_ok());
+        let pat = light_core::patterns::Pattern::Halves;
+        assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Pattern(pat), m, 1).is_ok());
+        assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Id(999_999), m, 1).is_err());
+        let mut bad = pal;
+        bad.principal = Hsv { h: 361, s: 0, v: 0 };
+        assert!(preview_sequence_of(&lib, bad.clone(), SeqRef::Generated, m, 1).is_err());
+        assert!(preview_sequence_of(&lib, bad, SeqRef::Pattern(pat), m, 1).is_err());
+    }
+
+    #[test]
     fn closing_the_editor_switches_the_preview_off() {
         let (state, rx) = full_queue();
         let emit: Emit = Arc::new(|_| {});
@@ -994,7 +1065,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 27);
+        assert_eq!(commands.len(), 28);
         assert_eq!(granted, commands);
     }
 

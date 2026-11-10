@@ -65,23 +65,32 @@ export function installMock(api: typeof realApi): void {
       [6, gen("Riser", "buildUp", 2, (s, h) => (s <= h / 2 ? "principal" : "off"))],
       [7, gen("Sparkle", "buildUp", 1, (s, h) => ((s * 3 + h) % 5 === 0 ? "white" : "off"))],
     ],
-    sets: [1, 2].map((id) => {
-      const m = {
-        sequences: [{ id: id === 1 ? 1 : 2 }, "generated" as const],
-        order: "inOrder" as const,
-        interval: { bars: 4 },
-      };
-      return {
-        id,
-        name: id === 1 ? "Warm-up" : "Peak time",
-        rhythm: m,
-        calm: { ...m, sequences: [{ id: 4 }] },
-        buildup: { ...m, sequences: [{ id: 6 }] },
+    sets: [
+      {
+        id: 1,
+        name: "Warm-up",
+        rhythm: {
+          sequences: [{ id: 1 }, { id: 2 }, { pattern: "snake" }],
+          order: "inOrder",
+          interval: { bars: 8 },
+        },
+        calm: { sequences: [{ id: 4 }, "generated"], order: "random", interval: "oncePerBreak" },
+        buildup: { sequences: [{ id: 6 }, { id: 7 }], order: "inOrder", interval: { bars: 2 } },
+        palettes: [1, 2, 3, 4],
+        paletteOrder: "inOrder",
+        paletteChange: "atDrop",
+      },
+      {
+        id: 2,
+        name: "Peak time",
+        rhythm: { sequences: [{ id: 3 }, "generated"], order: "random", interval: { bars: 4 } },
+        calm: { sequences: [{ id: 5 }], order: "inOrder", interval: { bars: 8 } },
+        buildup: { sequences: ["generated"], order: "fixed", interval: { bars: 1 } },
         palettes: [1, 2],
-        paletteOrder: "inOrder" as const,
-        paletteChange: "atDrop" as const,
-      };
-    }),
+        paletteOrder: "random",
+        paletteChange: { bars: 8 },
+      },
+    ],
     activeSet: 1,
     activePalette: null,
   };
@@ -113,7 +122,7 @@ export function installMock(api: typeof realApi): void {
     midi: { source: "Mock clock", ok: true },
     audio: { ok: true },
     selection: {
-      set: "Warm-up",
+      set: lib.sets.find((x) => x.id === lib.activeSet)?.name ?? "",
       paletteAuto: true,
       palette: { name: "Neon", colours: [hsv(300), hsv(180), hsv(260)] },
     },
@@ -164,5 +173,10 @@ export function installMock(api: typeof realApi): void {
     wizardCancel: async () => {},
     identifySegment: async () => {},
     previewPalette: async () => {},
+    previewSequence: async () => {},
+    setLiveSet: async (id: number) => {
+      lib = { ...lib, activeSet: id };
+      return status().selection;
+    },
   } satisfies Partial<typeof realApi>);
 }

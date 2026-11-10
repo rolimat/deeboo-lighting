@@ -28,7 +28,7 @@ const MOMENTS: [MomentName, "rhythm" | "calm" | "buildup", IconName, string][] =
   ["calm", "calm", "calm", "Calm"],
   ["buildUp", "buildup", "buildup", "Build-up"],
 ];
-const PATTERNS: Record<MomentName, [PatternName, string][]> = {
+export const PATTERNS: Record<MomentName, [PatternName, string][]> = {
   rhythm: [
     ["halves", "Halves"],
     ["endsCentre", "Ends ↔ centre"],
@@ -48,7 +48,8 @@ const PATTERNS: Record<MomentName, [PatternName, string][]> = {
   ],
 };
 
-type Sel = { k: "seq"; id: number } | { k: "gen"; moment: MomentName; pattern: PatternName | null };
+export type Sel =
+  { k: "seq"; id: number } | { k: "gen"; moment: MomentName; pattern: PatternName | null };
 
 const nameOk = (n: string) => {
   const len = [...n].length;
@@ -94,14 +95,17 @@ export function SequencesTab({
   store,
   onActions,
   stripSegments,
+  initial,
 }: {
   store: Store;
   /** The top bar's Duplicate/Delete for the selection (empty when nothing can be acted on). */
   onActions: (a: BarActions | null) => void;
   stripSegments?: number;
+  /** Opened from a clip in Sets. */
+  initial?: Sel | null;
 }) {
   const { lib, edit } = store;
-  const [sel, setSel] = useState<Sel | null>(null);
+  const [sel, setSel] = useState<Sel | null>(initial ?? null);
   const [previewId, setPreviewId] = useState<number | null>(null); // UI only, never saved
   const [role, setRole] = useState<string>("principal");
   const [zoom, setZoom] = useState(1);

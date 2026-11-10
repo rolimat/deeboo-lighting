@@ -18,6 +18,11 @@ import palettes from "./palettes.svg?raw";
 import strip from "./strip.svg?raw";
 import detection from "./detection.svg?raw";
 import setup from "./setup.svg?raw";
+import inorder from "./inorder.svg?raw";
+import random from "./random.svg?raw";
+import fixed from "./fixed.svg?raw";
+import close from "./close.svg?raw";
+import preview from "./preview.svg?raw";
 
 /** Bundled line icons (24x24, stroke 2); see LICENSE.md. */
 export const icons = {
@@ -41,5 +46,10 @@ export const icons = {
   strip,
   detection,
   setup,
+  inorder,
+  random,
+  fixed,
+  close,
+  preview,
 };
 export type IconName = keyof typeof icons;

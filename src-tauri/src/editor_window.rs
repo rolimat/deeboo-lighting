@@ -187,6 +187,8 @@ mod tests {
                 "allow-message-counts",
                 "allow-preview-generated",
                 "allow-preview-palette",
+                "allow-preview-sequence",
+                "allow-set-live-set",
                 "allow-pattern-sequence",
                 "allow-detection-watch",
                 "allow-set-detection-thresholds",

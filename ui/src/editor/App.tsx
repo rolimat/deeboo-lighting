@@ -2,8 +2,8 @@ import { useEffect, useState } from "preact/hooks";
 import type { StripStatus } from "../api";
 import { api } from "./api";
 import { PalettesTab } from "./palettes/PalettesTab";
-import { SetEditor } from "./sets/SetEditor";
-import { SequencesTab, type BarActions } from "./sequences/SequencesTab";
+import { SetsTab } from "./sets/SetsTab";
+import { SequencesTab, type BarActions, type Sel } from "./sequences/SequencesTab";
 import { ShapeEditor } from "./strip/ShapeEditor";
 import { DetectionPanel } from "./detection/DetectionPanel";
 import { Wizard } from "./strip/Wizard";
@@ -39,6 +39,7 @@ export function App() {
   const [tab, setTab] = useState<Tab>(initialTab);
   const store = useLibrary();
   const [actions, setActions] = useState<BarActions | null>(null);
+  const [openSeq, setOpenSeq] = useState<Sel | null>(null);
   useEffect(() => {
     let off: (() => void) | undefined;
     let alive = true;
@@ -72,16 +73,26 @@ export function App() {
           canRedo={store.canRedo}
           onUndo={store.undo}
           onRedo={store.redo}
-          {...(tab === "sequences" || tab === "palettes" ? actions : null)}
+          {...(tab === "sets" || tab === "sequences" || tab === "palettes" ? actions : null)}
           save={store.save}
           undoDisabledHint={libraryTab ? undefined : NO_UNDO}
         />
         <section class="min-h-0 flex-1 overflow-auto p-6" aria-label={label}>
-          {tab === "sets" && <SetEditor />}
+          {tab === "sets" && (
+            <SetsTab
+              store={store}
+              onActions={setActions}
+              onOpenSequence={(s) => {
+                setOpenSeq(s);
+                setTab("sequences");
+              }}
+            />
+          )}
           {tab === "sequences" && (
             <SequencesTab
               store={store}
               onActions={setActions}
+              initial={openSeq}
               stripSegments={strip?.kind === "connected" ? strip.segments : undefined}
             />
           )}

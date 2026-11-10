@@ -63,6 +63,7 @@ pub fn run() -> tauri::Result<()> {
             commands::message_counts,
             commands::preview_generated,
             commands::preview_palette,
+            commands::preview_sequence,
             commands::detection_watch,
             commands::set_detection_thresholds
         ])

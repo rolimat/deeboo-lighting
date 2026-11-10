@@ -82,6 +82,13 @@ export function useLibrary() {
     [schedule],
   );
 
+  /** Re-reads which set and palette are live after a command changed them outside the library. */
+  const syncLive = useCallback(async () => {
+    const l = await api.getLibrary();
+    live.current = { activeSet: l.activeSet, activePalette: l.activePalette };
+    bump();
+  }, []);
+
   const undo = useCallback(() => {
     if (!hist.current?.canUndo) return;
     hist.current.undo();
@@ -116,5 +123,7 @@ export function useLibrary() {
     canUndo: hist.current?.canUndo ?? false,
     canRedo: hist.current?.canRedo ?? false,
     save,
+    liveSet: live.current?.activeSet ?? null,
+    syncLive,
   };
 }
