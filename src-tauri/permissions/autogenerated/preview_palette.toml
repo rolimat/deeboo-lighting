@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-palette"
+description = "Enables the preview_palette command without any pre-configured scope."
+commands.allow = ["preview_palette"]
+
+[[permission]]
+identifier = "deny-preview-palette"
+description = "Denies the preview_palette command without any pre-configured scope."
+commands.deny = ["preview_palette"]

@@ -467,6 +467,7 @@ impl AppState {
     pub fn editor_closed(&self, emit: &Emit) {
         self.wizard.cancel(emit);
         self.deliver(Input::DetectionWatch(false));
+        self.deliver(Input::PreviewPalette(None));
     }
 
     /// App exit: a running wizard is cancelled (its cloud session revoked) before the engine stops.
@@ -667,6 +668,42 @@ pub fn preview_generated(
     preview_generated_of(&state.library(), moment, seed)
 }
 
+/// What "Show on strip" plays: the palette as sent (range-checked) with the library's own sequence,
+/// which must fit the library's segments.
+fn preview_palette_of(
+    lib: &Library,
+    palette: light_core::model::Palette,
+    sequence: u32,
+) -> Result<Box<(light_core::model::Palette, Sequence)>, String> {
+    light_core::library::validate_palette(&palette).map_err(|e| e.to_string())?;
+    let seq = lib
+        .sequences
+        .iter()
+        .find(|(id, _)| *id == sequence)
+        .map(|(_, s)| s.clone())
+        .ok_or("No such sequence.")?;
+    seq.validate(lib.segments())
+        .map_err(|_| "That sequence does not fit the strip.")?;
+    Ok(Box::new((palette, seq)))
+}
+
+/// Shows `sequence` in `palette` on the strip (`on`), or hands the strip back to the show.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn preview_palette(
+    state: tauri::State<'_, AppState>,
+    on: bool,
+    palette: light_core::model::Palette,
+    sequence: u32,
+) -> Result<(), String> {
+    let p = if on {
+        Some(preview_palette_of(&state.library(), palette, sequence)?)
+    } else {
+        None
+    };
+    state.send(Input::PreviewPalette(p))
+}
+
 #[tauri::command]
 pub async fn list_midi_sources() -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(crate::devices::midi_sources)
@@ -857,6 +894,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preview_palette_validates_everything() {
+        use light_core::paint::Hsv;
+        let lib = Library::builtin(10);
+        let id = lib.sequences[0].0;
+        let pal = lib.palettes[0].1.clone();
+        let (p, s) = *preview_palette_of(&lib, pal.clone(), id).unwrap();
+        assert_eq!((p, s.name), (pal.clone(), lib.sequences[0].1.name.clone()));
+        assert!(preview_palette_of(&lib, pal.clone(), 999_999).is_err());
+        let mut bad = pal.clone();
+        bad.principal = Hsv { h: 361, s: 0, v: 0 };
+        assert!(preview_palette_of(&lib, bad, id).is_err());
+        let mut short = lib.clone();
+        short.sequences[0].1.steps[0].roles.pop();
+        assert!(preview_palette_of(&short, pal, id).is_err());
+    }
+
+    #[test]
+    fn closing_the_editor_switches_the_preview_off() {
+        let (state, rx) = full_queue();
+        let emit: Emit = Arc::new(|_| {});
+        state.editor_closed(&emit);
+        assert!(matches!(rx.recv(), Ok(Input::PopoverShown)));
+        let got = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        let got2 = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert!(
+            [got, got2]
+                .iter()
+                .any(|i| matches!(i, Input::PreviewPalette(None)))
+        );
+    }
+
+    #[test]
     fn status_flows_while_either_window_shows() {
         let state = AppState::default();
         let flag = state.visible_flag();
@@ -925,7 +994,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 26);
+        assert_eq!(commands.len(), 27);
         assert_eq!(granted, commands);
     }
 
@@ -1165,7 +1234,7 @@ mod tests {
         let emit: Emit = Arc::new(|_| {});
         state.editor_closed(&emit);
         assert!(matches!(rx.recv(), Ok(Input::PopoverShown)));
-        let got: Vec<Input> = (0..2)
+        let got: Vec<Input> = (0..3)
             .map(|_| rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap())
             .collect();
         assert!(got.iter().any(|i| matches!(i, Input::Library(_))));

@@ -133,6 +133,9 @@ export const api = {
   /** A pattern as an editable sequence for the strip's shape (Duplicate to edit) or a read-only preview. */
   patternSequence: (pattern: PatternName, seed: number): Promise<Sequence> =>
     invoke("pattern_sequence", { pattern, seed }),
+  /** "Show on strip": plays `sequence` (a library id) in `palette` on the real strip until switched off. */
+  previewPalette: (on: boolean, palette: Palette, sequence: number): Promise<void> =>
+    invoke("preview_palette", { on, palette, sequence }),
   wizardStart: (userCode: string): Promise<void> => invoke("wizard_start", { userCode }),
   wizardChoose: (deviceId: string): Promise<void> => invoke("wizard_choose", { deviceId }),
   wizardRetry: (): Promise<void> => invoke("wizard_retry"),

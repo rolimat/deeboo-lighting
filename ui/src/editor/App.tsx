@@ -1,7 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import type { StripStatus } from "../api";
 import { api } from "./api";
-import { PaletteEditor } from "./palettes/PaletteEditor";
+import { PalettesTab } from "./palettes/PalettesTab";
 import { SetEditor } from "./sets/SetEditor";
 import { SequencesTab, type BarActions } from "./sequences/SequencesTab";
 import { ShapeEditor } from "./strip/ShapeEditor";
@@ -72,7 +72,7 @@ export function App() {
           canRedo={store.canRedo}
           onUndo={store.undo}
           onRedo={store.redo}
-          {...(tab === "sequences" ? actions : null)}
+          {...(tab === "sequences" || tab === "palettes" ? actions : null)}
           save={store.save}
           undoDisabledHint={libraryTab ? undefined : NO_UNDO}
         />
@@ -85,7 +85,9 @@ export function App() {
               stripSegments={strip?.kind === "connected" ? strip.segments : undefined}
             />
           )}
-          {tab === "palettes" && <PaletteEditor />}
+          {tab === "palettes" && (
+            <PalettesTab store={store} onActions={setActions} onGoSets={() => setTab("sets")} />
+          )}
           {tab === "detection" && <DetectionPanel />}
           {tab === "setup" && <Setup />}
           {tab === "strip" && (

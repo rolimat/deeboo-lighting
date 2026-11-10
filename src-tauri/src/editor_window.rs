@@ -186,6 +186,7 @@ mod tests {
                 "allow-set-wired-segments",
                 "allow-message-counts",
                 "allow-preview-generated",
+                "allow-preview-palette",
                 "allow-pattern-sequence",
                 "allow-detection-watch",
                 "allow-set-detection-thresholds",

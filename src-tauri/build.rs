@@ -26,6 +26,7 @@ const COMMANDS: &[&str] = &[
     "set_wired_segments",
     "message_counts",
     "preview_generated",
+    "preview_palette",
     "detection_watch",
     "set_detection_thresholds",
 ];

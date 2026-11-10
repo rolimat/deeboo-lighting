@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Status } from "../../api";
 import { api, type Palette, type Piece, type Sequence } from "../api";
@@ -15,12 +16,15 @@ export function Simulation({
   pieces,
   palette,
   onHalf,
+  children,
 }: {
   sequence: Sequence;
   pieces: Piece[];
   palette: Palette;
   /** The playing half-beat (counted from the start), or null while paused. */
   onHalf?: (half: number | null) => void;
+  /** Extra controls on the same row, after the shape. */
+  children?: ComponentChildren;
 }) {
   const [playing, setPlaying] = useState(false);
   const [visible, setVisible] = useState(document.visibilityState === "visible");
@@ -120,6 +124,7 @@ export function Simulation({
           cannot be simulated.
         </p>
       )}
+      {children}
     </div>
   );
 }

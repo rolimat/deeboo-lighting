@@ -901,3 +901,82 @@ fn pattern_ref_plays_that_pattern_with_new_params() {
         .collect();
     assert!(bars.iter().any(|b| *b != bars[0]), "fresh params each bar");
 }
+
+// ---- palette preview ("Show on strip") ----
+
+fn pv(h: u16) -> light_core::paint::Hsv {
+    light_core::paint::Hsv {
+        h,
+        s: 1000,
+        v: 1000,
+    }
+}
+
+fn preview_pair() -> (light_core::model::Palette, light_core::model::Sequence) {
+    use light_core::model::{Palette, Role, Sequence, Step, StepLen};
+    let step = |role| Step {
+        len: StepLen::One,
+        roles: vec![role, Role::Off, Role::Off, Role::Off],
+    };
+    (
+        Palette {
+            name: "P".into(),
+            principal: pv(111),
+            contraste: pv(222),
+            suave: pv(333),
+        },
+        Sequence {
+            name: "S".into(),
+            moment: Rhythm,
+            steps: vec![step(Role::Principal), step(Role::Contraste)],
+        },
+    )
+}
+
+fn hues(sends: &[(u64, PaintCommand)]) -> Vec<u16> {
+    sends
+        .iter()
+        .filter_map(|(_, c)| match c {
+            PaintCommand::Pencil { color, .. } | PaintCommand::Bucket(color) => Some(color.h),
+            PaintCommand::Eraser { .. } => None,
+        })
+        .collect()
+}
+
+#[test]
+fn preview_free_runs_without_a_clock_then_restores_the_rest_scene() {
+    let mut s = sim125();
+    let out = s.e.set_preview(s.now, Some(preview_pair()));
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 2_000_000);
+    let shown = hues(&s.sends);
+    assert!(shown.contains(&111) && shown.contains(&222), "{shown:?}");
+    let mark = s.sends.len();
+    s.now = T0 + 2_000_000;
+    let out = s.e.set_preview(s.now, None);
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 4_000_000);
+    let after = hues(&s.sends[mark..]);
+    assert!(!after.is_empty(), "rest scene repainted");
+    assert!(!after.contains(&111) && !after.contains(&222), "{after:?}");
+    assert_eq!(s.e.next_deadline_us(), None, "nothing keeps ticking");
+}
+
+#[test]
+fn preview_follows_the_clock_when_it_runs() {
+    let mut s = sim125();
+    s.start();
+    s.beats_of(2, &mut none);
+    let out = s.e.set_preview(s.now, Some(preview_pair()));
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.beats_of(3, &mut none);
+    let shown = hues(&s.sends[mark..]);
+    assert!(shown.contains(&111) && shown.contains(&222), "{shown:?}");
+    let mark = s.sends.len();
+    let out = s.e.set_preview(s.now, None);
+    s.record(s.now, out);
+    s.beats_of(3, &mut none);
+    let after = hues(&s.sends[mark..]);
+    assert!(!after.contains(&111) && !after.contains(&222), "{after:?}");
+}

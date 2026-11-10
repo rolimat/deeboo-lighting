@@ -440,3 +440,34 @@ fn serde_round_trip_v2() {
     let set = j(&l.sets[0]);
     assert!(set.get("palettes").is_some() && set["rhythm"].get("palettes").is_none());
 }
+
+#[test]
+fn validate_palette_checks_name_and_ranges() {
+    use light_core::library::validate_palette;
+    use light_core::model::Palette;
+    use light_core::paint::Hsv;
+    let ok = Palette {
+        name: "Neon".into(),
+        principal: Hsv {
+            h: 360,
+            s: 1000,
+            v: 1000,
+        },
+        contraste: Hsv { h: 0, s: 0, v: 0 },
+        suave: Hsv {
+            h: 10,
+            s: 10,
+            v: 10,
+        },
+    };
+    assert!(validate_palette(&ok).is_ok());
+    let mut bad = ok.clone();
+    bad.suave.v = 1001;
+    assert!(validate_palette(&bad).is_err());
+    bad = ok.clone();
+    bad.principal.h = 361;
+    assert!(validate_palette(&bad).is_err());
+    bad = ok;
+    bad.name = String::new();
+    assert!(validate_palette(&bad).is_err());
+}

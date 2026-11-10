@@ -11,7 +11,10 @@ import { BAR, fromCells, setBars, toCells } from "./cells";
 import { css, roleColour } from "./RolePicker";
 import { Simulation } from "./Simulation";
 
-export type BarActions = Pick<TopBarProps, "onDuplicate" | "onDelete" | "deleteLabel">;
+export type BarActions = Pick<
+  TopBarProps,
+  "onDuplicate" | "onDelete" | "deleteLabel" | "deleteGuard"
+>;
 type Store = ReturnType<typeof useLibrary>;
 
 const MAX_SEQUENCES = 64;

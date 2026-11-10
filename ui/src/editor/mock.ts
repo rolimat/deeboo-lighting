@@ -46,6 +46,7 @@ export function installMock(api: typeof realApi): void {
       [1, { name: "Neon", principal: hsv(300), contraste: hsv(180), suave: hsv(260, 600, 700) }],
       [2, { name: "Sunset", principal: hsv(20), contraste: hsv(340), suave: hsv(45, 700, 800) }],
       [3, { name: "Ice", principal: hsv(200), contraste: hsv(0, 0), suave: hsv(220, 500, 600) }],
+      [4, { name: "Acid", principal: hsv(135), contraste: hsv(285), suave: hsv(135, 300, 950) }],
     ],
     sequences: [
       [
@@ -162,5 +163,6 @@ export function installMock(api: typeof realApi): void {
     onSection: async () => () => {},
     wizardCancel: async () => {},
     identifySegment: async () => {},
+    previewPalette: async () => {},
   } satisfies Partial<typeof realApi>);
 }

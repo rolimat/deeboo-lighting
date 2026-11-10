@@ -187,8 +187,20 @@ impl Look {
     }
 }
 
+/// The editor's "Show on strip": this sequence in this palette replaces the show until switched off.
+struct Preview {
+    palette: Palette,
+    seq: Sequence,
+}
+
+/// Half a beat at 120 BPM: the pace of a preview while no clock runs.
+const PREVIEW_HALF_US: u64 = 250_000;
+
 pub struct Engine {
     cfg: EngineConfig,
+    preview: Option<Preview>,
+    /// When the clock-less preview shows its next step.
+    free_at: Option<u64>,
     clock: ClockTracker,
     sched: Scheduler,
     control: MomentControl,
@@ -218,6 +230,8 @@ impl Engine {
     #[must_use]
     pub fn with_seed(cfg: EngineConfig, seed: u64) -> Self {
         Self {
+            preview: None,
+            free_at: None,
             generator: Generator::new(seed),
             seed,
             rebuilds: 0,
@@ -254,6 +268,9 @@ impl Engine {
         if let Some(ClockEvent::Stopped { .. }) = self.clock.on_deadline(now_us) {
             self.stopped(now_us);
         }
+        if self.free_deadline().is_some_and(|t| t <= now_us) {
+            self.preview_step(now_us);
+        }
         self.sched.due(now_us)
     }
 
@@ -267,7 +284,7 @@ impl Engine {
                 self.cfg.lights_on = true;
                 self.resend = true;
                 if !self.clock.running() {
-                    self.plan_rest(now_us);
+                    self.rest_or_preview(now_us);
                 }
             }
             UiCommand::Force(m) => self.control.force(m),
@@ -284,10 +301,55 @@ impl Engine {
 
     #[must_use]
     pub fn next_deadline_us(&self) -> Option<u64> {
-        match (self.clock.next_deadline_us(), self.sched.next_deadline_us()) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
+        [
+            self.clock.next_deadline_us(),
+            self.sched.next_deadline_us(),
+            self.free_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    fn free_deadline(&self) -> Option<u64> {
+        self.free_at.filter(|_| !self.clock.running())
+    }
+
+    /// Shows `preview` (palette and sequence, validated by the caller) instead of the show, or goes
+    /// back to the show with `None`. With a clock it follows the beat; without one it plays at 120 BPM.
+    pub fn set_preview(
+        &mut self,
+        now_us: u64,
+        preview: Option<(Palette, Sequence)>,
+    ) -> Vec<PaintCommand> {
+        self.preview = preview.map(|(palette, seq)| Preview { palette, seq });
+        self.free_at = None;
+        self.playing = None;
+        self.resend = true;
+        if self.cfg.lights_on && !self.clock.running() {
+            self.rest_or_preview(now_us);
         }
+        self.sched.due(now_us)
+    }
+
+    fn rest_or_preview(&mut self, now_us: u64) {
+        if self.preview.is_some() {
+            self.preview_step(now_us);
+        } else {
+            self.plan_rest(now_us);
+        }
+    }
+
+    /// One half beat of the clock-less preview; the next one is due `PREVIEW_HALF_US` later.
+    fn preview_step(&mut self, now_us: u64) {
+        self.free_at = None;
+        if !self.cfg.lights_on || self.preview.is_none() {
+            return;
+        }
+        if let (Some(desired), _) = self.step_scene(Moment::Rhythm, false) {
+            self.plan_now(now_us, &desired);
+        }
+        self.free_at = Some(now_us + PREVIEW_HALF_US);
     }
 
     #[must_use]
@@ -443,7 +505,10 @@ impl Engine {
 
     /// Counts one half beat of the sequence for `moment`: that step's scene, and whether it is new.
     fn step_scene(&mut self, moment: Moment, restart: bool) -> (Option<Vec<Colour>>, bool) {
-        let sequence = &self.look.seqs[slot(moment)];
+        let sequence = self
+            .preview
+            .as_ref()
+            .map_or(&self.look.seqs[slot(moment)], |p| &p.seq);
         let first_len = |idx: usize| sequence.steps.get(idx).map_or(1, |s| s.len.half_beats());
         let (idx, left) = match self.playing {
             Some(p) if !restart && p.moment == moment => {
@@ -473,7 +538,7 @@ impl Engine {
         self.pos = None;
         self.control.reset();
         if self.cfg.lights_on {
-            self.plan_rest(now);
+            self.rest_or_preview(now);
         }
     }
 
@@ -487,8 +552,12 @@ impl Engine {
     }
 
     fn scene(&self, roles: impl Iterator<Item = Role>) -> Vec<Colour> {
+        let palette = self
+            .preview
+            .as_ref()
+            .map_or(&self.look.palette, |p| &p.palette);
         roles
-            .map(|r| resolve(r, &self.look.palette, self.cfg.brightness_pct))
+            .map(|r| resolve(r, palette, self.cfg.brightness_pct))
             .collect()
     }
 }

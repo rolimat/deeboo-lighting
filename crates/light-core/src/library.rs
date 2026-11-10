@@ -182,6 +182,17 @@ fn check_hsv(field: String, c: Hsv) -> Result<(), LibraryError> {
     Ok(())
 }
 
+/// A palette that arrives outside a library (the editor's "Show on strip" preview).
+///
+/// # Errors
+/// The first field that breaks the same limits a saved palette has.
+pub fn validate_palette(p: &Palette) -> Result<(), LibraryError> {
+    check_name("palette.name".into(), &p.name)?;
+    check_hsv("palette.principal".into(), p.principal)?;
+    check_hsv("palette.contraste".into(), p.contraste)?;
+    check_hsv("palette.suave".into(), p.suave)
+}
+
 fn unique_ids<'a>(field: &str, ids: impl Iterator<Item = &'a u32>) -> Result<(), LibraryError> {
     let mut seen = std::collections::HashSet::new();
     if ids.into_iter().all(|id| seen.insert(*id)) {

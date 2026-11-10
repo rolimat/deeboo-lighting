@@ -9,6 +9,7 @@ use light_core::clock::PhraseBars;
 use light_core::detect::{BandAnalyzer, BeatFeatures, DetectorParams, Moment, MomentDetector};
 use light_core::engine::{Engine, EngineConfig, EngineStatus, UiCommand};
 use light_core::library::Library;
+use light_core::model::{Palette, Sequence};
 use light_core::paint::PaintCommand;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -36,6 +37,9 @@ pub enum Input {
     DetectionWatch(bool),
     /// The editor asks to flash one segment (1-based) so the user can tell which piece it is.
     Identify(u8),
+    /// "Show on strip" in the editor's Palettes tab: this palette and sequence replace the show
+    /// (`Some`, already validated) until `None`.
+    PreviewPalette(Option<Box<(Palette, Sequence)>>),
     StripState(StripStatus),
     /// The wizard saved a new strip file: reconnect with it.
     StripChanged(StripConfig),
@@ -578,6 +582,10 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 self.publisher.touch();
             }
             Input::Identify(segment) => self.identify(segment, now_us),
+            Input::PreviewPalette(p) => {
+                let cmds = self.engine.set_preview(now_us, p.map(|b| *b));
+                self.flush(cmds);
+            }
             Input::StripState(_) if self.strip_paused => {
                 // A report from before the pause: the task will say so again after the resume.
             }
@@ -1134,6 +1142,49 @@ mod tests {
             "full scene repainted after the flash"
         );
         assert_eq!(c.deadline(), None);
+    }
+
+    #[test]
+    fn preview_palette_restores_show() {
+        use light_core::model::{Palette, Role, Sequence, Step, StepLen};
+        use light_core::paint::Hsv;
+        let hue = |h| Hsv {
+            h,
+            s: 1000,
+            v: 1000,
+        };
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::StripState(connected()), 1_000);
+        let _ = painted(&mut c, &mut rx);
+        let pal = Palette {
+            name: "P".into(),
+            principal: hue(111),
+            contraste: hue(222),
+            suave: hue(333),
+        };
+        let seq = Sequence {
+            name: "S".into(),
+            moment: Moment::Rhythm,
+            steps: vec![Step {
+                len: StepLen::One,
+                roles: vec![Role::Principal; 10],
+            }],
+        };
+        let hues = |cmds: &[PaintCommand]| -> Vec<u16> {
+            cmds.iter()
+                .filter_map(|c| match c {
+                    PaintCommand::Bucket(h) | PaintCommand::Pencil { color: h, .. } => Some(h.h),
+                    PaintCommand::Eraser { .. } => None,
+                })
+                .collect()
+        };
+        c.handle(Input::PreviewPalette(Some(Box::new((pal, seq)))), 2_000_000);
+        assert!(hues(&painted(&mut c, &mut rx)).contains(&111));
+        c.handle(Input::PreviewPalette(None), 3_000_000);
+        let back = hues(&painted(&mut c, &mut rx));
+        assert!(!back.is_empty(), "the show is repainted");
+        assert!(!back.contains(&111));
+        assert_eq!(c.deadline(), None, "the preview stops ticking");
     }
 
     #[test]

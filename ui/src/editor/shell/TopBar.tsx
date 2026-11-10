@@ -26,6 +26,8 @@ export interface TopBarProps {
   onDuplicate?: () => void;
   onDelete?: () => void;
   deleteLabel?: string;
+  /** Runs before the confirmation; returning true means the tab already answered (no dialog). */
+  deleteGuard?: () => boolean;
   save: SaveState;
   /** Why undo/redo are disabled on this tab (settings apply at once). */
   undoDisabledHint?: string;
@@ -93,7 +95,12 @@ export function TopBar(p: TopBarProps) {
       )}
       {p.onDuplicate && <IconButton name="duplicate" label="Duplicate" onClick={p.onDuplicate} />}
       {p.onDelete && (
-        <IconButton name="delete" label="Delete" red onClick={() => setConfirm(true)} />
+        <IconButton
+          name="delete"
+          label="Delete"
+          red
+          onClick={() => !p.deleteGuard?.() && setConfirm(true)}
+        />
       )}
       <span
         role="status"

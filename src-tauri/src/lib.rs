@@ -62,6 +62,7 @@ pub fn run() -> tauri::Result<()> {
             commands::set_wired_segments,
             commands::message_counts,
             commands::preview_generated,
+            commands::preview_palette,
             commands::detection_watch,
             commands::set_detection_thresholds
         ])

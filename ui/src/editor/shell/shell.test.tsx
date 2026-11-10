@@ -191,3 +191,11 @@ it("no_emoji_in_rendered_shell", async () => {
   // ⌘ is the key symbol, ● ○ ✓ — are text glyphs the spec asks for; pictographs are not allowed.
   expect(root.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
 });
+
+it("delete_guard_can_answer_before_the_confirmation", async () => {
+  const onDelete = vi.fn();
+  const root = await mount(bar({ onDelete, deleteLabel: "Neon", deleteGuard: () => true }));
+  await act(() => void (root.querySelector("button[aria-label='Delete']") as HTMLElement).click());
+  expect(root.querySelector("[role=dialog]")).toBeNull();
+  expect(onDelete).not.toHaveBeenCalled();
+});
