@@ -1478,6 +1478,55 @@ mod tests {
         ));
     }
 
+    fn rss_kb() -> u64 {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse()
+                    .unwrap_or(0)
+            });
+        out.unwrap_or(0)
+    }
+
+    /// `cargo test --release -p deeboo-lighting mem_play -- --ignored --nocapture`:
+    /// 10 simulated minutes of 120 BPM clock + audio detection + open editor; prints process RSS per minute.
+    #[test]
+    #[ignore = "memory probe, run by hand"]
+    #[allow(clippy::print_stderr, clippy::cast_precision_loss)]
+    fn mem_play() {
+        let (mut c, mut rx, _) = core(true);
+        c.set_visible(true);
+        c.set_meters(Box::new(|_| {}));
+        c.handle(Input::DetectionWatch(true), 0);
+        c.handle(Input::StripState(connected()), 0);
+        let midi = |at_us, status| Input::Midi(MidiEvent { at_us, status });
+        let noise: Vec<f32> = (0..24_000_u32)
+            .map(|i| ((i.wrapping_mul(2_654_435_761) >> 16) as f32 / 32_768.0 - 1.0) * 0.5)
+            .collect();
+        let base = rss_kb();
+        c.handle(midi(0, 0xFA), 0);
+        let tick_us = 20_833_u64;
+        for i in 1..=(600 * 1_000_000 / tick_us) {
+            let now = i * tick_us;
+            if i % 24 == 0 {
+                c.audio.samples = noise.clone();
+            }
+            c.handle(midi(now, 0xF8), now);
+            while rx.try_recv().is_ok() {}
+            if now % 60_000_000 < tick_us {
+                eprintln!(
+                    "t={:>3}s RSS {:.1} MB (+{:.1} since start)",
+                    now / 1_000_000,
+                    rss_kb() as f64 / 1024.0,
+                    (rss_kb() as f64 - base as f64) / 1024.0
+                );
+            }
+        }
+    }
+
     #[test]
     fn quit_stops_the_loop() {
         let (mut c, _rx, _) = core(false);
