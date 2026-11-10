@@ -5,6 +5,9 @@ import { render } from "preact";
 vi.mock("./api", () => ({
   api: {
     getStatus: vi.fn(),
+    getFullStatus: vi.fn(async () => ({ bpm: null })),
+    onStatus: vi.fn(async () => () => {}),
+    getSettings: vi.fn(async () => ({ helpTooltips: true })),
     getLibrary: vi.fn(async () => ({
       shape: { pieces: [] },
       palettes: [],
@@ -25,9 +28,12 @@ async function mount(root: HTMLElement) {
   });
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  history.replaceState(null, "", "/");
+});
 
-it("renders_strip_section", async () => {
+it("renders_strip_tab_by_default", async () => {
   vi.mocked(api.getStatus).mockResolvedValue({
     kind: "connected",
     name: "dj lights",
@@ -35,9 +41,8 @@ it("renders_strip_section", async () => {
   });
   const root = document.createElement("div");
   await mount(root);
-  const nav = root.querySelector("nav");
-  expect(nav?.textContent).toBe("StripSequencesPalettesSetsDetection");
-  expect(nav?.querySelector("[aria-current='page']")?.textContent).toBe("Strip");
+  const tab = root.querySelector("[role=tab][aria-selected=true]");
+  expect(tab?.textContent).toBe("Strip");
   expect(root.querySelector("section")?.textContent).toContain("dj lights (10 segments)");
 });
 
@@ -52,8 +57,16 @@ it("switches_to_sequences", async () => {
   vi.mocked(api.getStatus).mockResolvedValue({ kind: "notConfigured" });
   const root = document.createElement("div");
   await mount(root);
-  const tab = [...root.querySelectorAll("nav button")].find((b) => b.textContent === "Sequences");
+  const tab = [...root.querySelectorAll("[role=tab]")].find((b) => b.textContent === "Sequences");
   await act(async () => (tab as HTMLElement).click());
   expect(root.querySelector("section")?.getAttribute("aria-label")).toBe("Sequences");
-  expect(tab?.getAttribute("aria-current")).toBe("page");
+  expect(tab?.getAttribute("aria-selected")).toBe("true");
+});
+
+it("opens_on_the_section_in_the_url", async () => {
+  history.replaceState(null, "", "/?section=palettes");
+  vi.mocked(api.getStatus).mockResolvedValue({ kind: "notConfigured" });
+  const root = document.createElement("div");
+  await mount(root);
+  expect(root.querySelector("section")?.getAttribute("aria-label")).toBe("Palettes");
 });

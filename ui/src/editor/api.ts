@@ -144,6 +144,14 @@ export const api = {
   /** Changes how many segments are wired (1..=what the controller reports); returns the resized library. */
   setWiredSegments: (n: number): Promise<Library> => invoke("set_wired_segments", { n }),
   getSettings: (): Promise<Settings> => invoke("get_settings"),
+  /** Applies at once (no undo); resolves to the stored settings. */
+  saveSettings: (settings: Settings): Promise<Settings> => invoke("save_settings", { settings }),
+  listMidiSources: (): Promise<string[]> => invoke("list_midi_sources"),
+  listAudioInputs: (): Promise<string[]> => invoke("list_audio_inputs"),
+  /** The live readout; the backend pushes it on every change (event `status`). */
+  getFullStatus: (): Promise<Status> => invoke("get_status"),
+  onStatus: (cb: (status: Status) => void): Promise<UnlistenFn> =>
+    listen<Status>("status", (e) => cb(e.payload)),
   /** The editor's Detection section is open (`true`) or closed: `detector` events flow only while open. */
   detectionWatch: (on: boolean): Promise<void> => invoke("detection_watch", { on }),
   /** Whole dB; rejects with a short message when out of range. */

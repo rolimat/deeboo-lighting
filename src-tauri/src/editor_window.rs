@@ -129,12 +129,15 @@ mod tests {
             .flatten()
             .filter_map(|v| v.as_str())
             .collect();
-        // The editor reads the strip status and the library, drives the wizard and listens for events; no window or popover powers.
+        // The editor reads the strip status and the library, edits the settings (Setup tab), drives the wizard and listens for events; no window or popover powers.
         assert_eq!(
             perms,
             [
                 "allow-get-status",
                 "allow-get-settings",
+                "allow-save-settings",
+                "allow-list-midi-sources",
+                "allow-list-audio-inputs",
                 "allow-get-library",
                 "allow-save-library",
                 "allow-wizard-start",

@@ -20,6 +20,8 @@ Two entry points: the popover (`ui/index.html`, `ui/src/*.ts`, plain TS and CSS)
 - Status events arrive only while the popover is visible (max 30 Hz). Write to the DOM only when a value changed (never rewrite text under the pointer; WebKit drops the click).
 - The editor window is created on open and destroyed on close. Its simulation animates with `requestAnimationFrame` only while visible; no timers or polling.
 - Editor components are tested by mounting with `preact` `render` inside `act` from `preact/test-utils`, with `./api` mocked (`await act(async () => { render(<App/>, root); await new Promise(r => setTimeout(r)) })` lets effects settle). The editor opens through the Rust `open_editor` command, has its own capability file (`src-tauri/capabilities/editor.json`) listing exactly its commands, and its window is never pre-declared in `tauri.conf.json`.
+- Editor shell (`ui/src/editor/shell/`, `state/`): `useLibrary()` is the one library store (edit/undo/redo, 400 ms debounced `saveLibrary`, `coalesce` key = one undo step per gesture); saves always carry the live `activeSet`/`activePalette`, never a history snapshot's. Hover help goes through `useHelp(text)`; icons are bundled SVGs from `ui/src/icons` (`<Icon name>`), never emoji. `open_editor`'s section reaches the UI as `?section=`.
+- Visual review without Tauri: `npm --prefix ui run dev`, open http://localhost:5173/editor.html?mock (in-memory api in `editor/mock.ts`, DEV only; `scripts/check-mock-treeshake.sh` in `just lint` fails if it reaches `ui/dist`).
 - Tests are Vitest + jsdom with `api` mocked; see the `writing-tests` skill.
 
 ## Details

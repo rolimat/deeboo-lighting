@@ -6,6 +6,9 @@
   "permissions": [
     "allow-get-status",
     "allow-get-settings",
+    "allow-save-settings",
+    "allow-list-midi-sources",
+    "allow-list-audio-inputs",
     "allow-get-library",
     "allow-save-library",
     "allow-wizard-start",

@@ -6,6 +6,13 @@ Same tokens as Deeboo MIDI Sync (spec §8), defined once in `:root` of `ui/src/s
 `--green:#2fb36b` `--green-dark:#1f6b43` `--red:#e5484d`. Radius 12px on cards, 16px on the panel.
 Popover width 340px, dark, rounded cards (spec §7.2, approved mockup `menubar-2.html`).
 
+## Editor visual language (redesign spec 4)
+- Top bar, always the same: tabs (Sets, Sequences, Palettes, Strip, Detection, Setup, each with a line icon), undo, redo, separator, duplicate, delete (red; only where something is selected), save state, help (?), live readout.
+- Save state: "Saving…", "✓ Saved", red "Not saved — <reason>". Live readout: "● 122.0 BPM · beat 2 · phrase: bar 3 of 8 · <icon> Rhythm" or "○ No clock". Delete asks: `Delete "<name>"? You can undo this with ⌘Z.` (Cancel / Delete).
+- Label left of its field, same row. Left navigator (search, list) in Sets, Sequences, Palettes.
+- One teal accent (`--color-accent`) for live, selection and valid drop targets; red only for delete and errors; no colour per moment. Moment icons: Rhythm pulse, Calm wave, Build-up rising arrow.
+- Icons: bundled line SVGs (Lucide, ISC, see `ui/src/icons/LICENSE.md`); no emoji or pictographs anywhere. Undo/redo are disabled on Strip, Detection and Setup with the hint "This tab applies changes at once, so there is nothing to undo."
+
 ## Component classes
 `.test-strip`: debug-builds-only "Test strip" button in the popover card.
 
