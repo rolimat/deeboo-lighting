@@ -7,8 +7,6 @@
     "allow-get-status",
     "allow-get-settings",
     "allow-save-settings",
-    "allow-list-midi-sources",
-    "allow-list-audio-inputs",
     "allow-ui-command",
     "allow-quit",
     "allow-open-editor",

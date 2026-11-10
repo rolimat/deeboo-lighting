@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 export type StripStatus =
   | { kind: "notConfigured" }
   | { kind: "connecting" }
-  | { kind: "connected"; name: string; segments: number }
+  | { kind: "connected"; name: string; segments: number; reported: number; ip?: string }
   | { kind: "error" }
   | { kind: "keyInvalid" }
   | { kind: "notFound" };
@@ -22,6 +22,10 @@ export interface Hsv {
 /** The active set and the palette in force (Principal, Contraste, Suave). */
 export interface Selection {
   set: string;
+  /** Library id of the live set (names can repeat). */
+  setId: number;
+  /** Nothing pinned: the palette follows the set's rotation. */
+  paletteAuto: boolean;
   palette: { name: string; colours: [Hsv, Hsv, Hsv] };
 }
 
@@ -39,6 +43,8 @@ export interface Status {
   midi: { source: string | null; ok: boolean };
   audio: { ok: boolean; device?: string; levelDb?: number };
   selection: Selection;
+  /** The entry of the live set's list playing now, with the loop position in half beats. */
+  clip: { moment: MomentName; index: number; elapsed: number; total: number } | null;
 }
 
 export interface Settings {
@@ -57,6 +63,8 @@ export interface Settings {
   calmKickDb: number;
   calmHighDb: number;
   riserDb: number;
+  /** Show the `?` help tooltips in the editor. */
+  helpTooltips: boolean;
 }
 
 export type MomentName = "rhythm" | "calm" | "buildUp";
@@ -68,15 +76,15 @@ export const api = {
   getStatus: (): Promise<Status> => invoke("get_status"),
   getSettings: (): Promise<Settings> => invoke("get_settings"),
   saveSettings: (settings: Settings): Promise<Settings> => invoke("save_settings", { settings }),
-  listMidiSources: (): Promise<string[]> => invoke("list_midi_sources"),
-  listAudioInputs: (): Promise<string[]> => invoke("list_audio_inputs"),
   uiCommand: (cmd: UiCommand): Promise<void> => invoke("ui_command", { cmd }),
   /** Steps the active set by -1 or 1 (wraps); resolves to the new selection. */
   selectSet: (delta: -1 | 1): Promise<Selection> => invoke("select_set", { delta }),
   selectPalette: (delta: -1 | 1): Promise<Selection> => invoke("select_palette", { delta }),
   quit: (): Promise<void> => invoke("quit"),
   /** Opens (or focuses) the editor window on a section. */
-  openEditor: (section: "strip"): Promise<void> => invoke("open_editor", { section }),
+  openEditor: (
+    section: "sets" | "sequences" | "palettes" | "strip" | "detection" | "setup",
+  ): Promise<void> => invoke("open_editor", { section }),
   setWindowHeight: (height: number): Promise<void> =>
     getCurrentWindow().setSize(new LogicalSize(340, height)),
   /** The backend pushes the whole status on every change, only while the popover is visible (event `status`). */

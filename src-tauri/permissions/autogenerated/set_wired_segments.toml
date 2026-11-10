@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-wired-segments"
+description = "Enables the set_wired_segments command without any pre-configured scope."
+commands.allow = ["set_wired_segments"]
+
+[[permission]]
+identifier = "deny-set-wired-segments"
+description = "Denies the set_wired_segments command without any pre-configured scope."
+commands.deny = ["set_wired_segments"]

@@ -62,3 +62,15 @@ fn covers_all_patterns_over_100_calls() {
         assert_eq!(names.len(), for_moment(m).len(), "{m:?}");
     }
 }
+
+#[test]
+fn pattern_builds_that_pattern_with_fresh_params() {
+    use light_core::patterns::Pattern;
+    let g = groups(&Shape::row(8));
+    let mut gen_ = Generator::new(3);
+    let seqs: Vec<_> = (0..20)
+        .map(|_| gen_.pattern(Pattern::Snake, &g, 8))
+        .collect();
+    assert!(seqs.iter().all(|q| q.validate(8).is_ok()));
+    assert!(seqs.iter().any(|q| *q != seqs[0]), "params vary");
+}

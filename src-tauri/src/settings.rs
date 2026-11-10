@@ -45,6 +45,8 @@ pub struct Settings {
     pub calm_high_db: u8,
     /// Rise of the bar means of highs that makes a riser. 3..=15.
     pub riser_db: u8,
+    /// Show the `?` help tooltips in the editor.
+    pub help_tooltips: bool,
 }
 
 pub const CALM_KICK_DB: RangeInclusive<u8> = 8..=30;
@@ -64,6 +66,7 @@ impl Default for Settings {
             calm_kick_db: 16,
             calm_high_db: 12,
             riser_db: 7,
+            help_tooltips: true,
         }
     }
 }
@@ -187,6 +190,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("settings.json");
         (dir, p)
+    }
+
+    #[test]
+    fn settings_without_help_tooltips_defaults_true() {
+        let (_d, p) = tmp();
+        std::fs::write(&p, r#"{"phraseBars":4}"#).unwrap();
+        let s = load(&p);
+        assert!(s.help_tooltips);
+        assert_eq!(s.phrase_bars, 4);
+        assert!(Settings::default().help_tooltips);
     }
 
     #[test]

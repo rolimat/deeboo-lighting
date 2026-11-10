@@ -1,7 +1,7 @@
 //! Built-in palette and sequences (spec §6.3, §6.4).
 use crate::detect::Moment;
 use crate::groups::Groups;
-use crate::library::{Interval, MomentSet, Order, SeqRef, Set};
+use crate::library::{Interval, MomentSet, Order, PaletteChange, SeqRef, Set};
 use crate::model::{Palette, Role, Sequence, Step, StepLen};
 use crate::paint::Hsv;
 use crate::patterns::{Params, Pattern, build};
@@ -182,22 +182,23 @@ pub fn sequences(n: u8, groups: &Groups) -> Vec<Sequence> {
     ]
 }
 
-/// "Auto": a freshly generated sequence for every moment, any of `palettes`. `Random` order picks
-/// a different palette on each drop; the lone `Generated` sequence makes it moot for sequences.
-/// Spec intervals: Rhythm every phrase, Calm once per break, Build-up every 2 bars.
+/// "Auto": a freshly generated sequence for every moment; the set's palettes rotate in order at
+/// each drop. Rhythm every 8 bars, Calm once per break, Build-up every 2 bars.
 #[must_use]
 pub fn auto_set(id: u32, palettes: &[u32]) -> Set {
     let m = |interval| MomentSet {
         sequences: vec![SeqRef::Generated],
-        palettes: palettes.to_vec(),
-        order: Order::Random,
+        order: Order::InOrder,
         interval,
     };
     Set {
         id,
         name: "Auto".into(),
-        rhythm: m(Interval::Phrases(1)),
-        calm: m(Interval::Phrases(1)),
+        rhythm: m(Interval::Bars(8)),
+        calm: m(Interval::OncePerBreak),
         buildup: m(Interval::Bars(2)),
+        palettes: palettes.to_vec(),
+        palette_order: Order::InOrder,
+        palette_change: PaletteChange::AtDrop,
     }
 }

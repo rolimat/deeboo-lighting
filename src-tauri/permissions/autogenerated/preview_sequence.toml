@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-sequence"
+description = "Enables the preview_sequence command without any pre-configured scope."
+commands.allow = ["preview_sequence"]
+
+[[permission]]
+identifier = "deny-preview-sequence"
+description = "Denies the preview_sequence command without any pre-configured scope."
+commands.deny = ["preview_sequence"]

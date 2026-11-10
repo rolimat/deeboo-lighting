@@ -27,5 +27,8 @@ done | awk '
     END {
         if (!n) { print "no samples" > "/dev/stderr"; exit 1 }
         printf "samples %d  mean CPU %.1f%%  max CPU %.1f%%  max RSS %.1f MB\n", n, c / n, mc, mr / 1024
+        print "RSS counts the WebKit/AppKit library pages shared with the system (clean, evictable); judge memory by the footprint below"
         print "targets (spec 13.1): stopped ~0% CPU, < 30 MB; playing < 2% CPU, < 40 MB"
     }'
+# phys_footprint = the memory this process owns (dirty + compressed), what Activity Monitor calls "Memory".
+footprint "$pid" 2>/dev/null | awk '/phys_footprint/ { print }' || true

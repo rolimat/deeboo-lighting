@@ -22,7 +22,15 @@ fn centre(p: &crate::library::Piece) -> (f32, f32) {
         90 => (p.x - 0.5, p.y + h),
         180 => (p.x - h, p.y - 0.5),
         270 => (p.x + 0.5, p.y - h),
-        _ => (p.x + h, p.y + 0.5),
+        0 => (p.x + h, p.y + 0.5),
+        a => {
+            // The centre (h, 0.5) turned clockwise about the anchor.
+            let (sin, cos) = f32::from(a).to_radians().sin_cos();
+            (
+                h.mul_add(cos, p.x) - 0.5 * sin,
+                h.mul_add(sin, p.y) + 0.5 * cos,
+            )
+        }
     }
 }
 

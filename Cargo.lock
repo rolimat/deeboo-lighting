@@ -958,6 +958,8 @@ version = "0.1.0"
 dependencies = [
  "assert_no_alloc",
  "base64 0.22.1",
+ "core-foundation",
+ "coremidi",
  "cpal",
  "env_logger",
  "if-addrs",

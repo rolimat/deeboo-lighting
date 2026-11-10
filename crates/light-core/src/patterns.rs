@@ -14,6 +14,8 @@ use crate::groups::Groups;
 use crate::model::{Role, Sequence, Step, StepLen};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum Pattern {
     // Rhythm
     Halves,
@@ -38,6 +40,38 @@ pub struct Params {
     pub reverse: bool,
     /// 1..=4, clamped. More = finer chunks / wider windows.
     pub density: u8,
+}
+
+impl Pattern {
+    /// English name shown in the UI.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        use Pattern::*;
+        match self {
+            Halves => "Halves",
+            EndsCentre => "Ends \u{2194} centre",
+            OddEven => "Odd / even",
+            Quarters => "Quarters",
+            Snake => "Snake",
+            Mirror => "Mirror",
+            Drift => "Drift",
+            Sparse => "Sparse",
+            GroupFlash => "Group flash",
+            FastSnake => "Fast snake",
+            Strobe => "Strobe",
+        }
+    }
+
+    /// The moment this pattern is made for.
+    #[must_use]
+    pub fn moment(self) -> Moment {
+        use Pattern::*;
+        match self {
+            Halves | EndsCentre | OddEven | Quarters | Snake | Mirror => Moment::Rhythm,
+            Drift | Sparse => Moment::Calm,
+            GroupFlash | FastSnake | Strobe => Moment::BuildUp,
+        }
+    }
 }
 
 #[must_use]
@@ -170,25 +204,25 @@ pub fn build(p: Pattern, params: &Params, groups: &Groups, n: u8) -> Sequence {
     let (moment, name, len, states) = match p {
         Halves => (
             Moment::Rhythm,
-            "Halves",
+            p.label(),
             params.step,
             duel(&groups.left_right[1], a, b, nn),
         ),
         EndsCentre => (
             Moment::Rhythm,
-            "Ends and centre",
+            p.label(),
             params.step,
             duel(&groups.centre_ends[1], a, b, nn),
         ),
         OddEven => (
             Moment::Rhythm,
-            "Odd and even",
+            p.label(),
             params.step,
             duel(&groups.odd_even[1], a, b, nn),
         ),
         Quarters => (
             Moment::Rhythm,
-            "Quarters",
+            p.label(),
             params.step,
             wipe(
                 &rev(groups.quarters.to_vec()),
@@ -199,7 +233,7 @@ pub fn build(p: Pattern, params: &Params, groups: &Groups, n: u8) -> Sequence {
         ),
         Snake => (
             Moment::Rhythm,
-            "Snake",
+            p.label(),
             params.step,
             wipe(
                 &rev(merge(&along, 4 * d)),
@@ -221,7 +255,7 @@ pub fn build(p: Pattern, params: &Params, groups: &Groups, n: u8) -> Sequence {
                 .collect();
             (
                 Moment::Rhythm,
-                "Mirror",
+                p.label(),
                 params.step,
                 wipe(
                     &rev(merge(&pairs, 4 * d)),
@@ -233,13 +267,13 @@ pub fn build(p: Pattern, params: &Params, groups: &Groups, n: u8) -> Sequence {
         }
         Drift | Sparse => (
             Moment::Calm,
-            if p == Drift { "Drift" } else { "Sparse" },
+            p.label(),
             StepLen::Four,
             calm_states(p, params, n),
         ),
         GroupFlash => (
             Moment::BuildUp,
-            "Group flash",
+            p.label(),
             fast(params.step),
             wipe(
                 &rev(groups.quarters.to_vec()),
@@ -250,13 +284,13 @@ pub fn build(p: Pattern, params: &Params, groups: &Groups, n: u8) -> Sequence {
         ),
         FastSnake => (
             Moment::BuildUp,
-            "Fast snake",
+            p.label(),
             fast(params.step),
             wipe(&rev(merge(&along, 4 * d)), Role::Off, params.roles.0, nn),
         ),
         Strobe => (
             Moment::BuildUp,
-            "Strobe",
+            p.label(),
             fast(params.step),
             vec![paint(nn, params.roles.0, &[]), paint(nn, Role::Off, &[])],
         ),
@@ -265,14 +299,60 @@ pub fn build(p: Pattern, params: &Params, groups: &Groups, n: u8) -> Sequence {
     if states.is_empty() {
         states.push(vec![Role::Off; nn]);
     }
+    // At most 16 bars (128 half beats): longer cycles get shorter steps.
+    let mut len = len;
+    while states.len() * usize::from(len.half_beats()) > 128 {
+        len = match len {
+            StepLen::Four => StepLen::Two,
+            StepLen::Two => StepLen::One,
+            _ => StepLen::Half,
+        };
+    }
+    let mut steps: Vec<Step> = states
+        .into_iter()
+        .map(|roles| Step { len, roles })
+        .collect();
+    whole_bars(&mut steps);
     Sequence {
         name: name.into(),
         moment,
-        steps: states
-            .into_iter()
-            .map(|roles| Step { len, roles })
-            .collect(),
+        steps,
     }
+}
+
+/// Half beats in a bar.
+const BAR: u32 = 8;
+
+/// Makes the loop a whole number of bars. Repeating the cycle keeps the loop identical; a cycle
+/// too long for that (over 16 half beats) instead holds its last state for the missing beats.
+fn whole_bars(steps: &mut Vec<Step>) {
+    let total: u32 = steps.iter().map(|s| u32::from(s.len.half_beats())).sum();
+    if total.is_multiple_of(BAR) {
+        return;
+    }
+    let reps = BAR / gcd(total, BAR);
+    if total * reps <= 16 * BAR {
+        let cycle = steps.clone();
+        for _ in 1..reps {
+            steps.extend(cycle.iter().cloned());
+        }
+        return;
+    }
+    let roles = steps.last().map(|s| s.roles.clone()).unwrap_or_default();
+    let mut pad = BAR - total % BAR;
+    for (len, hb) in [(StepLen::Two, 4), (StepLen::One, 2), (StepLen::Half, 1)] {
+        if pad >= hb {
+            steps.push(Step {
+                len,
+                roles: roles.clone(),
+            });
+            pad -= hb;
+        }
+    }
+}
+
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 /// Build-up steps are at most one beat.

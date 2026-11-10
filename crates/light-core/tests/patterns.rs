@@ -42,7 +42,7 @@ proptest! {
         for p in ALL {
             let seq = make(p, params(step, density, reverse), n);
             prop_assert!(seq.validate(n).is_ok(), "{p:?} n={n}");
-            prop_assert!(seq.steps.len() <= 64, "{p:?} n={n} steps={}", seq.steps.len());
+            prop_assert!(seq.steps.len() <= 128, "{p:?} n={n} steps={}", seq.steps.len());
         }
     }
 }
@@ -140,5 +140,16 @@ fn for_moment_lists_matching_patterns() {
         for p in for_moment(m) {
             assert_eq!(make(*p, params(StepLen::One, 2, false), 8).moment, m);
         }
+    }
+}
+
+proptest! {
+    #[test]
+    fn every_pattern_builds_whole_bars(n in 1u8..=60, density in 0u8..=9, reverse: bool, s in 0usize..4, pi in 0usize..11) {
+        let step = [StepLen::Half, StepLen::One, StepLen::Two, StepLen::Four][s];
+        let seq = make(ALL[pi], params(step, density, reverse), n);
+        let total: u32 = seq.steps.iter().map(|st| u32::from(st.len.half_beats())).sum();
+        prop_assert_eq!(total % 8, 0, "{:?} n={}", ALL[pi], n);
+        prop_assert!(total <= 128, "{:?} n={} step={:?} total={}", ALL[pi], n, step, total);
     }
 }

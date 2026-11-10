@@ -72,13 +72,20 @@ impl Generator {
         let pick =
             |rng: &mut SplitMix64, len: usize| usize::try_from(rng.below(len as u64)).unwrap_or(0);
         let p = choices[pick(&mut self.rng, choices.len())];
+        self.last = Some(p);
+        self.pattern(p, groups, n)
+    }
+
+    /// `p` with random params.
+    pub fn pattern(&mut self, p: Pattern, groups: &Groups, n: u8) -> Sequence {
+        let pick =
+            |rng: &mut SplitMix64, len: usize| usize::try_from(rng.below(len as u64)).unwrap_or(0);
         let params = Params {
             step: STEPS[pick(&mut self.rng, STEPS.len())],
             roles: ROLES[pick(&mut self.rng, ROLES.len())],
             reverse: self.rng.below(2) == 1,
             density: 1 + u8::try_from(self.rng.below(4)).unwrap_or(0),
         };
-        self.last = Some(p);
         build(p, &params, groups, n)
     }
 }

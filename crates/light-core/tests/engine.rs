@@ -472,13 +472,13 @@ fn plain(n: u8) -> light_core::library::Library {
     lib.palettes.truncate(1);
     lib.active_palette = Some(1);
     let set = &mut lib.sets[0];
+    set.palettes = vec![1];
     for (ms, id) in [
         (&mut set.rhythm, 1),
         (&mut set.calm, 5),
         (&mut set.buildup, 8),
     ] {
         ms.sequences = vec![SeqRef::Id(id)];
-        ms.palettes = vec![1];
         ms.order = Order::InOrder;
     }
     lib
@@ -589,12 +589,13 @@ fn generated_sequence_plays_and_changes() {
 }
 
 #[test]
-fn new_palette_on_drop() {
+fn palette_changes_on_drop_when_at_drop() {
     let mut lib = plain(4);
+    lib.active_palette = None;
     let mut p2 = lib.palettes[0].1.clone();
     p2.principal.h = 100;
     lib.palettes.push((2, p2));
-    lib.sets[0].rhythm.palettes = vec![1, 2];
+    lib.sets[0].palettes = vec![1, 2];
     let mut s = sim125();
     s.e.set_library(s.now, &lib);
     s.start();
@@ -625,7 +626,7 @@ fn two_seq_lib() -> light_core::library::Library {
         light_core::library::SeqRef::Id(1),
         light_core::library::SeqRef::Id(99),
     ];
-    lib.sets[0].rhythm.interval = Interval::Phrases(1);
+    lib.sets[0].rhythm.interval = Interval::Bars(4);
     lib
 }
 
@@ -671,7 +672,8 @@ fn gen_lib() -> light_core::library::Library {
     let ms = &mut lib.sets[0].rhythm;
     ms.sequences = vec![SeqRef::Generated];
     ms.order = light_core::library::Order::Fixed;
-    ms.interval = Interval::Phrases(100);
+    ms.interval = Interval::Bars(16);
+    lib.sets[0].palette_order = light_core::library::Order::Fixed;
     lib
 }
 
@@ -721,10 +723,11 @@ fn only_the_pinned_palette_changing_keeps_the_sequence() {
 #[test]
 fn edited_shown_palette_shows_from_the_next_bar() {
     let mut lib = plain(4);
+    lib.active_palette = None;
     let mut p2 = lib.palettes[0].1.clone();
     p2.principal.h = 100;
     lib.palettes.push((2, p2));
-    lib.sets[0].rhythm.palettes = vec![1, 2];
+    lib.sets[0].palettes = vec![1, 2];
     let mut edited = lib.clone();
     edited.palettes[0].1.principal.h = 77;
     edited.palettes[0].1.contraste.h = 77;
@@ -760,4 +763,304 @@ fn edited_playing_sequence_shows_from_the_next_bar() {
     s.beats_of(6, &mut none);
     let got = apply_all(&s.sends, vec![None; 4]);
     assert_eq!(got, vec![hsv(280, 900, 950); 4]);
+}
+
+/// `plain` with a second palette (principal hue 100), in Auto, rotating as `change` says.
+fn two_pal_lib(change: light_core::library::PaletteChange) -> light_core::library::Library {
+    let mut lib = plain(4);
+    let mut p2 = lib.palettes[0].1.clone();
+    p2.principal.h = 100;
+    lib.palettes.push((2, p2));
+    lib.active_palette = None;
+    lib.sets[0].palettes = vec![1, 2];
+    lib.sets[0].palette_change = change;
+    lib
+}
+
+fn force_a_drop(s: &mut Sim) {
+    s.cmd(UiCommand::Force(BuildUp));
+    s.beats_of(8, &mut none);
+    s.cmd(UiCommand::Force(Rhythm));
+    s.beats_of(8, &mut none);
+}
+
+#[test]
+fn palette_rotates_every_n_bars_in_auto() {
+    use light_core::library::PaletteChange::Bars;
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_pal_lib(Bars(2)));
+    s.start();
+    s.beats_of(6, &mut none);
+    assert_eq!(hue_sends(&s, 100), Vec::<u64>::new());
+    s.beats_of(6, &mut none);
+    assert_ne!(hue_sends(&s, 100), Vec::<u64>::new());
+    assert_eq!(s.e.status().palette, Some(2));
+}
+
+#[test]
+fn a_drop_does_not_change_the_palette_when_the_set_changes_by_bars() {
+    use light_core::library::PaletteChange::Bars;
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_pal_lib(Bars(16)));
+    s.start();
+    s.beats_of(2, &mut none);
+    force_a_drop(&mut s);
+    assert_eq!(hue_sends(&s, 100), Vec::<u64>::new());
+}
+
+#[test]
+fn manual_palette_survives_drops_until_auto() {
+    use light_core::library::PaletteChange::AtDrop;
+    let mut pinned = two_pal_lib(AtDrop);
+    pinned.active_palette = Some(1);
+    let mut s = sim125();
+    s.e.set_library(s.now, &pinned);
+    s.start();
+    s.beats_of(2, &mut none);
+    force_a_drop(&mut s);
+    assert_eq!(hue_sends(&s, 100), Vec::<u64>::new());
+    let st = s.e.status();
+    assert!(!st.palette_auto);
+    assert_eq!(st.palette, Some(1));
+    // Back to Auto: the rotation (which kept counting drops) takes over.
+    s.e.set_library(s.now, &two_pal_lib(AtDrop));
+    s.beats_of(8, &mut none);
+    assert!(s.e.status().palette_auto);
+    assert_ne!(hue_sends(&s, 100), Vec::<u64>::new());
+}
+
+/// Calm alternates `Suave` (hue 120) and `Contraste` (hue 240) sequences; rhythm plays only Suave.
+fn calm_lib(interval: light_core::library::Interval) -> light_core::library::Library {
+    use light_core::library::SeqRef;
+    let mut lib = two_seq_lib();
+    lib.sets[0].rhythm.sequences = vec![SeqRef::Id(1)];
+    lib.sets[0].calm.sequences = vec![SeqRef::Id(1), SeqRef::Id(99)];
+    lib.sets[0].calm.interval = interval;
+    lib
+}
+
+#[test]
+fn calm_once_per_break_advances_per_entry() {
+    let lib = calm_lib(light_core::library::Interval::OncePerBreak);
+    let contraste = lib.palettes[0].1.contraste.h;
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(40, &mut none);
+    assert_eq!(
+        hue_sends(&s, contraste),
+        Vec::<u64>::new(),
+        "one break, one sequence"
+    );
+    s.cmd(UiCommand::Force(Rhythm));
+    s.beats_of(4, &mut none);
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(8, &mut none);
+    assert_ne!(hue_sends(&s, contraste), Vec::<u64>::new());
+}
+
+#[test]
+fn calm_bars_rotates_inside_a_long_break() {
+    let lib = calm_lib(light_core::library::Interval::Bars(2));
+    let contraste = lib.palettes[0].1.contraste.h;
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(24, &mut none);
+    assert_ne!(hue_sends(&s, contraste), Vec::<u64>::new());
+}
+
+#[test]
+fn pattern_ref_plays_that_pattern_with_new_params() {
+    use light_core::library::{Interval, Library, Order, SeqRef};
+    use light_core::patterns::Pattern;
+    let mut lib = Library::builtin(4);
+    let ms = &mut lib.sets[0].rhythm;
+    ms.sequences = vec![SeqRef::Pattern(Pattern::Halves)];
+    ms.order = Order::InOrder;
+    ms.interval = Interval::Bars(1);
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(64, &mut none);
+    let seen = shapes(&s);
+    assert_ne!(seen.len(), 0);
+    assert!(
+        seen.iter().all(|p| *p == [1, 2] || *p == [3, 4]),
+        "only halves: {seen:?}"
+    );
+    let bars: Vec<String> = (1..15u64)
+        .map(|bar| {
+            let from = T0 + bar * 4 * 480_000 - LEAD;
+            format!("{:?}", s.sends_in(from, from + 4 * 480_000))
+        })
+        .collect();
+    assert!(bars.iter().any(|b| *b != bars[0]), "fresh params each bar");
+}
+
+// ---- palette preview ("Show on strip") ----
+
+fn pv(h: u16) -> light_core::paint::Hsv {
+    light_core::paint::Hsv {
+        h,
+        s: 1000,
+        v: 1000,
+    }
+}
+
+fn preview_pair() -> (light_core::model::Palette, light_core::model::Sequence) {
+    use light_core::model::{Palette, Role, Sequence, Step, StepLen};
+    let step = |role| Step {
+        len: StepLen::One,
+        roles: vec![role, Role::Off, Role::Off, Role::Off],
+    };
+    (
+        Palette {
+            name: "P".into(),
+            principal: pv(111),
+            contraste: pv(222),
+            suave: pv(333),
+        },
+        Sequence {
+            name: "S".into(),
+            moment: Rhythm,
+            steps: vec![step(Role::Principal), step(Role::Contraste)],
+        },
+    )
+}
+
+fn hues(sends: &[(u64, PaintCommand)]) -> Vec<u16> {
+    sends
+        .iter()
+        .filter_map(|(_, c)| match c {
+            PaintCommand::Pencil { color, .. } | PaintCommand::Bucket(color) => Some(color.h),
+            PaintCommand::Eraser { .. } => None,
+        })
+        .collect()
+}
+
+#[test]
+fn preview_free_runs_without_a_clock_then_restores_the_rest_scene() {
+    let mut s = sim125();
+    let out = s.e.set_preview(s.now, Some(preview_pair()));
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 2_000_000);
+    let shown = hues(&s.sends);
+    assert!(shown.contains(&111) && shown.contains(&222), "{shown:?}");
+    let mark = s.sends.len();
+    s.now = T0 + 2_000_000;
+    let out = s.e.set_preview(s.now, None);
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 4_000_000);
+    let after = hues(&s.sends[mark..]);
+    assert!(!after.is_empty(), "rest scene repainted");
+    assert!(!after.contains(&111) && !after.contains(&222), "{after:?}");
+    assert_eq!(s.e.next_deadline_us(), None, "nothing keeps ticking");
+}
+
+#[test]
+fn preview_follows_the_clock_when_it_runs() {
+    let mut s = sim125();
+    s.start();
+    s.beats_of(2, &mut none);
+    let out = s.e.set_preview(s.now, Some(preview_pair()));
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.beats_of(3, &mut none);
+    let shown = hues(&s.sends[mark..]);
+    assert!(shown.contains(&111) && shown.contains(&222), "{shown:?}");
+    let mark = s.sends.len();
+    let out = s.e.set_preview(s.now, None);
+    s.record(s.now, out);
+    s.beats_of(3, &mut none);
+    let after = hues(&s.sends[mark..]);
+    assert!(!after.contains(&111) && !after.contains(&222), "{after:?}");
+}
+
+#[test]
+fn status_reports_the_playing_clip_and_its_progress() {
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_seq_lib());
+    assert_eq!(s.e.status().clip, None, "stopped: nothing plays");
+    s.start();
+    s.beats_of(2, &mut none);
+    let c = s.e.status().clip.expect("a clip plays");
+    assert_eq!((c.moment, c.index), (Rhythm, 0));
+    assert!(c.total > 0 && c.elapsed < c.total, "{c:?}");
+    let first = c.elapsed;
+    s.ticks(12, &mut none); // half a beat later
+    assert_ne!(s.e.status().clip.map(|c| c.elapsed), Some(first));
+    s.beats_of(16, &mut none); // Bars(4) later the second sequence plays
+    assert_eq!(s.e.status().clip.map(|c| c.index), Some(1));
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(2, &mut none);
+    assert_eq!(s.e.status().clip.map(|c| c.moment), Some(Calm));
+}
+
+// ---- latency calibration ----
+
+/// All four segments white (the built-in show only whitens some of them).
+fn is_white(c: &PaintCommand) -> bool {
+    match c {
+        PaintCommand::Bucket(color) => color.s == 0 && color.v > 0,
+        PaintCommand::Pencil { color, segments } => {
+            color.s == 0 && color.v > 0 && segments.len() == 4
+        }
+        PaintCommand::Eraser { .. } => false,
+    }
+}
+
+#[test]
+fn calibrate_flashes_on_beats_and_restores_show() {
+    let mut s = sim125();
+    s.start();
+    s.beats_of(2, &mut none);
+    let out = s.e.calibrate(s.now, true);
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.beats_of(6, &mut none);
+    let flashes: Vec<u64> = s.sends[mark..]
+        .iter()
+        .filter(|(_, c)| is_white(c))
+        .map(|(t, _)| *t)
+        .collect();
+    assert!(flashes.len() >= 4, "{flashes:?}");
+    for t in &flashes {
+        assert_eq!((t + LEAD - T0) % 480_000, 0, "flash lands on a beat: {t}");
+    }
+    assert!(
+        s.sends[mark..]
+            .iter()
+            .any(|(_, c)| matches!(c, PaintCommand::Eraser { .. })),
+        "dark between beats"
+    );
+    let out = s.e.calibrate(s.now, false);
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.beats_of(6, &mut none);
+    assert!(
+        s.sends[mark..].iter().all(|(_, c)| !is_white(c)),
+        "the show is back"
+    );
+    assert!(s.sends.len() > mark, "and it paints");
+}
+
+#[test]
+fn calibrate_needs_a_clock_and_ends_on_stop() {
+    let mut s = sim125();
+    let out = s.e.calibrate(s.now, true);
+    assert!(out.is_empty(), "no clock, no flash");
+    s.start();
+    s.beats_of(1, &mut none);
+    let out = s.e.calibrate(s.now, true);
+    s.record(s.now, out);
+    s.byte(0xFC, &mut none); // Stop
+    s.start();
+    let mark = s.sends.len();
+    s.beats_of(6, &mut none);
+    assert!(s.sends[mark..].iter().all(|(_, c)| !is_white(c)), "ended");
 }

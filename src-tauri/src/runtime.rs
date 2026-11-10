@@ -9,13 +9,14 @@ use light_core::clock::PhraseBars;
 use light_core::detect::{BandAnalyzer, BeatFeatures, DetectorParams, Moment, MomentDetector};
 use light_core::engine::{Engine, EngineConfig, EngineStatus, UiCommand};
 use light_core::library::Library;
+use light_core::model::{Palette, Sequence};
 use light_core::paint::PaintCommand;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::audio::{AudioError, AudioIn, RING_SECONDS};
 use crate::clock::MonoClock;
-use crate::commands::{AppState, AudioStatus, MidiStatus, Selection, Status, StripStatus};
+use crate::commands::{AppState, AudioStatus, ClipDto, MidiStatus, Selection, Status, StripStatus};
 use crate::midi::{MidiEvent, MidiIn, QUEUE};
 use crate::settings::{Settings, detector_params};
 use crate::strip::{self, StripMsg};
@@ -25,6 +26,8 @@ use crate::tray::{TrayInput, TrayView, tray_deadline, tray_view};
 /// Everything that can wake the engine thread.
 pub enum Input {
     Midi(MidiEvent),
+    /// The OS's MIDI sources changed (our own virtual port excluded).
+    SourcesChanged(Vec<String>),
     Ui(UiCommand),
     Settings(Settings),
     /// The editor saved the library (already validated and persisted).
@@ -34,6 +37,11 @@ pub enum Input {
     DetectionWatch(bool),
     /// The editor asks to flash one segment (1-based) so the user can tell which piece it is.
     Identify(u8),
+    /// "Show on strip" in the editor's Palettes tab: this palette and sequence replace the show
+    /// (`Some`, already validated) until `None`.
+    PreviewPalette(Option<Box<(Palette, Sequence)>>),
+    /// Setup's latency calibration: the strip flashes white on every beat (`true`) or goes back to the show.
+    Calibrate(bool),
     StripState(StripStatus),
     /// The wizard saved a new strip file: reconnect with it.
     StripChanged(StripConfig),
@@ -141,6 +149,7 @@ type MeterSink = Box<dyn FnMut(&DetectorEvent)>;
 /// The editor gets at most 15 detector events per second.
 const MIN_METER_GAP_US: u64 = 66_667;
 const DETECTOR_EVENT: &str = "detector";
+const MIDI_SOURCES_EVENT: &str = "midi-sources";
 
 /// How long an identify flash stays before the scene is repainted.
 const IDENTIFY_FLASH_US: u64 = 1_200_000;
@@ -250,7 +259,6 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     emit: E,
     last: EngineStatus,
     tray: Option<TrayLink>,
-    play_start_us: Option<u64>,
     tray_due: Option<u64>,
     /// The OS listed the configured source at the last check (popover show or settings change).
     source_present: bool,
@@ -267,7 +275,14 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     /// Told the strip state on every change, popover visible or not (the editor reads it).
     strip_sink: Option<StripSink>,
     strip_told: Option<StripStatus>,
+    sources_sink: Option<SourcesSink>,
+    choice_sink: Option<ChoiceSink>,
 }
+
+/// Told every new list of MIDI sources (the UI listens).
+type SourcesSink = Box<dyn FnMut(&[String])>;
+/// Told the source the engine chose by itself (to persist it).
+type ChoiceSink = Box<dyn FnMut(&str)>;
 
 type StripSink = Box<dyn FnMut(&StripStatus)>;
 
@@ -316,7 +331,6 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             emit,
             last,
             tray: None,
-            play_start_us: None,
             tray_due: None,
             source_present,
             strip_paused: false,
@@ -327,9 +341,46 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             meter_last_us: None,
             strip_sink: None,
             strip_told: None,
+            sources_sink: None,
+            choice_sink: None,
         };
         core.replan(now_us);
         core
+    }
+
+    pub fn set_midi_sinks(&mut self, sources: SourcesSink, choice: ChoiceSink) {
+        self.sources_sink = Some(sources);
+        self.choice_sink = Some(choice);
+    }
+
+    /// The list is the truth: connect a source that showed up (or came back), pick the only one
+    /// when none is chosen. Repeated notifications change nothing.
+    fn on_sources(&mut self, list: &[String]) {
+        if let Some(sink) = &mut self.sources_sink {
+            sink(list);
+        }
+        match self.settings.midi_source.clone() {
+            None => {
+                if let [only] = list {
+                    self.settings.midi_source = Some(only.clone());
+                    if let Some(sink) = &mut self.choice_sink {
+                        sink(only);
+                    }
+                    self.midi.reconnect(Some(only));
+                    self.source_present = true;
+                }
+            }
+            Some(wanted) => {
+                let present = list.contains(&wanted);
+                let stale = !self.source_present
+                    || needs_reconnect(Some(&wanted), self.midi.connected_source().as_deref());
+                if present && stale {
+                    self.midi.reconnect(Some(&wanted));
+                }
+                self.source_present = present;
+            }
+        }
+        self.publisher.touch();
     }
 
     /// The scene for the current state (rest, or all off); the live clock replans on its next beat.
@@ -376,8 +427,14 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             },
             selection: self.library.as_ref().map_or_else(
                 || Selection::of(&Library::builtin(self.segments)),
-                Selection::of,
+                |lib| Selection::in_force(lib, s.palette),
             ),
+            clip: s.clip.map(|c| ClipDto {
+                moment: c.moment.into(),
+                index: c.index,
+                elapsed: c.elapsed,
+                total: c.total,
+            }),
         }
     }
 
@@ -469,11 +526,6 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     fn update_tray(&mut self, now_us: u64) {
         let midi_ok = self.midi_ok();
         let s = &self.last;
-        if !s.playing {
-            self.play_start_us = None;
-        } else if self.play_start_us.is_none() {
-            self.play_start_us = Some(now_us);
-        }
         let Some(link) = &mut self.tray else { return };
         let input = TrayInput {
             midi_ok,
@@ -481,7 +533,6 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             playing: s.playing,
             bpm: s.bpm,
             last_beat_us: s.last_beat_us,
-            play_start_us: self.play_start_us,
             moment: s.moment,
             forced: !s.auto,
         };
@@ -516,6 +567,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                     self.meter(&f, moment, now_us);
                 }
             }
+            Input::SourcesChanged(list) => self.on_sources(&list),
             Input::Ui(cmd) => {
                 // A rejected key is not retried: only pairing again helps.
                 if let (
@@ -538,6 +590,14 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 self.publisher.touch();
             }
             Input::Identify(segment) => self.identify(segment, now_us),
+            Input::PreviewPalette(p) => {
+                let cmds = self.engine.set_preview(now_us, p.map(|b| *b));
+                self.flush(cmds);
+            }
+            Input::Calibrate(on) => {
+                let cmds = self.engine.calibrate(now_us, on);
+                self.flush(cmds);
+            }
             Input::StripState(_) if self.strip_paused => {
                 // A report from before the pause: the task will say so again after the resume.
             }
@@ -574,8 +634,8 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     }
 
     fn identify(&mut self, segment: u8, now_us: u64) {
-        let ready = matches!(self.strip, StripStatus::Connected { .. })
-            && (1..=self.segments).contains(&segment)
+        // 1..=reported: the unwired tail can be counted too.
+        let ready = matches!(self.strip, StripStatus::Connected { reported, .. } if (1..=reported).contains(&segment))
             && self
                 .identify_at
                 .is_none_or(|t| now_us >= t + IDENTIFY_GATE_US);
@@ -781,6 +841,7 @@ pub fn spawn(
         Some(stx)
     };
     let midi_tx = tx.clone();
+    let midi_watch_tx = tx.clone();
     let visible = app.state::<AppState>().visible_flag();
     let spawned = std::thread::Builder::new()
         .name("engine".into())
@@ -790,8 +851,10 @@ pub fn spawn(
                 let app = app.clone();
                 move |s: &Status| {
                     app.state::<AppState>().set_status(s.clone());
-                    if let Err(e) = app.emit_to("popover", STATUS_EVENT, s) {
-                        log::warn!("status event not delivered: {e}");
+                    for window in ["popover", "editor"] {
+                        if let Err(e) = app.emit_to(window, STATUS_EVENT, s) {
+                            log::warn!("status event not delivered: {e}");
+                        }
                     }
                 }
             };
@@ -814,6 +877,17 @@ pub fn spawn(
                     log::debug!("detector event not delivered: {ee}");
                 }
             }));
+            let list_app = app.clone();
+            let choice_app = app.clone();
+            core.set_midi_sinks(
+                Box::new(move |l| {
+                    if let Err(e) = list_app.emit(MIDI_SOURCES_EVENT, l) {
+                        log::debug!("midi-sources event not delivered: {e}");
+                    }
+                }),
+                Box::new(move |n| choice_app.state::<AppState>().remember_midi_source(n)),
+            );
+            crate::midi::watch_sources(&midi_watch_tx);
             core.handle(Input::Library(Box::new(library)), clock.now_us());
             app.state::<AppState>().set_status(core.status());
             let tray_app = app.clone();
@@ -924,6 +998,8 @@ mod tests {
         StripStatus::Connected {
             name: "dj".into(),
             segments: 10,
+            reported: 10,
+            ip: None,
         }
     }
 
@@ -1029,6 +1105,7 @@ mod tests {
             name: name.into(),
             local_key: secrecy::SecretString::from("0123456789abcdef"),
             segments,
+            reported: segments,
             last_ip: None,
         }
     }
@@ -1063,6 +1140,32 @@ mod tests {
     }
 
     #[test]
+    fn auto_palette_shows_the_one_in_force() {
+        let (mut c, _rx, _) = core(false);
+        let mut lib = Library::builtin(10);
+        lib.active_palette = None;
+        let in_force = lib.sets[0].palettes[1];
+        let name = lib
+            .palettes
+            .iter()
+            .find(|(i, _)| *i == in_force)
+            .unwrap()
+            .1
+            .name
+            .clone();
+        assert_ne!(
+            lib.current_palette().name,
+            name,
+            "first differs from second"
+        );
+        c.handle(Input::Library(Box::new(lib)), 1_000);
+        c.last.palette = Some(in_force);
+        let sel = c.status().selection;
+        assert!(sel.palette_auto);
+        assert_eq!(sel.palette.name, name);
+    }
+
+    #[test]
     fn identify_flashes_one_segment_then_restores_the_scene() {
         let (mut c, mut rx, _) = core(true);
         c.handle(Input::StripState(connected()), 1_000);
@@ -1079,6 +1182,49 @@ mod tests {
             "full scene repainted after the flash"
         );
         assert_eq!(c.deadline(), None);
+    }
+
+    #[test]
+    fn preview_palette_restores_show() {
+        use light_core::model::{Palette, Role, Sequence, Step, StepLen};
+        use light_core::paint::Hsv;
+        let hue = |h| Hsv {
+            h,
+            s: 1000,
+            v: 1000,
+        };
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::StripState(connected()), 1_000);
+        let _ = painted(&mut c, &mut rx);
+        let pal = Palette {
+            name: "P".into(),
+            principal: hue(111),
+            contraste: hue(222),
+            suave: hue(333),
+        };
+        let seq = Sequence {
+            name: "S".into(),
+            moment: Moment::Rhythm,
+            steps: vec![Step {
+                len: StepLen::One,
+                roles: vec![Role::Principal; 10],
+            }],
+        };
+        let hues = |cmds: &[PaintCommand]| -> Vec<u16> {
+            cmds.iter()
+                .filter_map(|c| match c {
+                    PaintCommand::Bucket(h) | PaintCommand::Pencil { color: h, .. } => Some(h.h),
+                    PaintCommand::Eraser { .. } => None,
+                })
+                .collect()
+        };
+        c.handle(Input::PreviewPalette(Some(Box::new((pal, seq)))), 2_000_000);
+        assert!(hues(&painted(&mut c, &mut rx)).contains(&111));
+        c.handle(Input::PreviewPalette(None), 3_000_000);
+        let back = hues(&painted(&mut c, &mut rx));
+        assert!(!back.is_empty(), "the show is repainted");
+        assert!(!back.contains(&111));
+        assert_eq!(c.deadline(), None, "the preview stops ticking");
     }
 
     #[test]
@@ -1099,6 +1245,29 @@ mod tests {
     }
 
     #[test]
+    fn identify_accepts_the_unwired_tail_up_to_what_the_strip_reports() {
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::StripChanged(new_cfg("dj", 8)), 500);
+        let _ = rx.try_recv();
+        let wired8 = StripStatus::Connected {
+            name: "dj".into(),
+            segments: 8,
+            reported: 10,
+            ip: None,
+        };
+        c.handle(Input::StripState(wired8), 1_000);
+        let _ = painted(&mut c, &mut rx);
+        for (i, seg) in [9u8, 10].into_iter().enumerate() {
+            c.handle(Input::Identify(seg), 2_000_000 + 1_000_000 * i as u64);
+            assert!(matches!(rx.try_recv(), Ok(StripMsg::Identify(n)) if n == seg));
+        }
+        c.handle(Input::Identify(11), 9_000_000);
+        while let Ok(m) = rx.try_recv() {
+            assert!(!matches!(m, StripMsg::Identify(_)), "11 is not a segment");
+        }
+    }
+
+    #[test]
     fn strip_changed_reconnects_and_resends_scene() {
         let (mut c, mut rx, _) = core(true);
         c.handle(Input::StripState(connected()), 1_000);
@@ -1116,6 +1285,8 @@ mod tests {
         let again = StripStatus::Connected {
             name: "new".into(),
             segments: 10,
+            reported: 10,
+            ip: None,
         };
         c.handle(Input::StripState(again), 3_000_000);
         assert!(
@@ -1160,6 +1331,8 @@ mod tests {
         let now = StripStatus::Connected {
             name: "short".into(),
             segments: 4,
+            reported: 4,
+            ip: None,
         };
         c.handle(Input::StripState(now), 3_000_000);
         let cmds = painted(&mut c, &mut rx);
@@ -1226,6 +1399,70 @@ mod tests {
         assert_eq!(calls.borrow().len(), 3);
     }
 
+    fn sources(names: &[&str]) -> Input {
+        Input::SourcesChanged(names.iter().map(|n| (*n).to_string()).collect())
+    }
+
+    #[test]
+    fn source_appearing_later_is_connected() {
+        let (mut c, _rx, _) = core(false);
+        let calls = Rc::clone(&c.midi.reconnects);
+        let ports = Rc::clone(&c.midi.ports);
+        assert!(!c.status().midi.ok);
+        ports.borrow_mut().push(SOURCE.into());
+        c.handle(sources(&[SOURCE]), 0);
+        assert_eq!(*calls.borrow(), vec![Some(SOURCE.to_string())]);
+        assert!(c.status().midi.ok);
+    }
+
+    #[test]
+    fn vanished_source_reconnects_when_back() {
+        let (mut c, _rx, _) = core(false);
+        let calls = Rc::clone(&c.midi.reconnects);
+        let ports = Rc::clone(&c.midi.ports);
+        ports.borrow_mut().push(SOURCE.into());
+        c.handle(sources(&[SOURCE]), 0);
+        ports.borrow_mut().clear();
+        c.handle(sources(&[]), 1);
+        assert!(!c.status().midi.ok, "red while it is gone");
+        ports.borrow_mut().push(SOURCE.into());
+        c.handle(sources(&[SOURCE]), 2);
+        assert!(c.status().midi.ok);
+        assert_eq!(calls.borrow().len(), 2, "connected again once it is back");
+    }
+
+    #[test]
+    fn no_duplicate_connection_on_repeated_notifications() {
+        let (mut c, _rx, _) = core(false);
+        let calls = Rc::clone(&c.midi.reconnects);
+        c.midi.ports.borrow_mut().push(SOURCE.into());
+        for t in 0..3 {
+            c.handle(sources(&[SOURCE]), t);
+        }
+        assert_eq!(calls.borrow().len(), 1);
+    }
+
+    #[test]
+    fn single_source_auto_selected_and_remembered() {
+        let (mut c, _rx, _) = core(false);
+        c.settings.midi_source = None;
+        let chosen = Rc::new(RefCell::new(Vec::new()));
+        let listed = Rc::new(RefCell::new(Vec::new()));
+        let (ch, li) = (Rc::clone(&chosen), Rc::clone(&listed));
+        c.set_midi_sinks(
+            Box::new(move |l| li.borrow_mut().push(l.to_vec())),
+            Box::new(move |n| ch.borrow_mut().push(n.to_string())),
+        );
+        c.midi.ports.borrow_mut().push("Mixer".into());
+        c.handle(sources(&["Mixer", "Other"]), 0);
+        assert!(chosen.borrow().is_empty(), "two sources: the user picks");
+        c.handle(sources(&["Mixer"]), 1);
+        assert_eq!(*chosen.borrow(), vec!["Mixer".to_string()]);
+        assert_eq!(c.settings.midi_source.as_deref(), Some("Mixer"));
+        assert!(c.status().midi.ok);
+        assert_eq!(listed.borrow().len(), 2, "every change reaches the UI");
+    }
+
     #[test]
     fn input_flood_does_not_keep_the_show_from_stopping() {
         let (mut c, _rx, _) = core(false);
@@ -1262,6 +1499,55 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(500)),
             Ok(Input::StripState(StripStatus::Error))
         ));
+    }
+
+    fn rss_kb() -> u64 {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse()
+                    .unwrap_or(0)
+            });
+        out.unwrap_or(0)
+    }
+
+    /// `cargo test --release -p deeboo-lighting mem_play -- --ignored --nocapture`:
+    /// 10 simulated minutes of 120 BPM clock + audio detection + open editor; prints process RSS per minute.
+    #[test]
+    #[ignore = "memory probe, run by hand"]
+    #[allow(clippy::print_stderr, clippy::cast_precision_loss)]
+    fn mem_play() {
+        let (mut c, mut rx, _) = core(true);
+        c.set_visible(true);
+        c.set_meters(Box::new(|_| {}));
+        c.handle(Input::DetectionWatch(true), 0);
+        c.handle(Input::StripState(connected()), 0);
+        let midi = |at_us, status| Input::Midi(MidiEvent { at_us, status });
+        let noise: Vec<f32> = (0..24_000_u32)
+            .map(|i| ((i.wrapping_mul(2_654_435_761) >> 16) as f32 / 32_768.0 - 1.0) * 0.5)
+            .collect();
+        let base = rss_kb();
+        c.handle(midi(0, 0xFA), 0);
+        let tick_us = 20_833_u64;
+        for i in 1..=(600 * 1_000_000 / tick_us) {
+            let now = i * tick_us;
+            if i % 24 == 0 {
+                c.audio.samples = noise.clone();
+            }
+            c.handle(midi(now, 0xF8), now);
+            while rx.try_recv().is_ok() {}
+            if now % 60_000_000 < tick_us {
+                eprintln!(
+                    "t={:>3}s RSS {:.1} MB (+{:.1} since start)",
+                    now / 1_000_000,
+                    rss_kb() as f64 / 1024.0,
+                    (rss_kb() as f64 - base as f64) / 1024.0
+                );
+            }
+        }
     }
 
     #[test]

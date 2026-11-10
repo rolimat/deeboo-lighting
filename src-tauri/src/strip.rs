@@ -15,7 +15,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::commands::StripStatus;
 use crate::lan::on_local_subnet;
-use crate::strip_store::{self, StripConfig};
+use crate::strip_store::{self, StoreError, StripConfig};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Measured: the strip announces itself every ~5 s, but wifi drops some (gaps of 15 s seen).
@@ -66,8 +66,17 @@ pub fn load(config_dir: &Path) -> Option<StripConfig> {
 
 fn load_logged(path: &Path) -> Option<StripConfig> {
     strip_store::load(path)
-        .inspect_err(|e| log::warn!("strip file ignored: {e}"))
+        .inspect_err(|e| log::log!(load_level(e), "strip file ignored: {e}"))
         .ok()
+}
+
+/// A fresh install has no strip file; a corrupt or unreadable one must still be reported.
+fn load_level(e: &StoreError) -> log::Level {
+    if matches!(e, StoreError::Missing) {
+        log::Level::Debug
+    } else {
+        log::Level::Warn
+    }
 }
 
 pub struct Strip {
@@ -265,6 +274,42 @@ async fn listen_in(frames: &mut impl Frames, window: Duration) -> Result<u8, Str
         .ok_or(StripError::NoSegments)
 }
 
+/// Full-strip fills would light the unwired tail, so they become a pencil on the wired segments.
+fn wired_cmd(c: &StripConfig, cmd: &PaintCommand) -> PaintCommand {
+    match cmd {
+        PaintCommand::Bucket(color) if c.segments < c.reported => PaintCommand::Pencil {
+            color: *color,
+            segments: (1..=c.segments).collect(),
+        },
+        other => other.clone(),
+    }
+}
+
+pub(crate) fn connected_status(c: &StripConfig) -> StripStatus {
+    StripStatus::Connected {
+        name: c.name.clone(),
+        segments: c.segments,
+        reported: c.reported,
+        ip: c.last_ip.filter(std::net::Ipv4Addr::is_private),
+    }
+}
+
+/// Switches the unwired tail (N+1..=M) off; `None` when every reported segment is wired.
+fn park_tail(c: &StripConfig) -> Option<PaintCommand> {
+    (c.segments < c.reported).then(|| PaintCommand::Eraser {
+        segments: (c.segments + 1..=c.reported).collect(),
+    })
+}
+
+async fn park_unwired<P: Painter>(p: &P, c: &StripConfig) {
+    if let Some(off) = park_tail(c) {
+        if let Err(e) = p.paint(c.reported, &off).await {
+            log::warn!("strip tail not switched off: {e}");
+        }
+        tokio::time::sleep(MESSAGE_GAP).await;
+    }
+}
+
 /// Eraser on every segment, then white on `segment` (spec §6.7.5).
 async fn identify_via<P: Painter>(p: &P, segment: u8, segments: u8) -> Result<(), StripError> {
     let all = PaintCommand::Eraser {
@@ -433,6 +478,7 @@ async fn next_control(rx: &mut UnboundedReceiver<StripMsg>) -> Option<Control> {
 /// Connects, then paints each command as it arrives. A failure reports its status
 /// (`StripStatus::{Error, NotFound, KeyInvalid}`) and drops commands until a `Connect` retries;
 /// a `Configure` at any moment, even mid-connection, starts over with the new config.
+#[allow(clippy::too_many_lines)] // one reconnect state machine; splitting it hides the flow
 pub async fn run<P, Fut>(
     initial: Option<StripConfig>,
     mut connect: impl FnMut(Arc<StripConfig>) -> Fut,
@@ -445,6 +491,8 @@ pub async fn run<P, Fut>(
     let mut cfg = initial.map(Arc::new);
     let mut painter = None;
     let mut paused = false;
+    // An identify flash on an unwired segment leaves it lit; the next paint switches it off.
+    let mut tail_lit = false;
     'connect: loop {
         // Paused: no connection and no reports; only a new config (kept) or the resume matter.
         while paused {
@@ -497,11 +545,10 @@ pub async fn run<P, Fut>(
                     if restart {
                         continue;
                     }
+                    park_unwired(&p, &c).await;
+                    tail_lit = false;
                     painter = Some(p);
-                    report(StripStatus::Connected {
-                        name: c.name.clone(),
-                        segments: c.segments,
-                    });
+                    report(connected_status(&c));
                 }
                 Ok(Err(e)) => {
                     log::error!("strip connection failed: {e}");
@@ -526,18 +573,22 @@ pub async fn run<P, Fut>(
                     continue 'connect;
                 }
                 (Some(p), StripMsg::Paint(cmd)) => {
-                    if let Err(e) = p.paint(c.segments, &cmd).await {
+                    if std::mem::take(&mut tail_lit) {
+                        park_unwired(p, &c).await;
+                    }
+                    if let Err(e) = p.paint(c.reported, &wired_cmd(&c, &cmd)).await {
                         log::warn!("strip paint failed: {e}");
                         report(StripStatus::Error);
                         painter = None;
                     }
                 }
                 (Some(p), StripMsg::Identify(n)) => {
-                    if let Err(e) = identify_via(p, n, c.segments).await {
+                    if let Err(e) = identify_via(p, n, c.reported).await {
                         log::warn!("strip identify failed: {e}");
                         report(StripStatus::Error);
                         painter = None;
                     }
+                    tail_lit = n > c.segments;
                 }
                 (None, StripMsg::Connect) => continue 'connect,
                 _ => {}
@@ -566,6 +617,14 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_strip_file_is_not_a_warning() {
+        assert_eq!(load_level(&StoreError::Missing), log::Level::Debug);
+        for e in [StoreError::Io, StoreError::Mode, StoreError::Invalid("id")] {
+            assert_eq!(load_level(&e), log::Level::Warn);
+        }
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -633,6 +692,8 @@ mod tests {
         let connected = StripStatus::Connected {
             name: "dj".into(),
             segments: 10,
+            reported: 10,
+            ip: None,
         };
         assert_eq!(
             *log.lock().unwrap(),
@@ -851,6 +912,39 @@ mod tests {
         })
     }
 
+    fn wired(n: u8, m: u8) -> StripConfig {
+        StripConfig {
+            segments: n,
+            reported: m,
+            ..cfg("w", None)
+        }
+    }
+
+    #[test]
+    fn header_keeps_reported_count() {
+        let c = wired(8, 10);
+        let red = Hsv {
+            h: 0,
+            s: 1000,
+            v: 1000,
+        };
+        let bytes = encode(c.reported, &wired_cmd(&c, &PaintCommand::Bucket(red))).unwrap();
+        // Header 10, pencil on 1..=8 only.
+        assert_eq!(hex(&bytes), "0001000a01000003e803e8880102030405060708");
+        let tail = park_tail(&c).unwrap();
+        assert_eq!(
+            hex(&encode(c.reported, &tail).unwrap()),
+            "0001000a0200000000000082090a"
+        );
+        // Every segment wired: nothing changes.
+        let full = wired(10, 10);
+        assert_eq!(
+            wired_cmd(&full, &PaintCommand::Bucket(red)),
+            PaintCommand::Bucket(red)
+        );
+        assert!(park_tail(&full).is_none());
+    }
+
     #[test]
     fn identify_sends_eraser_then_pencil_with_gap() {
         let rec = Recorder(Mutex::default());
@@ -863,6 +957,63 @@ mod tests {
         );
         assert_eq!(hex(&sent[1].1), "0001000a010000000003e88103");
         assert!(sent[1].0 - sent[0].0 >= Duration::from_millis(125));
+    }
+
+    struct Shared(Arc<Mutex<Vec<String>>>);
+
+    impl Painter for Shared {
+        fn paint(
+            &self,
+            segments: u8,
+            cmd: &PaintCommand,
+        ) -> impl Future<Output = Result<(), StripError>> + Send {
+            if let Ok(b) = encode(segments, cmd) {
+                self.0.lock().unwrap().push(hex(&b));
+            }
+            std::future::ready(Ok(()))
+        }
+    }
+
+    #[test]
+    fn a_lit_tail_segment_is_switched_off_before_the_next_paint() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let s = Arc::clone(&sent);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let red = Hsv {
+            h: 0,
+            s: 1000,
+            v: 1000,
+        };
+        paused(async move {
+            let task = run(
+                Some(wired(8, 10)),
+                move |_| {
+                    let p = Shared(Arc::clone(&s));
+                    async move { Ok(p) }
+                },
+                rx,
+                |_| {},
+            );
+            let feed = async {
+                settle().await;
+                tx.send(StripMsg::Identify(9)).unwrap_or_default();
+                tx.send(StripMsg::Paint(PaintCommand::Bucket(red)))
+                    .unwrap_or_default();
+                settle().await;
+                drop(tx);
+            };
+            tokio::join!(task, feed);
+        });
+        let sent = sent.lock().unwrap().clone();
+        let eraser_tail = "0001000a0200000000000082090a";
+        // connect parks the tail once; identify 9 lights it; the next paint parks it again first.
+        assert_eq!(
+            sent.iter().filter(|m| *m == eraser_tail).count(),
+            2,
+            "{sent:?}"
+        );
+        let last = sent.len() - 1;
+        assert_eq!(sent[last - 1], eraser_tail);
     }
 
     #[test]
@@ -886,6 +1037,7 @@ mod tests {
             name: name.into(),
             local_key: secrecy::SecretString::from("0123456789abcdef"),
             segments: 10,
+            reported: 10,
             last_ip,
         }
     }
@@ -966,6 +1118,8 @@ mod tests {
         let connected = |n: &str| StripStatus::Connected {
             name: n.into(),
             segments: 10,
+            reported: 10,
+            ip: None,
         };
         let r = drive_task(None, ok_fake, async |tx, _| {
             settle().await;
@@ -1010,7 +1164,9 @@ mod tests {
             r.last(),
             Some(&StripStatus::Connected {
                 name: "new".into(),
-                segments: 10
+                segments: 10,
+                reported: 10,
+                ip: None
             })
         );
     }
@@ -1022,6 +1178,8 @@ mod tests {
         let connected = |n: &str| StripStatus::Connected {
             name: n.into(),
             segments: 10,
+            reported: 10,
+            ip: None,
         };
         let r = drive_task(
             Some(cfg("old", None)),

@@ -26,7 +26,7 @@ lint:
     #!/usr/bin/env bash
     set -euo pipefail
     [ -n "${DEEBOO_IN_CONTAINER:-}" ] || exec {{docker}} lint
-    if [ -f ui/package.json ]; then just ui-dist; fi
+    if [ -f ui/package.json ]; then just ui-dist && scripts/check-mock-treeshake.sh; fi
     cargo clippy --locked --workspace --all-targets -- -D warnings
     cargo deny check
     hadolint docker/Dockerfile

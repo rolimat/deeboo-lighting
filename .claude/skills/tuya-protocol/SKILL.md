@@ -43,7 +43,12 @@ White is `S=0, V=1000`.
 - Two back-to-back messages per change at 2/s lost some and showed intermediate states and wrong order: space messages out.
 - The strip acks in ~100 ms and reports new state in ~400 ms; when the change becomes visible is NOT measured.
 - ICMP ping takes 1-2 s (wifi power saving); TCP is unaffected.
-- N comes from the header byte seen when the user paints in Smart Life (unverified assumption: the strip does not announce N).
+- M (`reported`) comes from the header byte seen when the user paints in Smart Life (the strip does not announce it).
+  N (`segments`, the wired ones, N <= M) is chosen by the user; the controller may report more than are wired
+  (e2e: M=10, N=8; Smart Life paints with header 10 and leaves 9-10 dark). `strip.json` holds both
+  (`reported` defaults to `segments` in old files). The header always carries M; the strip task paints only
+  1..=N (a bucket becomes a pencil on 1..=N), erases N+1..=M once on connect, and identify works on 1..=M.
+  Engine and library work in N; the padding happens only in `strip.rs`.
 
 ## Smart Life QR login (port of `tuya-device-sharing-sdk` 0.2.15, MIT)
 1. `POST https://apigw.iotbing.com/v1.0/m/life/home-assistant/qrcode/tokens?clientid=HA_3y9q4ak7g4ephrvke&usercode=<code>&schema=haauthorize`

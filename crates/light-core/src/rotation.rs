@@ -1,26 +1,47 @@
-//! Rotation of a moment's sequences and palettes (spec §6.3): which one plays next, and when.
+//! Rotation of a moment's sequences and of the set's palettes (spec §6.1-§6.2): which one plays next, and when.
 use crate::clock::Position;
 use crate::generator::SplitMix64;
-use crate::library::{Interval, MomentSet, Order, SeqRef};
+use crate::library::{Interval, MomentSet, Order, PaletteChange, SeqRef, Set};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Choice {
-    Sequence(SeqRef),
-    Palette(u32),
+/// Next index in `0..len` after `cur`, or `None` when nothing can change. Random never repeats.
+fn advance(order: Order, rng: &mut SplitMix64, len: usize, cur: usize) -> Option<usize> {
+    if len < 2 {
+        return None;
+    }
+    match order {
+        Order::Fixed => None,
+        Order::InOrder => Some((cur + 1) % len),
+        Order::Random => {
+            let r = usize::try_from(rng.below(len as u64 - 1)).unwrap_or(0);
+            Some(if r >= cur { r + 1 } else { r })
+        }
+    }
+}
+
+/// True on the bar start `beats` or more after the last change, which it then records. Only a bar
+/// start counts; a MIDI Start restarts the beat count, so a `last` in the future counts from now.
+fn due(last: &mut Option<u64>, pos: Position, beats: u64) -> bool {
+    if !pos.is_bar_start() {
+        return false;
+    }
+    let l = (*last.get_or_insert(pos.beat)).min(pos.beat);
+    *last = Some(l);
+    let due = pos.beat.saturating_sub(l) >= beats.max(1);
+    if due {
+        *last = Some(pos.beat);
+    }
+    due
 }
 
 #[derive(Clone, Debug)]
 pub struct Rotator {
     seqs: Vec<SeqRef>,
-    pals: Vec<u32>,
     order: Order,
     interval: Interval,
     rng: SplitMix64,
     seq_i: usize,
-    pal_i: usize,
     /// Beat of the last change (or of the first bar start seen).
     last: Option<u64>,
-    per_entry: bool,
     /// Calm: the first entry plays the current sequence, later ones advance.
     entered_once: bool,
 }
@@ -30,35 +51,12 @@ impl Rotator {
     pub fn new(set: &MomentSet, seed: u64) -> Self {
         Self {
             seqs: set.sequences.clone(),
-            pals: set.palettes.clone(),
             order: set.order,
             interval: set.interval,
             rng: SplitMix64::new(seed),
             seq_i: 0,
-            pal_i: 0,
             last: None,
-            per_entry: false,
             entered_once: false,
-        }
-    }
-
-    /// Calm: advance once each time the moment is entered, ignoring the interval.
-    #[must_use]
-    pub fn per_entry(mut self) -> Self {
-        self.per_entry = true;
-        self
-    }
-
-    /// Starts the palette position at the palette on show, so a drop always moves to another one.
-    #[must_use]
-    pub fn with_palette(mut self, shown: Option<u32>) -> Self {
-        self.sync_palette(shown);
-        self
-    }
-
-    pub fn sync_palette(&mut self, shown: Option<u32>) {
-        if let Some(i) = shown.and_then(|id| self.pals.iter().position(|p| *p == id)) {
-            self.pal_i = i;
         }
     }
 
@@ -68,75 +66,98 @@ impl Rotator {
         self.seqs.get(self.seq_i).copied()
     }
 
-    /// Next index in `0..len` after `cur`, or `None` when nothing can change. Random never repeats.
-    fn advance(order: Order, rng: &mut SplitMix64, len: usize, cur: usize) -> Option<usize> {
-        if len < 2 {
-            return None;
-        }
-        match order {
-            Order::Fixed => None,
-            Order::InOrder => Some((cur + 1) % len),
-            Order::Random => {
-                let r = usize::try_from(rng.below(len as u64 - 1)).unwrap_or(0);
-                Some(if r >= cur { r + 1 } else { r })
-            }
-        }
+    /// Index into the set's `sequences` of the one in force.
+    #[must_use]
+    pub fn index(&self) -> usize {
+        self.seq_i
     }
 
-    /// Called at bar starts (and on entering the moment, `entered`). An interval counts from the
-    /// last change; it fires only on a bar start, or a phrase start for phrase intervals. A set with
-    /// one sequence rotates its palette instead, so the interval still shows.
-    pub fn on_boundary(&mut self, pos: Position, entered: bool) -> Option<Choice> {
-        let fire = if self.per_entry {
-            let advance = entered && self.entered_once;
-            self.entered_once |= entered;
-            advance
-        } else {
-            if entered {
-                self.last = Some(pos.beat);
+    /// Called at bar starts (and on entering the moment, `entered`). `Bars(n)` counts from the last
+    /// change and fires only on a bar start; `OncePerBreak` advances on each entry after the first.
+    pub fn on_boundary(&mut self, pos: Position, entered: bool) -> Option<SeqRef> {
+        let fire = match self.interval {
+            Interval::OncePerBreak => {
+                let advance = entered && self.entered_once;
+                self.entered_once |= entered;
+                advance
             }
-            self.due(pos)
+            Interval::Bars(n) => {
+                if entered {
+                    self.last = Some(pos.beat);
+                }
+                due(&mut self.last, pos, u64::from(n) * 4)
+            }
         };
         if !fire {
             return None;
         }
-        if let Some(i) = Self::advance(self.order, &mut self.rng, self.seqs.len(), self.seq_i) {
+        if let Some(i) = advance(self.order, &mut self.rng, self.seqs.len(), self.seq_i) {
             self.seq_i = i;
-            return Some(Choice::Sequence(self.seqs[i]));
+            return Some(self.seqs[i]);
         }
-        // A lone `Generated` is a new sequence every time.
-        if self.order != Order::Fixed && self.seqs == [SeqRef::Generated] {
-            return Some(Choice::Sequence(SeqRef::Generated));
+        // A lone `Generated` or pattern is rebuilt with new params every time.
+        match self.seqs[..] {
+            [r @ (SeqRef::Generated | SeqRef::Pattern(_))] if self.order != Order::Fixed => Some(r),
+            _ => None,
         }
-        self.on_drop().map(Choice::Palette)
+    }
+}
+
+/// The active set's palette rotation, independent of the moments.
+#[derive(Clone, Debug)]
+pub struct PaletteRotator {
+    pals: Vec<u32>,
+    order: Order,
+    change: PaletteChange,
+    rng: SplitMix64,
+    i: usize,
+    last: Option<u64>,
+}
+
+impl PaletteRotator {
+    /// Starts at the palette `shown` when the set has it, so the first change moves to another one.
+    #[must_use]
+    pub fn new(set: &Set, seed: u64, shown: Option<u32>) -> Self {
+        let i = shown
+            .and_then(|id| set.palettes.iter().position(|p| *p == id))
+            .unwrap_or(0);
+        Self {
+            pals: set.palettes.clone(),
+            order: set.palette_order,
+            change: set.palette_change,
+            rng: SplitMix64::new(seed),
+            i,
+            last: None,
+        }
     }
 
-    fn due(&mut self, pos: Position) -> bool {
-        let (beats, ok) = match self.interval {
-            Interval::Beats(n) => (u64::from(n), pos.is_bar_start()),
-            Interval::Bars(n) => (u64::from(n) * 4, pos.is_bar_start()),
-            Interval::Phrases(n) => (
-                u64::from(n) * u64::from(pos.phrase_bars) * 4,
-                pos.is_phrase_start(),
-            ),
-        };
-        if !ok {
-            return false;
-        }
-        // A MIDI Start restarts the beat count: a `last` in the future counts from now.
-        let last = (*self.last.get_or_insert(pos.beat)).min(pos.beat);
-        self.last = Some(last);
-        let due = pos.beat.saturating_sub(last) >= beats.max(1);
-        if due {
-            self.last = Some(pos.beat);
-        }
-        due
+    /// The palette the rotation is at.
+    #[must_use]
+    pub fn current(&self) -> Option<u32> {
+        self.pals.get(self.i).copied()
     }
 
-    /// The next palette, on a drop. `None` when the set has fewer than two or is fixed.
+    fn step(&mut self) -> Option<u32> {
+        self.i = advance(self.order, &mut self.rng, self.pals.len(), self.i)?;
+        self.current()
+    }
+
+    /// A drop: the next palette when the set changes `AtDrop`.
     pub fn on_drop(&mut self) -> Option<u32> {
-        let i = Self::advance(self.order, &mut self.rng, self.pals.len(), self.pal_i)?;
-        self.pal_i = i;
-        Some(self.pals[i])
+        (self.change == PaletteChange::AtDrop)
+            .then(|| self.step())
+            .flatten()
+    }
+
+    /// Every bar start: the next palette when `Bars(n)` bars have passed since the last change.
+    pub fn on_bar(&mut self, pos: Position) -> Option<u32> {
+        let PaletteChange::Bars(n) = self.change else {
+            return None;
+        };
+        if due(&mut self.last, pos, u64::from(n) * 4) {
+            self.step()
+        } else {
+            None
+        }
     }
 }

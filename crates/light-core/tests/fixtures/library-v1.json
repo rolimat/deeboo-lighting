@@ -1,0 +1,382 @@
+{
+ "schemaVersion": 1,
+ "shape": {
+  "pieces": [
+   {
+    "x": 0,
+    "y": 0,
+    "angle": 0,
+    "len": 1
+   },
+   {
+    "x": 1,
+    "y": 0,
+    "angle": 0,
+    "len": 1
+   },
+   {
+    "x": 2,
+    "y": 0,
+    "angle": 0,
+    "len": 1
+   },
+   {
+    "x": 3,
+    "y": 0,
+    "angle": 0,
+    "len": 1
+   }
+  ]
+ },
+ "palettes": [
+  [
+   1,
+   {
+    "name": "Ember",
+    "principal": {
+     "h": 10,
+     "s": 1000,
+     "v": 1000
+    },
+    "contraste": {
+     "h": 30,
+     "s": 900,
+     "v": 900
+    },
+    "suave": {
+     "h": 50,
+     "s": 500,
+     "v": 600
+    }
+   }
+  ],
+  [
+   2,
+   {
+    "name": "Lagoon",
+    "principal": {
+     "h": 190,
+     "s": 1000,
+     "v": 1000
+    },
+    "contraste": {
+     "h": 220,
+     "s": 900,
+     "v": 900
+    },
+    "suave": {
+     "h": 170,
+     "s": 500,
+     "v": 600
+    }
+   }
+  ],
+  [
+   3,
+   {
+    "name": "Dusk",
+    "principal": {
+     "h": 270,
+     "s": 1000,
+     "v": 1000
+    },
+    "contraste": {
+     "h": 320,
+     "s": 900,
+     "v": 900
+    },
+    "suave": {
+     "h": 250,
+     "s": 500,
+     "v": 600
+    }
+   }
+  ],
+  [
+   4,
+   {
+    "name": "Mint",
+    "principal": {
+     "h": 150,
+     "s": 1000,
+     "v": 1000
+    },
+    "contraste": {
+     "h": 120,
+     "s": 900,
+     "v": 900
+    },
+    "suave": {
+     "h": 180,
+     "s": 500,
+     "v": 600
+    }
+   }
+  ]
+ ],
+ "sequences": [
+  [
+   1,
+   {
+    "name": "Pulse",
+    "moment": "rhythm",
+    "steps": [
+     {
+      "len": "one",
+      "roles": [
+       "principal",
+       "contraste",
+       "suave",
+       "off"
+      ]
+     },
+     {
+      "len": "one",
+      "roles": [
+       "principal",
+       "contraste",
+       "suave",
+       "off"
+      ]
+     },
+     {
+      "len": "one",
+      "roles": [
+       "principal",
+       "contraste",
+       "suave",
+       "off"
+      ]
+     },
+     {
+      "len": "one",
+      "roles": [
+       "principal",
+       "contraste",
+       "suave",
+       "off"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   2,
+   {
+    "name": "Wash",
+    "moment": "calm",
+    "steps": [
+     {
+      "len": "four",
+      "roles": [
+       "principal",
+       "contraste",
+       "suave",
+       "off"
+      ]
+     },
+     {
+      "len": "four",
+      "roles": [
+       "principal",
+       "contraste",
+       "suave",
+       "off"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   3,
+   {
+    "name": "Rise",
+    "moment": "buildUp",
+    "steps": [
+     {
+      "len": "one",
+      "roles": [
+       "principal",
+       "principal",
+       "principal",
+       "principal"
+      ]
+     },
+     {
+      "len": "one",
+      "roles": [
+       "principal",
+       "principal",
+       "principal",
+       "principal"
+      ]
+     },
+     {
+      "len": "one",
+      "roles": [
+       "principal",
+       "principal",
+       "principal",
+       "principal"
+      ]
+     },
+     {
+      "len": "one",
+      "roles": [
+       "principal",
+       "principal",
+       "principal",
+       "principal"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   4,
+   {
+    "name": "Skip",
+    "moment": "rhythm",
+    "steps": [
+     {
+      "len": "half",
+      "roles": [
+       "principal",
+       "contraste",
+       "suave",
+       "off"
+      ]
+     },
+     {
+      "len": "one",
+      "roles": [
+       "principal",
+       "contraste",
+       "suave",
+       "off"
+      ]
+     },
+     {
+      "len": "one",
+      "roles": [
+       "principal",
+       "contraste",
+       "suave",
+       "off"
+      ]
+     },
+     {
+      "len": "one",
+      "roles": [
+       "principal",
+       "contraste",
+       "suave",
+       "off"
+      ]
+     }
+    ]
+   }
+  ]
+ ],
+ "sets": [
+  {
+   "id": 1,
+   "name": "Club night",
+   "rhythm": {
+    "sequences": [
+     {
+      "id": 1
+     },
+     {
+      "id": 4
+     },
+     "generated"
+    ],
+    "palettes": [
+     1,
+     2
+    ],
+    "order": "random",
+    "interval": {
+     "phrases": 1
+    }
+   },
+   "calm": {
+    "sequences": [
+     {
+      "id": 2
+     }
+    ],
+    "palettes": [
+     3
+    ],
+    "order": "inOrder",
+    "interval": {
+     "phrases": 1
+    }
+   },
+   "buildup": {
+    "sequences": [
+     {
+      "id": 3
+     }
+    ],
+    "palettes": [
+     2,
+     4
+    ],
+    "order": "fixed",
+    "interval": {
+     "beats": 6
+    }
+   }
+  },
+  {
+   "id": 2,
+   "name": "Warm up",
+   "rhythm": {
+    "sequences": [
+     {
+      "id": 1
+     }
+    ],
+    "palettes": [
+     3,
+     1
+    ],
+    "order": "inOrder",
+    "interval": {
+     "bars": 4
+    }
+   },
+   "calm": {
+    "sequences": [
+     "generated"
+    ],
+    "palettes": [
+     3
+    ],
+    "order": "random",
+    "interval": {
+     "bars": 2
+    }
+   },
+   "buildup": {
+    "sequences": [
+     {
+      "id": 3
+     }
+    ],
+    "palettes": [
+     1
+    ],
+    "order": "random",
+    "interval": {
+     "bars": 2
+    }
+   }
+  }
+ ],
+ "activeSet": 1,
+ "activePalette": 2
+}

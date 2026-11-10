@@ -72,3 +72,24 @@ proptest! {
         prop_assert!(check(&g, n));
     }
 }
+
+#[test]
+fn off_axis_pieces_use_their_true_centre() {
+    // The 315-degree piece rises to the right: its centre is above the flat one's.
+    let flat = Piece {
+        x: 0.0,
+        y: 9.7,
+        angle: 0,
+        len: 1,
+    };
+    let up = Piece {
+        x: 10.0,
+        y: 10.0,
+        angle: 315,
+        len: 4,
+    };
+    let g = groups(&Shape {
+        pieces: vec![up, flat],
+    });
+    assert_eq!(g.top_bottom[0], vec![1]);
+}

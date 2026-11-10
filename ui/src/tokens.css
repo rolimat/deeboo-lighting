@@ -1,0 +1,8 @@
+/* Text size roles: the one source of truth for the popover (styles.css) and the editor (editor.css, via Tailwind tokens). */
+:root {
+  --fs-display: 26px; /* big BPM */
+  --fs-title: 15px; /* headers: tracks, sections, guide, role names */
+  --fs-body: 13px; /* body, buttons, chips, items, inputs, status */
+  --fs-small: 12px; /* secondary / dim text, lengths, hints */
+  --fs-label: 11px; /* uppercase field labels */
+}

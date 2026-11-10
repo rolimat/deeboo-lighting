@@ -35,6 +35,95 @@ pub fn forward(tx: &SyncSender<Input>, dropped: &AtomicU64, clock: &MonoClock, m
     }
 }
 
+/// The OS list of MIDI sources (a fake in tests). Our own virtual port is never a source.
+pub trait EndpointProvider {
+    fn sources(&self) -> Vec<String>;
+}
+
+/// Re-lists and tells the engine only when the list differs from `last`.
+pub fn notify_if_changed(
+    provider: &impl EndpointProvider,
+    last: &mut Vec<String>,
+    tx: &SyncSender<Input>,
+) {
+    let now = provider.sources();
+    if now != *last && tx.try_send(Input::SourcesChanged(now.clone())).is_ok() {
+        // A full queue keeps `last` stale so the next notification retries.
+        *last = now;
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod watcher {
+    use super::{EndpointProvider, VIRTUAL_PORT, notify_if_changed};
+    use crate::runtime::Input;
+    use coremidi::{Client, Notification, Sources};
+    use std::sync::mpsc::SyncSender;
+
+    struct CoreMidi;
+
+    impl EndpointProvider for CoreMidi {
+        fn sources(&self) -> Vec<String> {
+            Sources
+                .into_iter()
+                .filter_map(|s| s.display_name())
+                .filter(|n| n != VIRTUAL_PORT)
+                .collect()
+        }
+    }
+
+    /// `CoreMIDI` refreshes its per-process endpoint cache only through notifications delivered on
+    /// a run loop; midir's clients live on threads without one, so this thread runs one.
+    pub fn start(tx: SyncSender<Input>) {
+        let spawned = std::thread::Builder::new()
+            .name("midi-watch".into())
+            .spawn(move || {
+                let mut last = Vec::new();
+                let tx2 = tx.clone();
+                let client = Client::new_with_notifications(
+                    "Deeboo Lighting watch",
+                    move |n: &Notification| {
+                        if matches!(
+                            n,
+                            Notification::ObjectAdded(_)
+                                | Notification::ObjectRemoved(_)
+                                | Notification::SetupChanged
+                        ) {
+                            notify_if_changed(&CoreMidi, &mut last, &tx2);
+                        }
+                    },
+                );
+                let Ok(_client) = client else {
+                    log::warn!("MIDI watcher not started");
+                    return;
+                };
+                // The first list, for sources that exist at launch.
+                notify_if_changed(&CoreMidi, &mut Vec::new(), &tx);
+                core_foundation::runloop::CFRunLoop::run_current();
+            });
+        if let Err(e) = spawned {
+            log::warn!("MIDI watcher thread not started: {e}");
+        }
+    }
+}
+
+/// Starts the thread that reports sources appearing and disappearing (macOS only).
+pub fn watch_sources(tx: &SyncSender<Input>) {
+    #[cfg(target_os = "macos")]
+    watcher::start(tx.clone());
+    // Other hosts have no notification run loop: one listing at start.
+    #[cfg(not(target_os = "macos"))]
+    {
+        struct Listing;
+        impl EndpointProvider for Listing {
+            fn sources(&self) -> Vec<String> {
+                crate::devices::midi_sources()
+            }
+        }
+        notify_if_changed(&Listing, &mut Vec::new(), tx);
+    }
+}
+
 pub struct MidiIn {
     _virtual: Option<MidiInputConnection<()>>,
     source: Option<(String, MidiInputConnection<()>)>,
@@ -147,5 +236,26 @@ mod tests {
         }
         assert_eq!(dropped.load(Ordering::Relaxed), 3);
         assert_eq!(rx.try_iter().count(), 2);
+    }
+
+    struct Fake(std::cell::RefCell<Vec<String>>);
+    impl EndpointProvider for Fake {
+        fn sources(&self) -> Vec<String> {
+            self.0.borrow().clone()
+        }
+    }
+
+    #[test]
+    fn watcher_emits_only_when_the_list_changes() {
+        let (tx, rx) = sync_channel(8);
+        let p = Fake(std::cell::RefCell::new(vec!["A".into()]));
+        let mut last = Vec::new();
+        notify_if_changed(&p, &mut last, &tx);
+        notify_if_changed(&p, &mut last, &tx);
+        p.0.borrow_mut().push("B".into());
+        notify_if_changed(&p, &mut last, &tx);
+        let got: Vec<_> = rx.try_iter().collect();
+        assert_eq!(got.len(), 2);
+        assert!(matches!(&got[1], Input::SourcesChanged(l) if l == &["A", "B"]));
     }
 }

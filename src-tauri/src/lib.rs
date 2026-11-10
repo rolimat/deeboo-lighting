@@ -44,6 +44,8 @@ pub fn run() -> tauri::Result<()> {
             commands::save_library,
             commands::select_set,
             commands::select_palette,
+            commands::set_live_set,
+            commands::pattern_sequence,
             commands::save_settings,
             commands::list_midi_sources,
             commands::list_audio_inputs,
@@ -57,17 +59,32 @@ pub fn run() -> tauri::Result<()> {
             commands::strip_identify,
             commands::identify_segment,
             commands::wizard_save,
+            commands::set_wired_segments,
             commands::message_counts,
             commands::preview_generated,
+            commands::preview_palette,
+            commands::preview_sequence,
+            commands::calibrate_latency,
             commands::detection_watch,
             commands::set_detection_thresholds
         ])
         .on_window_event(|window, event| {
             // Closing the editor mid-wizard must revoke the cloud session and drop the key.
-            if window.label() == "editor" && matches!(event, tauri::WindowEvent::Destroyed) {
-                let app = window.app_handle();
-                app.state::<commands::AppState>()
-                    .editor_closed(&commands::wizard_emit(app));
+            if window.label() != "editor" {
+                return;
+            }
+            let app = window.app_handle();
+            match event {
+                // The editor shows the live readout while it is open.
+                tauri::WindowEvent::Focused(true) => {
+                    app.state::<commands::AppState>().set_editor_visible(true);
+                }
+                tauri::WindowEvent::Destroyed => {
+                    let state = app.state::<commands::AppState>();
+                    state.set_editor_visible(false);
+                    state.editor_closed(&commands::wizard_emit(app));
+                }
+                _ => {}
             }
         })
         .setup(|app| {
@@ -76,6 +93,9 @@ pub fn run() -> tauri::Result<()> {
             let state = app.state::<commands::AppState>();
             state.init_settings(dir.join("settings.json"));
             let strip = strip::load(&dir);
+            if editor_window::first_launch_section(strip.is_some()).is_some() {
+                editor_window::open_at_launch(app.handle());
+            }
             state.init_library(
                 dir.join("library.json"),
                 strip

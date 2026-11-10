@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { StripStatus, Status, Settings, MomentName } from "../api";
+import type { StripStatus, Status, Settings, MomentName, Selection } from "../api";
 
 export interface QrMatrix {
   size: number;
@@ -29,13 +29,29 @@ export type WizardState =
   | { kind: "saved"; device: DeviceDto; segments: number }
   | { kind: "failed"; step: WizardStep; message: string };
 
-export type Interval = { beats: number } | { bars: number } | { phrases: number };
-export type SeqRef = { id: number } | "generated";
+export type PatternName =
+  | "halves"
+  | "endsCentre"
+  | "oddEven"
+  | "quarters"
+  | "snake"
+  | "mirror"
+  | "drift"
+  | "sparse"
+  | "groupFlash"
+  | "fastSnake"
+  | "strobe";
+export type Interval = { bars: number } | "oncePerBreak";
+export type SeqRef = { id: number } | "generated" | { pattern: PatternName };
+export type PaletteChange = "atDrop" | { bars: number };
+export type Order = "inOrder" | "random" | "fixed";
 export interface Piece {
   x: number;
   y: number;
-  angle: 0 | 90 | 180 | 270;
-  len: 1 | 2 | 3 | 4;
+  /** Degrees clockwise, a multiple of 15 below 360. */
+  angle: number;
+  /** Cells, 1 to 4. */
+  len: number;
 }
 export interface Hsv {
   h: number;
@@ -59,8 +75,7 @@ export interface Sequence {
 }
 export interface MomentSet {
   sequences: SeqRef[];
-  palettes: number[];
-  order: "inOrder" | "random" | "fixed";
+  order: Order;
   interval: Interval;
 }
 export interface LibrarySet {
@@ -69,6 +84,9 @@ export interface LibrarySet {
   rhythm: MomentSet;
   calm: MomentSet;
   buildup: MomentSet;
+  palettes: number[];
+  paletteOrder: Order;
+  paletteChange: PaletteChange;
 }
 /**
  * Mirrors `light_core::library::Library`. Ids are assigned by Rust: an id the saved library does not
@@ -77,7 +95,7 @@ export interface LibrarySet {
  * library with the real ids.
  */
 export interface Library {
-  schemaVersion: 1;
+  schemaVersion: 2;
   shape: { pieces: Piece[] };
   palettes: [number, Palette][];
   sequences: [number, Sequence][];
@@ -114,6 +132,21 @@ export const api = {
   /** An example of what Generated plays for a moment, built for the saved shape with a fresh seed. */
   previewGenerated: (moment: MomentName): Promise<Sequence> =>
     invoke("preview_generated", { moment }),
+  /** A pattern as an editable sequence for the strip's shape (Duplicate to edit) or a read-only preview. */
+  patternSequence: (pattern: PatternName, seed: number): Promise<Sequence> =>
+    invoke("pattern_sequence", { pattern, seed }),
+  /** "Show on strip": plays `sequence` (a library id) in `palette` on the real strip until switched off. */
+  previewPalette: (on: boolean, palette: Palette, sequence: number): Promise<void> =>
+    invoke("preview_palette", { on, palette, sequence }),
+  /** Makes a set live (the engine, not the library); resolves to the new selection. */
+  setLiveSet: (id: number): Promise<Selection> => invoke("set_live_set", { id }),
+  /** Hold-to-preview: plays one set clip in `palette` on the real strip until switched off. */
+  previewSequence: (
+    on: boolean,
+    palette: Palette,
+    sequence: SeqRef,
+    moment: MomentName,
+  ): Promise<void> => invoke("preview_sequence", { on, palette, sequence, moment }),
   wizardStart: (userCode: string): Promise<void> => invoke("wizard_start", { userCode }),
   wizardChoose: (deviceId: string): Promise<void> => invoke("wizard_choose", { deviceId }),
   wizardRetry: (): Promise<void> => invoke("wizard_retry"),
@@ -121,8 +154,27 @@ export const api = {
   stripIdentify: (segment: number): Promise<void> => invoke("strip_identify", { segment }),
   /** Flashes a segment (1-based) through the app's own strip connection; rejects with a short message. */
   identifySegment: (segment: number): Promise<void> => invoke("identify_segment", { segment }),
-  wizardSave: (): Promise<void> => invoke("wizard_save"),
+  wizardSave: (wired: number): Promise<void> => invoke("wizard_save", { wired }),
+  /** Changes how many segments are wired (1..=what the controller reports); returns the resized library. */
+  setWiredSegments: (n: number): Promise<Library> => invoke("set_wired_segments", { n }),
   getSettings: (): Promise<Settings> => invoke("get_settings"),
+  /** Applies at once (no undo); resolves to the stored settings. */
+  saveSettings: (settings: Settings): Promise<Settings> => invoke("save_settings", { settings }),
+  listMidiSources: (): Promise<string[]> => invoke("list_midi_sources"),
+  listAudioInputs: (): Promise<string[]> => invoke("list_audio_inputs"),
+  /** The OS's MIDI sources changed (event `midi-sources`; no polling). */
+  onMidiSources: (cb: (sources: string[]) => void): Promise<UnlistenFn> =>
+    listen<string[]>("midi-sources", (e) => cb(e.payload)),
+  /** Latency calibration: the strip flashes white on every beat while the clock plays, until `false`. */
+  calibrateLatency: (on: boolean): Promise<void> => invoke("calibrate_latency", { on }),
+  quit: (): Promise<void> => invoke("quit"),
+  /** The live readout; the backend pushes it on every change (event `status`). */
+  getFullStatus: (): Promise<Status> => invoke("get_status"),
+  /** The editor was already open and was asked to show another tab (event `editor-section`). */
+  onSection: (cb: (section: string) => void): Promise<UnlistenFn> =>
+    listen<string>("editor-section", (e) => cb(e.payload)),
+  onStatus: (cb: (status: Status) => void): Promise<UnlistenFn> =>
+    listen<Status>("status", (e) => cb(e.payload)),
   /** The editor's Detection section is open (`true`) or closed: `detector` events flow only while open. */
   detectionWatch: (on: boolean): Promise<void> => invoke("detection_watch", { on }),
   /** Whole dB; rejects with a short message when out of range. */

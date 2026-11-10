@@ -5,7 +5,6 @@ import { StepChoose } from "./StepChoose";
 import { StepIdentify } from "./StepIdentify";
 import { StepSearch } from "./StepSearch";
 import { StepSegments } from "./StepSegments";
-import { ShapeEditor } from "./ShapeEditor";
 import { StepUserCode } from "./StepUserCode";
 
 /** Fire and forget: a rejected command must not crash the view; Rust re-emits the real state. */
@@ -38,7 +37,27 @@ function CancelButton() {
   );
 }
 
-function Step({ state }: { state: WizardState }) {
+/** What the Strip header says while the wizard runs; `null` when it has nothing to add. */
+export function wizardLine(state: WizardState): string | null {
+  switch (state.kind) {
+    case "waitingScan":
+      return "Waiting for you to confirm in Smart Life";
+    case "chooseStrip":
+      return "Choose your strip";
+    case "searching":
+      return `Looking for ${state.device.name} on your wifi`;
+    case "listening":
+      return `Connected to ${state.device.name} — waiting for paint data`;
+    case "identify":
+      return `Connected to ${state.device.name} — checking segments`;
+    case "saved":
+      return `Connected to ${state.device.name}`;
+    default:
+      return null;
+  }
+}
+
+function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
   switch (state.kind) {
     case "idle":
       return <StepUserCode onSubmit={api.wizardStart} />;
@@ -78,16 +97,18 @@ function Step({ state }: { state: WizardState }) {
     case "identify":
       return (
         <StepIdentify
-          segments={state.segments}
+          detected={state.segments}
           onPiece={(n) => void api.stripIdentify(n).catch(swallow)}
-          onSave={() => api.wizardSave()}
+          onSave={(wired) => api.wizardSave(wired)}
         />
       );
     case "saved":
       return (
         <div class="space-y-4">
           <p>{`Connected: ${state.device.name} (${state.segments} segments).`}</p>
-          <ShapeEditor segments={state.segments} />
+          <button type="button" onClick={onDone} class="rounded-card bg-green px-4 py-2">
+            Draw the shape
+          </button>
         </div>
       );
     case "failed":
@@ -108,8 +129,17 @@ function Step({ state }: { state: WizardState }) {
   }
 }
 
-export function Wizard() {
+export function Wizard({
+  onState,
+  onDone,
+}: {
+  /** Every wizard state, so the header can show it instead of the runtime's. */
+  onState?: (s: WizardState) => void;
+  /** After the strip is saved: leave the wizard for the shape. */
+  onDone?: () => void;
+}) {
   const [state, setState] = useState<WizardState>({ kind: "idle" });
+  useEffect(() => onState?.(state), [state]);
   useEffect(() => {
     let off = () => {};
     let gone = false;
@@ -126,5 +156,5 @@ export function Wizard() {
       window.removeEventListener("beforeunload", cancel);
     };
   }, []);
-  return <Step state={state} />;
+  return <Step state={state} onDone={onDone ?? swallow} />;
 }

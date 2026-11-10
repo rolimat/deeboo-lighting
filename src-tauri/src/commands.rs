@@ -13,6 +13,7 @@ use crate::runtime::{Input, RuntimeHandle};
 
 use crate::library_store;
 use crate::settings::{self, Settings};
+use crate::strip_store;
 use crate::wizard::session::{Emit, RealLan, Wizard};
 use light_core::library::Library;
 use light_core::model::{Sequence, resolve};
@@ -30,7 +31,13 @@ pub enum StripStatus {
     Connecting,
     Connected {
         name: String,
+        /// Wired segments.
         segments: u8,
+        /// What the controller reports (at least `segments`).
+        reported: u8,
+        /// The strip's LAN address (private ranges only), when known.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ip: Option<std::net::Ipv4Addr>,
     },
     Error,
     /// The strip refused the saved key (re-added in Smart Life): pair again.
@@ -62,6 +69,9 @@ pub struct AudioStatus {
 #[serde(rename_all = "camelCase")]
 pub struct Selection {
     pub set: String,
+    pub set_id: u32,
+    /// The palette follows the set's rotation (nothing pinned).
+    pub palette_auto: bool,
     pub palette: PaletteView,
 }
 
@@ -75,11 +85,20 @@ pub struct PaletteView {
 
 impl Selection {
     pub fn of(lib: &Library) -> Self {
-        let p = lib.current_palette();
+        Self::in_force(lib, None)
+    }
+
+    /// `in_force`: the palette the engine plays (library id), which under Auto is the rotation's.
+    pub fn in_force(lib: &Library, in_force: Option<u32>) -> Self {
+        let p = in_force
+            .and_then(|id| lib.palettes.iter().find(|(i, _)| *i == id))
+            .map_or_else(|| lib.current_palette(), |(_, p)| p.clone());
         Self {
+            set_id: lib.active_set,
             set: lib
                 .current_set()
                 .map_or_else(String::new, |s| s.name.clone()),
+            palette_auto: lib.active_palette.is_none(),
             palette: PaletteView {
                 name: p.name,
                 colours: [p.principal, p.contraste, p.suave],
@@ -113,6 +132,18 @@ pub struct Status {
     pub midi: MidiStatus,
     pub audio: AudioStatus,
     pub selection: Selection,
+    /// Which entry of the live set's list plays now (the Sets tab highlights it).
+    pub clip: Option<ClipDto>,
+}
+
+/// `PlayingClip` for the UI.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipDto {
+    pub moment: MomentDto,
+    pub index: usize,
+    pub elapsed: u32,
+    pub total: u32,
 }
 
 impl Status {
@@ -135,6 +166,7 @@ impl Status {
             },
             audio: AudioStatus::default(),
             selection: Selection::of(&Library::builtin(10)),
+            clip: None,
         }
     }
 }
@@ -191,8 +223,10 @@ pub struct AppState {
     /// `library.json`; set at startup.
     library_path: Mutex<Option<std::path::PathBuf>>,
     runtime: Mutex<Option<RuntimeHandle>>,
-    /// Read by the engine thread: status goes out only while this is true.
+    /// Read by the engine thread: status goes out only while this is true (popover or editor shows).
     visible: Arc<AtomicBool>,
+    popover_shown: AtomicBool,
+    editor_shown: AtomicBool,
     wizard: Wizard,
 }
 
@@ -206,8 +240,23 @@ impl Default for AppState {
             library_path: Mutex::new(None),
             runtime: Mutex::new(None),
             visible: Arc::new(AtomicBool::new(false)),
+            popover_shown: AtomicBool::new(false),
+            editor_shown: AtomicBool::new(false),
             wizard: Wizard::default(),
         }
+    }
+}
+
+/// The live set exists (else the first) and the pinned palette belongs to it (else Auto).
+fn keep_live_valid(lib: &mut Library) {
+    if lib.current_set().is_none()
+        && let Some(first) = lib.sets.first()
+    {
+        lib.active_set = first.id;
+    }
+    let pin = lib.active_palette;
+    if pin.is_some_and(|p| lib.current_set().is_none_or(|s| !s.palettes.contains(&p))) {
+        lib.active_palette = None;
     }
 }
 
@@ -224,7 +273,8 @@ impl AppState {
 
     /// Loads the library file (built-ins for `segments` on any problem) and remembers its path.
     pub fn init_library(&self, path: std::path::PathBuf, segments: u8) {
-        *lock(&self.library) = library_store::load(&path, segments);
+        let phrase_bars = lock(&self.settings).phrase_bars;
+        *lock(&self.library) = library_store::load(&path, segments, phrase_bars);
         *lock(&self.library_path) = Some(path);
     }
 
@@ -252,35 +302,65 @@ impl AppState {
         }
         let mut current = lock(&self.library);
         let mut lib = current.clone();
-        let step = |ids: Vec<u32>, cur: Option<u32>| -> Option<u32> {
-            let at = cur
-                .and_then(|c| ids.iter().position(|i| *i == c))
-                .unwrap_or(0);
-            let len = ids.len().max(1);
-            let next = if delta > 0 {
+        let step = |len: usize, at: usize| {
+            if delta > 0 {
                 (at + 1) % len
             } else {
                 (at + len - 1) % len
-            };
-            ids.get(next).copied()
+            }
         };
         match pick {
             Pick::Set => {
-                let ids = lib.sets.iter().map(|s| s.id).collect();
-                lib.active_set = step(ids, Some(lib.active_set)).ok_or("no sets")?;
+                let at = lib
+                    .sets
+                    .iter()
+                    .position(|s| s.id == lib.active_set)
+                    .unwrap_or(0);
+                lib.active_set = lib.sets[step(lib.sets.len().max(1), at)..]
+                    .first()
+                    .ok_or("no sets")?
+                    .id;
+                keep_live_valid(&mut lib);
             }
             Pick::Palette => {
-                let ids = lib.palettes.iter().map(|p| p.0).collect();
-                lib.active_palette = step(ids, lib.current_palette_id());
+                // Auto sits at both ends of the wrap: Auto, p1 .. pn, Auto.
+                let mut ring = vec![None];
+                ring.extend(
+                    lib.current_set()
+                        .into_iter()
+                        .flat_map(|s| &s.palettes)
+                        .map(|p| Some(*p)),
+                );
+                let at = ring
+                    .iter()
+                    .position(|p| *p == lib.active_palette)
+                    .unwrap_or(0);
+                lib.active_palette = ring[step(ring.len(), at)];
             }
         }
         self.save_into(&mut current, lib).map(|l| Selection::of(&l))
     }
 
+    /// Makes `id` the live set (Sets button); a pin the new set does not hold goes back to Auto.
+    pub fn set_live_set(&self, id: u32) -> Result<Selection, String> {
+        let mut current = lock(&self.library);
+        if !current.sets.iter().any(|s| s.id == id) {
+            return Err("No such set.".into());
+        }
+        let mut lib = current.clone();
+        lib.active_set = id;
+        keep_live_valid(&mut lib);
+        self.save_into(&mut current, lib).map(|l| Selection::of(&l))
+    }
+
     /// Validates, assigns ids to new entries, persists, then swaps. Any failure keeps the previous
     /// library on disk and in memory; messages never echo the input.
-    fn save_library(&self, new: Library) -> Result<Library, String> {
+    fn save_library(&self, mut new: Library) -> Result<Library, String> {
         let mut current = lock(&self.library);
+        // The editor never moves the live selection; only the popover does.
+        new.active_set = current.active_set;
+        new.active_palette = current.active_palette;
+        keep_live_valid(&mut new);
         self.save_into(&mut current, new)
     }
 
@@ -319,6 +399,14 @@ impl AppState {
         Ok(new)
     }
 
+    /// The engine picked the only MIDI source by itself: keep it (a failed save is logged by
+    /// `save_settings`; the choice still holds until restart).
+    pub fn remember_midi_source(&self, name: &str) {
+        let mut s = self.settings();
+        s.midi_source = Some(name.to_string());
+        let _ = self.save_settings(s);
+    }
+
     /// Saves the Detection panel's thresholds (range-checked by `Settings::validate`); the rest of
     /// the settings stay as they are.
     fn set_thresholds(&self, t: Thresholds) -> Result<Settings, String> {
@@ -355,6 +443,15 @@ impl AppState {
         })
     }
 
+    /// Switching a preview or the calibration off must not be dropped by a full queue.
+    fn send_off(&self, input: Input) -> Result<(), String> {
+        if lock(&self.runtime).is_none() {
+            return Err("engine not running".into());
+        }
+        self.deliver(input);
+        Ok(())
+    }
+
     fn send_strip_pause(&self, pause: bool) {
         self.deliver(Input::StripPause(pause));
     }
@@ -377,9 +474,22 @@ impl AppState {
 
     /// Called by the tray when the popover shows or hides.
     pub fn set_popover_visible(&self, visible: bool) {
-        self.visible.store(visible, Ordering::Relaxed);
-        if visible && self.send(Input::PopoverShown).is_err() {
-            log::debug!("popover shown but the engine did not get the news");
+        self.popover_shown.store(visible, Ordering::Relaxed);
+        self.refresh_visible();
+    }
+
+    /// Called when the editor window opens or closes: it shows the live readout.
+    pub fn set_editor_visible(&self, visible: bool) {
+        self.editor_shown.store(visible, Ordering::Relaxed);
+        self.refresh_visible();
+    }
+
+    fn refresh_visible(&self) {
+        let any =
+            self.popover_shown.load(Ordering::Relaxed) || self.editor_shown.load(Ordering::Relaxed);
+        self.visible.store(any, Ordering::Relaxed);
+        if any && self.send(Input::PopoverShown).is_err() {
+            log::debug!("a window shown but the engine did not get the news");
         }
     }
 
@@ -394,6 +504,8 @@ impl AppState {
     pub fn editor_closed(&self, emit: &Emit) {
         self.wizard.cancel(emit);
         self.deliver(Input::DetectionWatch(false));
+        self.deliver(Input::PreviewPalette(None));
+        self.deliver(Input::Calibrate(false));
     }
 
     /// App exit: a running wizard is cancelled (its cloud session revoked) before the engine stops.
@@ -479,6 +591,14 @@ fn select(state: &AppState, pick: Pick, delta: i8) -> Result<Selection, String> 
     Ok(sel)
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn set_live_set(state: tauri::State<'_, AppState>, id: u32) -> Result<Selection, String> {
+    let sel = state.set_live_set(id)?;
+    state.deliver(Input::Library(Box::new(state.library())));
+    Ok(sel)
+}
+
 fn save_to(state: &AppState, library: Library) -> Result<Library, String> {
     let saved = state.save_library(library)?;
     state.deliver(Input::Library(Box::new(saved.clone())));
@@ -499,7 +619,7 @@ pub fn save_library(
 /// so the editor can flag steps the strip would show in several parts. Messages never echo input.
 fn message_counts_of(lib: &Library, seq: &Sequence, palette_id: u32) -> Result<Vec<u8>, String> {
     if seq.steps.len() > light_core::library::MAX_STEPS {
-        return Err("A sequence has at most 64 steps.".into());
+        return Err("A sequence has at most 128 steps.".into());
     }
     seq.validate(lib.segments())
         .map_err(|_| "Every step needs one role per segment.".to_string())?;
@@ -532,6 +652,32 @@ pub fn message_counts(
     message_counts_of(&state.library(), &sequence, palette_id)
 }
 
+/// One example of `pattern` with random parameters, for the library's own segment count and shape
+/// (every sequence in the library matches it; no strip needed).
+fn pattern_sequence_of(
+    lib: &Library,
+    pattern: light_core::patterns::Pattern,
+    seed: u64,
+) -> Result<Sequence, String> {
+    let n = lib.segments();
+    let groups = light_core::groups::groups(&lib.shape);
+    let seq = light_core::generator::Generator::new(seed).pattern(pattern, &groups, n);
+    seq.validate(n)
+        .map_err(|_| "Could not build that pattern for this library.".to_string())?;
+    Ok(seq)
+}
+
+/// A named pattern as an editable sequence ("Duplicate to edit") or a read-only preview.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn pattern_sequence(
+    state: tauri::State<'_, AppState>,
+    pattern: light_core::patterns::Pattern,
+    seed: u64,
+) -> Result<Sequence, String> {
+    pattern_sequence_of(&state.library(), pattern, seed)
+}
+
 /// One example of what Generated would play for `moment`, built for the saved shape and a fresh seed.
 fn preview_generated_of(lib: &Library, moment: Moment, seed: u64) -> Result<Sequence, String> {
     let n = lib.segments();
@@ -558,6 +704,105 @@ pub fn preview_generated(
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(1, |d| u64::try_from(d.as_micros()).unwrap_or(1));
     preview_generated_of(&state.library(), moment, seed)
+}
+
+/// What "Show on strip" plays: the palette as sent (range-checked) with the library's own sequence,
+/// which must fit the library's segments.
+fn preview_palette_of(
+    lib: &Library,
+    palette: light_core::model::Palette,
+    sequence: u32,
+) -> Result<Box<(light_core::model::Palette, Sequence)>, String> {
+    light_core::library::validate_palette(&palette).map_err(|e| e.to_string())?;
+    let seq = lib
+        .sequences
+        .iter()
+        .find(|(id, _)| *id == sequence)
+        .map(|(_, s)| s.clone())
+        .ok_or("No such sequence.")?;
+    seq.validate(lib.segments())
+        .map_err(|_| "That sequence does not fit the strip.")?;
+    Ok(Box::new((palette, seq)))
+}
+
+/// Shows `sequence` in `palette` on the strip (`on`), or hands the strip back to the show.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn preview_palette(
+    state: tauri::State<'_, AppState>,
+    on: bool,
+    palette: light_core::model::Palette,
+    sequence: u32,
+) -> Result<(), String> {
+    if !on {
+        return state.send_off(Input::PreviewPalette(None));
+    }
+    let p = Some(preview_palette_of(&state.library(), palette, sequence)?);
+    state.send(Input::PreviewPalette(p))
+}
+
+/// Setup's "Calibrate": while `on` and the clock plays, the strip flashes white on every beat instead of
+/// the show. Never persisted; the UI, a clock Stop and closing the editor all switch it off.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn calibrate_latency(state: tauri::State<'_, AppState>, on: bool) -> Result<(), String> {
+    if on {
+        state.send(Input::Calibrate(true))
+    } else {
+        state.send_off(Input::Calibrate(false))
+    }
+}
+
+/// What holding a set clip plays: the palette as sent (range-checked) with the clip's sequence, a
+/// pattern or a generated one, built for the saved shape; it must fit the strip.
+fn preview_sequence_of(
+    lib: &Library,
+    palette: light_core::model::Palette,
+    clip: light_core::library::SeqRef,
+    moment: Moment,
+    seed: u64,
+) -> Result<Box<(light_core::model::Palette, Sequence)>, String> {
+    use light_core::library::SeqRef;
+    light_core::library::validate_palette(&palette).map_err(|e| e.to_string())?;
+    let seq = match clip {
+        SeqRef::Id(id) => return preview_palette_of(lib, palette, id),
+        SeqRef::Pattern(p) => pattern_sequence_of(lib, p, seed)?,
+        SeqRef::Generated => preview_generated_of(lib, moment, seed)?,
+    };
+    Ok(Box::new((palette, seq)))
+}
+
+/// Hold-to-preview in Sets: plays one clip in `palette` on the strip (`on`), or hands the strip back.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn preview_sequence(
+    state: tauri::State<'_, AppState>,
+    on: bool,
+    palette: light_core::model::Palette,
+    sequence: light_core::library::SeqRef,
+    moment: MomentDto,
+) -> Result<(), String> {
+    if !on {
+        return state.send_off(Input::PreviewPalette(None));
+    }
+    let p = {
+        let moment = match moment {
+            MomentDto::Rhythm => Moment::Rhythm,
+            MomentDto::Calm => Moment::Calm,
+            MomentDto::BuildUp => Moment::BuildUp,
+        };
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| u64::try_from(d.as_micros()).unwrap_or(1));
+        Some(preview_sequence_of(
+            &state.library(),
+            palette,
+            sequence,
+            moment,
+            seed,
+        )?)
+    };
+    state.send(Input::PreviewPalette(p))
 }
 
 #[tauri::command]
@@ -644,7 +889,8 @@ pub async fn strip_identify(state: tauri::State<'_, AppState>, segment: u8) -> R
 /// The strip must be connected and `segment` (1-based) one of its segments.
 fn identify_check(strip: &StripStatus, segment: u8) -> Result<(), String> {
     match strip {
-        StripStatus::Connected { segments, .. } if (1..=*segments).contains(&segment) => Ok(()),
+        // Counts what the strip reports, so the unwired tail can be checked too.
+        StripStatus::Connected { reported, .. } if (1..=*reported).contains(&segment) => Ok(()),
         StripStatus::Connected { .. } => Err("No such segment.".into()),
         _ => Err("Strip not connected.".into()),
     }
@@ -660,12 +906,16 @@ pub fn identify_segment(state: tauri::State<'_, AppState>, segment: u8) -> Resul
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
-pub fn wizard_save(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub fn wizard_save(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    wired: u8,
+) -> Result<(), String> {
     // `Saved` goes out only once the engine has the new strip; if it cannot take the news now, the
     // file is safe on disk and a restart still picks it up.
     state
         .wizard
-        .save(&state.strip_path()?, &wizard_emit(&app), |cfg| {
+        .save(&state.strip_path()?, &wizard_emit(&app), wired, |cfg| {
             if let Some(lib) = state.rebuild_unsaved_library(cfg.segments) {
                 state.deliver(Input::Library(Box::new(lib)));
             }
@@ -674,6 +924,69 @@ pub fn wizard_save(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> 
                 "Saved. Restart the app to use the new strip.".to_string()
             })
         })
+}
+
+/// The shape with exactly `n` pieces: the first ones stay; new ones continue from the last piece in
+/// its direction (one cell per step). shortcut: clamps at the grid edge instead of wrapping a row.
+fn with_wired(lib: &Library, n: u8) -> Library {
+    use light_core::library::{GRID, Piece};
+    let mut out = lib.clone();
+    out.shape.pieces.truncate(usize::from(n));
+    while out.shape.pieces.len() < usize::from(n) {
+        let last = out.shape.pieces.last().copied().unwrap_or(Piece {
+            x: 0.0,
+            y: 0.0,
+            angle: 0,
+            len: 1,
+        });
+        let (dx, dy): (f32, f32) = match last.angle {
+            90 => (0.0, 1.0),
+            180 => (-1.0, 0.0),
+            270 => (0.0, -1.0),
+            0 => (1.0, 0.0),
+            a => {
+                let (sin, cos) = f32::from(a).to_radians().sin_cos();
+                (cos, sin)
+            }
+        };
+        let step = f32::from(last.len.max(1));
+        out.shape.pieces.push(Piece {
+            x: dx.mul_add(step, last.x).clamp(0.0, GRID),
+            y: dy.mul_add(step, last.y).clamp(0.0, GRID),
+            ..last
+        });
+    }
+    out
+}
+
+impl AppState {
+    /// Saves the wired count in `strip.json` (mode and key untouched), then resizes the shape and the
+    /// sequences like a re-pair does (`save_library`).
+    fn set_wired(&self, n: u8) -> Result<Library, String> {
+        let path = self.strip_path()?;
+        let mut cfg = strip_store::load(&path).map_err(|_| "No strip saved yet.".to_string())?;
+        if !(1..=cfg.reported).contains(&n) {
+            return Err("Wired segments must be between 1 and what the strip reports.".into());
+        }
+        cfg.segments = n;
+        // Library first: if it fails, strip.json is not left ahead of it.
+        let lib = self.save_library(with_wired(&self.library(), n))?;
+        strip_store::save(&path, &cfg).map_err(|e| {
+            log::warn!("strip file not saved: {e}");
+            "Strip not saved.".to_string()
+        })?;
+        self.deliver(Input::StripChanged(cfg));
+        Ok(lib)
+    }
+}
+
+/// How many segments are wired (the strip may report more). Returns the resized library.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn set_wired_segments(state: tauri::State<'_, AppState>, n: u8) -> Result<Library, String> {
+    let lib = state.set_wired(n)?;
+    state.deliver(Input::Library(Box::new(lib.clone())));
+    Ok(lib)
 }
 
 /// The settings view's Quit button; `RunEvent::Exit` then stops the engine.
@@ -688,19 +1001,98 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preview_palette_validates_everything() {
+        use light_core::paint::Hsv;
+        let lib = Library::builtin(10);
+        let id = lib.sequences[0].0;
+        let pal = lib.palettes[0].1.clone();
+        let (p, s) = *preview_palette_of(&lib, pal.clone(), id).unwrap();
+        assert_eq!((p, s.name), (pal.clone(), lib.sequences[0].1.name.clone()));
+        assert!(preview_palette_of(&lib, pal.clone(), 999_999).is_err());
+        let mut bad = pal.clone();
+        bad.principal = Hsv { h: 361, s: 0, v: 0 };
+        assert!(preview_palette_of(&lib, bad, id).is_err());
+        let mut short = lib.clone();
+        short.sequences[0].1.steps[0].roles.pop();
+        assert!(preview_palette_of(&short, pal, id).is_err());
+    }
+
+    #[test]
+    fn preview_sequence_resolves_every_kind_of_clip() {
+        use light_core::library::SeqRef;
+        use light_core::paint::Hsv;
+        let lib = Library::builtin(10);
+        let id = lib.sequences[0].0;
+        let pal = lib.palettes[0].1.clone();
+        let m = Moment::Rhythm;
+        let (_, s) = *preview_sequence_of(&lib, pal.clone(), SeqRef::Id(id), m, 1).unwrap();
+        assert_eq!(s.name, lib.sequences[0].1.name);
+        assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Generated, m, 1).is_ok());
+        let pat = light_core::patterns::Pattern::Halves;
+        assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Pattern(pat), m, 1).is_ok());
+        assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Id(999_999), m, 1).is_err());
+        let mut bad = pal;
+        bad.principal = Hsv { h: 361, s: 0, v: 0 };
+        assert!(preview_sequence_of(&lib, bad.clone(), SeqRef::Generated, m, 1).is_err());
+        assert!(preview_sequence_of(&lib, bad, SeqRef::Pattern(pat), m, 1).is_err());
+    }
+
+    #[test]
+    fn closing_the_editor_switches_the_preview_off() {
+        let (state, rx) = full_queue();
+        let emit: Emit = Arc::new(|_| {});
+        state.editor_closed(&emit);
+        assert!(matches!(rx.recv(), Ok(Input::PopoverShown)));
+        let got: Vec<Input> = (0..3)
+            .map(|_| rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap())
+            .collect();
+        assert!(got.iter().any(|i| matches!(i, Input::PreviewPalette(None))));
+        assert!(got.iter().any(|i| matches!(i, Input::Calibrate(false))));
+    }
+
+    #[test]
+    fn status_flows_while_either_window_shows() {
+        let state = AppState::default();
+        let flag = state.visible_flag();
+        assert!(!flag.load(Ordering::Relaxed));
+        state.set_editor_visible(true);
+        assert!(flag.load(Ordering::Relaxed));
+        state.set_popover_visible(true);
+        state.set_editor_visible(false);
+        assert!(flag.load(Ordering::Relaxed), "the popover still shows");
+        state.set_popover_visible(false);
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "both hidden: nothing is sent"
+        );
+    }
+
+    #[test]
     fn status_serialises_as_the_ui_expects() {
         let json = serde_json::to_string(&Status::initial()).unwrap_or_default();
         assert_eq!(
             json,
-            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}}}"#
+            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","setId":1,"paletteAuto":true,"palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}},"clip":null}"#
+        );
+        let clip = ClipDto {
+            moment: MomentDto::Calm,
+            index: 1,
+            elapsed: 3,
+            total: 16,
+        };
+        assert_eq!(
+            serde_json::to_string(&clip).unwrap_or_default(),
+            r#"{"moment":"calm","index":1,"elapsed":3,"total":16}"#
         );
         let connected = StripStatus::Connected {
             name: "dj lights".into(),
             segments: 10,
+            reported: 10,
+            ip: None,
         };
         assert_eq!(
             serde_json::to_string(&connected).unwrap_or_default(),
-            r#"{"kind":"connected","name":"dj lights","segments":10}"#
+            r#"{"kind":"connected","name":"dj lights","segments":10,"reported":10}"#
         );
     }
 
@@ -739,8 +1131,13 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 23);
+        assert_eq!(commands.len(), 29);
         assert_eq!(granted, commands);
+        // The popover calls none of these; only the editor may.
+        let popover = include_str!("../capabilities/popover.json");
+        for unused in ["set-live-set", "list-midi-sources", "list-audio-inputs"] {
+            assert!(!popover.contains(unused), "{unused}");
+        }
     }
 
     #[test]
@@ -789,6 +1186,8 @@ mod tests {
         let on = StripStatus::Connected {
             name: "dj".into(),
             segments: 12,
+            reported: 12,
+            ip: None,
         };
         state.set_strip(on.clone());
         assert_eq!(lock(&state.status).strip, on);
@@ -799,6 +1198,8 @@ mod tests {
         let on = StripStatus::Connected {
             name: "dj".into(),
             segments: 10,
+            reported: 10,
+            ip: None,
         };
         assert_eq!(identify_check(&on, 1), Ok(()));
         assert_eq!(identify_check(&on, 10), Ok(()));
@@ -809,6 +1210,35 @@ mod tests {
             identify_check(&StripStatus::Connecting, 1),
             Err("Strip not connected.".into())
         );
+    }
+
+    #[test]
+    fn identify_check_counts_the_unwired_tail_too() {
+        let on = StripStatus::Connected {
+            name: "dj".into(),
+            segments: 8,
+            reported: 10,
+            ip: None,
+        };
+        for ok in [1, 8, 9, 10] {
+            assert_eq!(identify_check(&on, ok), Ok(()));
+        }
+        for bad in [0, 11] {
+            assert_eq!(identify_check(&on, bad), Err("No such segment.".into()));
+        }
+    }
+
+    #[test]
+    fn turning_preview_or_calibration_off_survives_a_full_queue() {
+        let (state, rx) = full_queue();
+        assert!(state.send_off(Input::PreviewPalette(None)).is_ok());
+        assert!(state.send_off(Input::Calibrate(false)).is_ok());
+        assert!(matches!(rx.recv(), Ok(Input::PopoverShown)));
+        let got: Vec<Input> = (0..2)
+            .map(|_| rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap())
+            .collect();
+        assert!(got.iter().any(|i| matches!(i, Input::PreviewPalette(None))));
+        assert!(got.iter().any(|i| matches!(i, Input::Calibrate(false))));
     }
 
     #[test]
@@ -879,12 +1309,107 @@ mod tests {
         assert_eq!(state.library(), lib);
     }
 
+    fn state_with_strip(n: u8, m: u8) -> (tempfile::TempDir, AppState) {
+        let (dir, state) = lib_state();
+        *lock(&state.settings_path) = Some(dir.path().join("settings.json"));
+        let cfg = strip_store::StripConfig {
+            id: "abc".into(),
+            name: "n".into(),
+            local_key: secrecy::SecretString::from("0123456789abcdef"),
+            segments: n,
+            reported: m,
+            last_ip: None,
+        };
+        strip_store::save(&dir.path().join("strip.json"), &cfg).unwrap();
+        (dir, state)
+    }
+
+    #[test]
+    fn connected_status_carries_the_reported_count() {
+        let s = StripStatus::Connected {
+            name: "dj".into(),
+            segments: 8,
+            reported: 10,
+            ip: None,
+        };
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(
+            (v["segments"].as_u64(), v["reported"].as_u64()),
+            (Some(8), Some(10))
+        );
+    }
+
+    #[test]
+    fn connected_status_shows_only_a_private_ip() {
+        let mut c = strip_store::StripConfig {
+            id: "bf1234".into(),
+            name: "dj".into(),
+            local_key: secrecy::SecretString::from("0123456789abcdef"),
+            segments: 8,
+            reported: 10,
+            last_ip: Some("192.168.1.42".parse().unwrap()),
+        };
+        let json = |c: &strip_store::StripConfig| {
+            serde_json::to_value(crate::strip::connected_status(c)).unwrap()
+        };
+        assert_eq!(json(&c)["ip"], "192.168.1.42");
+        c.last_ip = Some("8.8.8.8".parse().unwrap());
+        assert!(json(&c).get("ip").is_none());
+    }
+
+    #[test]
+    fn growing_continues_along_an_off_axis_piece() {
+        let mut lib = Library::builtin(1);
+        lib.shape.pieces[0] = light_core::library::Piece {
+            x: 10.0,
+            y: 10.0,
+            angle: 45,
+            len: 1,
+        };
+        let grown = with_wired(&lib, 2);
+        let p = grown.shape.pieces[1];
+        assert!(
+            (p.x - 10.707).abs() < 0.01 && (p.y - 10.707).abs() < 0.01,
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn set_wired_segments_keeps_existing_pieces() {
+        let (dir, state) = state_with_strip(10, 10);
+        let before = state.library();
+        let lib = state.set_wired(8).unwrap();
+        assert_eq!(lib.shape.pieces, before.shape.pieces[..8]);
+        assert_eq!(lib.sequences[0].1.steps[0].roles.len(), 8);
+        let cfg = strip_store::load(&dir.path().join("strip.json")).unwrap();
+        assert_eq!((cfg.segments, cfg.reported), (8, 10));
+        // Growing continues the row after the last piece; the others are untouched.
+        let lib = state.set_wired(10).unwrap();
+        assert_eq!(lib.shape.pieces[..8], before.shape.pieces[..8]);
+        assert_eq!((lib.shape.pieces[9].x, lib.shape.pieces[9].y), (9.0, 0.0));
+        assert_eq!(lib.validate(), Ok(()));
+        assert!(state.set_wired(0).is_err());
+        assert!(state.set_wired(11).is_err());
+    }
+
+    #[test]
+    fn key_file_mode_stays_0600_after_resize() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, state) = state_with_strip(10, 10);
+        state.set_wired(6).unwrap();
+        let mode = std::fs::metadata(dir.path().join("strip.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
     #[test]
     fn save_library_rejects_invalid_and_keeps_previous() {
         let (dir, state) = lib_state();
         let before = state.library();
         let mut bad = before.clone();
-        bad.sets[0].rhythm.palettes = vec![4242];
+        bad.sets[0].palettes = vec![4242];
         let msg = state.save_library(bad).unwrap_err();
         assert!(msg.contains("palettes") && !msg.contains("4242"), "{msg}");
         assert_eq!(state.library(), before);
@@ -909,7 +1434,7 @@ mod tests {
                 assert_eq!(saved.sequences[0].1.steps[0].roles[10..], [Role::Off; 2]);
             }
             assert_eq!(
-                crate::library_store::load(&dir.path().join("library.json"), 10),
+                crate::library_store::load(&dir.path().join("library.json"), 10, 8),
                 saved
             );
         }
@@ -934,7 +1459,7 @@ mod tests {
         let emit: Emit = Arc::new(|_| {});
         state.editor_closed(&emit);
         assert!(matches!(rx.recv(), Ok(Input::PopoverShown)));
-        let got: Vec<Input> = (0..2)
+        let got: Vec<Input> = (0..4)
             .map(|_| rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap())
             .collect();
         assert!(got.iter().any(|i| matches!(i, Input::Library(_))));
@@ -955,27 +1480,107 @@ mod tests {
     }
 
     #[test]
-    fn palette_cycles_and_persists() {
+    fn palette_cycle_includes_auto() {
         let (dir, state) = lib_state();
-        let mut lib = state.library();
-        let mut pal = lib.palettes[0].1.clone();
-        pal.name = "Second".into();
-        lib.palettes.push((900, pal));
-        state.save_library(lib).unwrap();
-        let name = |sel: Selection| sel.palette.name;
-        assert_eq!(name(state.select(Pick::Palette, 1).unwrap()), "Ocean");
-        assert_eq!(state.library().active_palette, Some(2));
+        let name = |sel: Selection| (sel.palette_auto, sel.palette.name);
+        assert!(state.library().active_palette.is_none());
+        // Auto -> p1 -> p2 ... -> p8 -> Auto, over the active set's palettes.
         assert_eq!(
-            crate::library_store::load(&dir.path().join("library.json"), 10).active_palette,
+            state.select(Pick::Palette, 1).unwrap().palette.name,
+            "Sunset"
+        );
+        assert_eq!(state.library().active_palette, Some(1));
+        assert_eq!(
+            name(state.select(Pick::Palette, 1).unwrap()),
+            (false, "Ocean".into())
+        );
+        assert_eq!(
+            crate::library_store::load(&dir.path().join("library.json"), 10, 8).active_palette,
             Some(2)
         );
-        // Wraps both ways.
-        assert_eq!(name(state.select(Pick::Palette, -1).unwrap()), "Sunset");
-        assert_eq!(name(state.select(Pick::Palette, -1).unwrap()), "Second");
+        state.select(Pick::Palette, -1).unwrap();
+        assert!(state.select(Pick::Palette, -1).unwrap().palette_auto);
+        assert_eq!(state.library().active_palette, None);
+        // Backwards from Auto lands on the last palette, forwards from it on Auto.
+        state.select(Pick::Palette, -1).unwrap();
+        assert_eq!(state.library().active_palette, Some(8));
+        assert!(state.select(Pick::Palette, 1).unwrap().palette_auto);
         for bad in [0, 2, -2] {
             assert!(state.select(Pick::Palette, bad).is_err());
             assert!(state.select(Pick::Set, bad).is_err());
         }
+    }
+
+    fn two_set_state() -> (tempfile::TempDir, AppState) {
+        let (dir, state) = lib_state();
+        let mut lib = state.library();
+        let mut set = lib.sets[0].clone();
+        set.name = "Club".into();
+        set.id = 900;
+        set.palettes = vec![3, 4];
+        lib.sets.push(set);
+        state.save_library(lib).unwrap();
+        (dir, state)
+    }
+
+    #[test]
+    fn save_keeps_live_selection() {
+        let (_dir, state) = two_set_state();
+        state.set_live_set(2).unwrap();
+        state.select(Pick::Palette, 1).unwrap(); // pins 3
+        let mut lib = state.library();
+        lib.active_set = 1;
+        lib.active_palette = None;
+        lib.sets[1].name = "Renamed".into();
+        let saved = state.save_library(lib).unwrap();
+        assert_eq!((saved.active_set, saved.active_palette), (2, Some(3)));
+        assert_eq!(saved.sets[1].name, "Renamed");
+        // Deleting the live set falls back to the first one.
+        let mut lib = saved;
+        lib.sets.pop();
+        let saved = state.save_library(lib).unwrap();
+        assert_eq!((saved.active_set, saved.active_palette), (1, Some(3)));
+    }
+
+    #[test]
+    fn save_drops_pin_not_in_active_set() {
+        let (_dir, state) = two_set_state();
+        state.set_live_set(2).unwrap();
+        state.select(Pick::Palette, 1).unwrap();
+        assert_eq!(state.library().active_palette, Some(3));
+        let mut lib = state.library();
+        lib.sets[1].palettes = vec![4];
+        let saved = state.save_library(lib).unwrap();
+        assert_eq!((saved.active_set, saved.active_palette), (2, None));
+    }
+
+    #[test]
+    fn set_live_set_validates_and_clears_foreign_pin() {
+        let (_dir, state) = two_set_state();
+        state.select(Pick::Palette, 1).unwrap(); // pins 1 in set 1
+        assert!(state.set_live_set(77).is_err());
+        assert_eq!(state.library().active_set, 1);
+        let sel = state.set_live_set(2).unwrap();
+        assert_eq!((sel.set.as_str(), sel.palette_auto), ("Club", true));
+        assert_eq!(state.library().active_palette, None);
+    }
+
+    #[test]
+    fn pattern_sequence_works_without_strip() {
+        use light_core::patterns::Pattern;
+        // No strip connected: the library's own segment count rules.
+        let lib = Library::builtin(8);
+        let seq = pattern_sequence_of(&lib, Pattern::Halves, 7).unwrap();
+        assert!(seq.validate(8).is_ok());
+        assert!(seq.steps.iter().all(|s| s.roles.len() == 8));
+        assert_eq!(seq, pattern_sequence_of(&lib, Pattern::Halves, 7).unwrap());
+    }
+
+    #[test]
+    fn pattern_sequence_rejects_unknown_pattern() {
+        use light_core::patterns::Pattern;
+        assert!(serde_json::from_str::<Pattern>(r#""nope""#).is_err());
+        assert!(serde_json::from_str::<Pattern>(r#""halves""#).is_ok());
     }
 
     #[test]
@@ -1005,7 +1610,7 @@ mod tests {
         let mut set = lib.sets[0].clone();
         set.id = 902;
         set.rhythm.sequences = vec![SeqRef::Id(901)];
-        set.rhythm.palettes = vec![900];
+        set.palettes = vec![900];
         lib.sets.push(set);
         lib.active_set = 902;
         lib.active_palette = Some(900);
@@ -1021,11 +1626,12 @@ mod tests {
         );
         assert_eq!(saved.sets[1].id, 2);
         assert_eq!(saved.sets[1].rhythm.sequences, [SeqRef::Id(11)]);
-        assert_eq!(saved.sets[1].rhythm.palettes, [9]);
-        assert_eq!((saved.active_set, saved.active_palette), (2, Some(9)));
+        assert_eq!(saved.sets[1].palettes, [9]);
+        // The editor's selection is ignored: the live one stays.
+        assert_eq!((saved.active_set, saved.active_palette), (1, None));
         assert_eq!(state.library(), saved);
         assert_eq!(
-            crate::library_store::load(&dir.path().join("library.json"), 10),
+            crate::library_store::load(&dir.path().join("library.json"), 10, 8),
             saved
         );
     }
