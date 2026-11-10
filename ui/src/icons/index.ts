@@ -31,6 +31,7 @@ import midi from "./midi.svg?raw";
 import mic from "./mic.svg?raw";
 import clock from "./clock.svg?raw";
 import phrase from "./phrase.svg?raw";
+import power from "./power.svg?raw";
 
 /** Bundled line icons (24x24, stroke 2); see LICENSE.md. */
 export const icons = {
@@ -67,5 +68,6 @@ export const icons = {
   mic,
   clock,
   phrase,
+  power,
 };
 export type IconName = keyof typeof icons;

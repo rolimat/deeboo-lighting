@@ -84,7 +84,14 @@ pub struct PaletteView {
 
 impl Selection {
     pub fn of(lib: &Library) -> Self {
-        let p = lib.current_palette();
+        Self::in_force(lib, None)
+    }
+
+    /// `in_force`: the palette the engine plays (library id), which under Auto is the rotation's.
+    pub fn in_force(lib: &Library, in_force: Option<u32>) -> Self {
+        let p = in_force
+            .and_then(|id| lib.palettes.iter().find(|(i, _)| *i == id))
+            .map_or_else(|| lib.current_palette(), |(_, p)| p.clone());
         Self {
             set: lib
                 .current_set()

@@ -427,7 +427,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             },
             selection: self.library.as_ref().map_or_else(
                 || Selection::of(&Library::builtin(self.segments)),
-                Selection::of,
+                |lib| Selection::in_force(lib, s.palette),
             ),
             clip: s.clip.map(|c| ClipDto {
                 moment: c.moment.into(),
@@ -1137,6 +1137,32 @@ mod tests {
         c.handle(Input::Library(Box::new(lib.clone())), 1_000);
         assert_eq!(c.library, Some(lib));
         assert_eq!(c.status().selection.set, "Club");
+    }
+
+    #[test]
+    fn auto_palette_shows_the_one_in_force() {
+        let (mut c, _rx, _) = core(false);
+        let mut lib = Library::builtin(10);
+        lib.active_palette = None;
+        let in_force = lib.sets[0].palettes[1];
+        let name = lib
+            .palettes
+            .iter()
+            .find(|(i, _)| *i == in_force)
+            .unwrap()
+            .1
+            .name
+            .clone();
+        assert_ne!(
+            lib.current_palette().name,
+            name,
+            "first differs from second"
+        );
+        c.handle(Input::Library(Box::new(lib)), 1_000);
+        c.last.palette = Some(in_force);
+        let sel = c.status().selection;
+        assert!(sel.palette_auto);
+        assert_eq!(sel.palette.name, name);
     }
 
     #[test]

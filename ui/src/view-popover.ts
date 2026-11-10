@@ -1,29 +1,44 @@
-import { api, type Hsv, type MomentName, type Selection, type Status } from "./api";
-import { el, glyphButton } from "./dom";
-import { mountSettings, queueSave, stripText } from "./view-settings";
+import {
+  api,
+  type Hsv,
+  type MomentName,
+  type Selection,
+  type Status,
+  type StripStatus,
+} from "./api";
+import { el } from "./dom";
+import { icons, type IconName } from "./icons";
 
-const MOMENTS: [MomentName, string][] = [
-  ["rhythm", "Rhythm"],
-  ["calm", "Calm"],
-  ["buildUp", "Build-up"],
+const MOMENTS: [MomentName, string, IconName][] = [
+  ["rhythm", "Rhythm", "rhythm"],
+  ["calm", "Calm", "calm"],
+  ["buildUp", "Build-up", "buildup"],
 ];
+
+/** Bundled static SVG markup (never user data). */
+function icon(name: IconName): HTMLSpanElement {
+  const s = el("span", "icon");
+  s.setAttribute("aria-hidden", "true");
+  s.innerHTML = icons[name].trim();
+  return s;
+}
 
 /** Writes only on change, so text under the pointer is never rewritten. */
 function setText(n: HTMLElement, t: string): void {
   if (n.textContent !== t) n.textContent = t;
 }
 
-function pressable(label: string, text: string, onClick: () => void): HTMLButtonElement {
-  const b = el("button", "", text);
-  b.setAttribute("aria-label", label);
-  b.setAttribute("aria-pressed", "false");
-  b.onclick = onClick;
-  return b;
+function setAttr(n: HTMLElement, name: string, v: string): void {
+  if (n.getAttribute(name) !== v) n.setAttribute(name, v);
 }
 
-function setPressed(b: HTMLElement, on: boolean): void {
-  const v = String(on);
-  if (b.getAttribute("aria-pressed") !== v) b.setAttribute("aria-pressed", v);
+function iconButton(label: string, name: IconName, onClick: () => void): HTMLButtonElement {
+  const b = el("button", "icon-btn");
+  b.setAttribute("aria-label", label);
+  b.setAttribute("aria-pressed", "false");
+  b.append(icon(name));
+  b.onclick = onClick;
+  return b;
 }
 
 /** CSS colour for a strip colour (H 0-360, S and V 0-1000). */
@@ -37,26 +52,72 @@ function hsvCss({ h, s, v }: Hsv): string {
   return `rgb(${f(5)}, ${f(3)}, ${f(1)})`;
 }
 
-/** `title ◀ name ▶`, for stepping through a list. */
+/** `title ‹ name ›`, for stepping through a list. */
 function stepper(kind: string, title: string, step: (delta: -1 | 1) => void) {
   const row = el("div", `row row-${kind}`);
   const name = el("span", "row-text");
-  const prev = el("button", "step", "◀");
+  const prev = el("button", "step", "‹");
   prev.setAttribute("aria-label", `Previous ${kind}`);
   prev.onclick = () => step(-1);
-  const next = el("button", "step", "▶");
+  const next = el("button", "step", "›");
   next.setAttribute("aria-label", `Next ${kind}`);
   next.onclick = () => step(1);
-  row.append(el("span", "field-title", title), prev, name, next);
-  return { row, name };
+  const box = el("div", "stepper");
+  box.append(prev, name, next);
+  row.append(el("span", "field-title", title), box);
+  return { row, name, box };
 }
 
-function statusRow(kind: string) {
-  const row = el("div", `row row-${kind}`);
-  const dot = el("span", "dot");
-  const label = el("span", "row-text");
-  row.append(dot, label);
-  return { row, dot, label };
+function stripName(s: StripStatus): string {
+  switch (s.kind) {
+    case "notConfigured":
+      return "not connected";
+    case "connecting":
+      return "connecting…";
+    case "connected":
+      return `${s.name} · connected`;
+    case "error":
+      return "connection error";
+    case "keyInvalid":
+      return "key no longer valid";
+    case "notFound":
+      return "not found";
+  }
+}
+
+type Dot = { state: "ok" | "off" | "bad"; help: string };
+
+function clockDot(s: Status): Dot {
+  return s.playing || s.bpm !== null
+    ? { state: "ok", help: "Receiving MIDI clock." }
+    : { state: "off", help: "No MIDI clock — start playback in your clock source." };
+}
+
+function audioDot(s: Status): Dot {
+  if (s.audio.ok) return { state: "ok", help: "Listening to the music." };
+  return s.audio.device
+    ? { state: "bad", help: "Audio capture failed — check the input in Setup." }
+    : { state: "off", help: "Audio is off — it starts when the music plays." };
+}
+
+function stripDot(s: Status): Dot {
+  switch (s.strip.kind) {
+    case "connected":
+      return { state: "ok", help: "Strip connected." };
+    case "notConfigured":
+      return { state: "off", help: "No strip yet — connect one in Setup." };
+    case "connecting":
+      return { state: "off", help: "Connecting to the strip…" };
+    case "keyInvalid":
+      return { state: "bad", help: "The strip's key is no longer valid — reconnect it in Setup." };
+    case "notFound":
+      return {
+        state: "bad",
+        help: "Strip not found — check its power and Wi-Fi, then open Setup.",
+      };
+    case "error":
+      return { state: "bad", help: "Strip connection lost — check its power and Wi-Fi." };
+  }
 }
 
 export function mountPopover(root: HTMLElement): { update: (status: Status) => void } {
@@ -71,45 +132,30 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
       },
     );
 
-  // Header
-  const gear = glyphButton("gear", "⚙");
-  gear.setAttribute("aria-label", "Settings");
-  const header = el("div", "header-row");
-  header.append(el("h1", "header", "Deeboo Lighting"), gear);
-
-  // Tempo
+  // Header: tempo and moment
   const bpm = el("div", "bpm", "—");
-  const beats = [1, 2, 3, 4].map((n) => el("span", n === 1 ? "beat accent" : "beat"));
-  const bar = el("div", "bar");
-  const beatBox = el("div", "beats");
-  beatBox.append(...beats);
-  const tempo = el("div", "card tempo");
-  tempo.append(bpm, beatBox, bar);
+  const beat = el("div");
+  const phrase = el("div");
+  const sub = el("div", "tempo-sub");
+  sub.append(beat, phrase);
+  const chip = el("div", "moment-chip");
+  const chipLabel = el("span");
+  let chipMoment: MomentName | null = null;
+  const header = el("div", "header-row");
+  header.append(bpm, sub, el("span", "grow"), chip);
 
   // Lights
-  const lightsOn = pressable("Lights on", "Lights ▶", () =>
-    run(api.uiCommand({ kind: "lights", on: true })),
+  let lightsOn = true;
+  const play = iconButton("Lights", "play", () =>
+    run(api.uiCommand({ kind: "lights", on: !lightsOn })),
   );
-  const lightsOff = pressable("Lights off", "Off", () =>
-    run(api.uiCommand({ kind: "lights", on: false })),
-  );
-  const lights = el("div", "segmented");
-  lights.append(lightsOn, lightsOff);
-
-  // Moment
-  const momentBtns = MOMENTS.map(([m, label]) => ({
-    m,
-    b: pressable(label, label, () => run(api.uiCommand({ kind: "force", moment: m }))),
-  }));
-  const auto = pressable("Auto", "Auto", () => run(api.uiCommand({ kind: "auto" })));
-  auto.classList.add("auto");
-  const predicted = el("span", "predicted", "drop predicted");
-  predicted.hidden = true;
-  const momentRow = el("div", "segmented");
-  momentRow.append(...momentBtns.map((x) => x.b));
-  const moment = el("div", "card moment");
-  moment.append(momentRow, el("div", "moment-foot"));
-  moment.lastElementChild?.append(auto, predicted);
+  play.classList.replace("icon-btn", "play-btn");
+  const lightsState = el("div", "lights-state");
+  const lightsText = el("div");
+  lightsText.append(el("b", "", "Lights"), lightsState);
+  const stripLabel = el("span", "strip-name");
+  const lights = el("div", "lights");
+  lights.append(play, lightsText, el("span", "grow"), stripLabel);
 
   // Brightness
   const slider = el("input");
@@ -117,100 +163,101 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
   slider.min = "10";
   slider.max = "100";
   slider.setAttribute("aria-label", "Brightness");
+  // Each save reads the stored settings first, so it never overwrites a change made elsewhere.
   slider.onchange = () =>
-    void run(queueSave((s) => ({ ...s, brightnessPct: Number(slider.value) })));
+    void run(
+      api
+        .getSettings()
+        .then((s) => api.saveSettings({ ...s, brightnessPct: Number(slider.value) })),
+    );
   void run(api.getSettings().then((s) => (slider.value = String(s.brightnessPct))));
-  const brightness = el("div", "card field-row");
+  const brightness = el("div", "row");
   brightness.append(el("span", "field-title", "Brightness"), slider);
+
+  // Moment
+  const auto = el("button", "auto", "Auto");
+  auto.setAttribute("aria-label", "Auto");
+  auto.setAttribute("aria-pressed", "false");
+  auto.onclick = () => void run(api.uiCommand({ kind: "auto" }));
+  const momentBtns = MOMENTS.map(([m, label, ic]) => ({
+    m,
+    b: iconButton(label, ic, () => run(api.uiCommand({ kind: "force", moment: m }))),
+  }));
+  const seg = el("div", "segmented");
+  seg.append(auto, ...momentBtns.map((x) => x.b));
+  const moment = el("div", "row");
+  moment.append(el("span", "field-title", "Moment"), seg);
 
   // Set and palette
   const act = (p: Promise<Selection>) => void run(p.then((sel) => showSel(sel)));
   const setRow = stepper("set", "Set", (d) => act(api.selectSet(d)));
   const palRow = stepper("palette", "Palette", (d) => act(api.selectPalette(d)));
   const swatches = [0, 1, 2].map(() => el("span", "swatch"));
-  palRow.row.insertBefore(el("span", "swatches"), palRow.row.lastElementChild);
-  palRow.row.querySelector(".swatches")?.append(...swatches);
+  const sw = el("span", "swatches");
+  sw.append(...swatches);
+  palRow.box.insertBefore(sw, palRow.name);
   const showSel = (sel: Selection) => {
     setText(setRow.name, sel.set);
     setText(palRow.name, sel.paletteAuto ? "Auto" : sel.palette.name);
-    swatches.forEach((sw, i) => {
+    swatches.forEach((x, i) => {
       const c = hsvCss(sel.palette.colours[i] as Hsv);
-      if (sw.style.backgroundColor !== c) sw.style.backgroundColor = c;
+      if (x.style.backgroundColor !== c) x.style.backgroundColor = c;
     });
   };
-  const openEditor = el("button", "open-editor", "Open editor…");
+
+  // Footer: status dots, editor, quit
+  const dotBtn = (name: string) => {
+    const b = el("button", "dot-btn");
+    const dot = el("span", "dot");
+    b.append(dot, el("span", "", name));
+    b.onclick = () => void run(api.openEditor("setup"));
+    return { b, dot, name };
+  };
+  const dots = [dotBtn("Clock"), dotBtn("Audio"), dotBtn("Strip")];
+  const openEditor = el("button", "open-editor", "Open editor");
   openEditor.setAttribute("aria-label", "Open editor");
-  openEditor.onclick = () => void run(api.openEditor("strip"));
-  const look = el("div", "card look");
-  look.append(setRow.row, palRow.row, openEditor);
+  openEditor.onclick = () => void run(api.openEditor("sets"));
+  const quit = el("button", "quit");
+  quit.setAttribute("aria-label", "Quit");
+  quit.title = "Quit";
+  quit.append(icon("power"));
+  quit.onclick = () => void run(api.quit());
+  const footer = el("div", "footer");
+  footer.append(...dots.map((d) => d.b), el("span", "grow"), openEditor, quit);
 
-  // Status
-  const midi = statusRow("midi");
-  const strip = statusRow("strip");
-  const reconnect = el("button", "row-action", "Reconnect…");
-  reconnect.setAttribute("aria-label", "Reconnect strip");
-  reconnect.hidden = true;
-  reconnect.onclick = () => void run(api.openEditor("strip"));
-  strip.row.append(reconnect);
-  const audio = statusRow("audio");
-  const levelFill = el("span", "level-fill");
-  const level = el("span", "level");
-  level.append(levelFill);
-  audio.row.append(level);
-  const statusCard = el("div", "card status");
-  statusCard.append(midi.row, strip.row, audio.row);
-
-  const main = el("div", "view-main");
-  main.append(tempo, lights, moment, look, brightness, statusCard);
-
-  let stripStatus: Status["strip"] = { kind: "notConfigured" };
-  const settings = mountSettings(() => {
-    settings.node.hidden = true;
-    main.hidden = false;
-  });
-  settings.node.hidden = true;
-  gear.onclick = () => {
-    main.hidden = true;
-    settings.node.hidden = false;
-    settings.open(stripStatus);
-  };
-
-  root.replaceChildren(header, main, settings.node, error);
-
-  const dot = (d: HTMLElement, state: "ok" | "off" | "bad") => {
-    if (d.dataset.state !== state) d.dataset.state = state;
-  };
+  const body = el("div", "body");
+  body.append(lights, brightness, moment, setRow.row, palRow.row);
+  root.replaceChildren(header, body, footer, error);
 
   return {
     update(s) {
       setText(bpm, s.bpm === null ? "—" : s.bpm.toFixed(1));
-      beats.forEach((b, i) => b.classList.toggle("lit", s.beatInBar === i + 1));
-      setText(bar, `bar ${s.barInPhrase ?? "—"} / ${s.phraseBars}`);
-      setPressed(lightsOn, s.lightsOn);
-      setPressed(lightsOff, !s.lightsOn);
-      momentBtns.forEach(({ m, b }) => setPressed(b, m === s.moment));
-      setPressed(auto, s.auto);
-      setText(auto, s.auto ? "Auto ✓" : "Auto");
-      predicted.hidden = !s.predicted;
+      setText(beat, `BPM · beat ${s.beatInBar ?? "—"}`);
+      setText(phrase, `phrase: bar ${s.barInPhrase ?? "—"} of ${s.phraseBars}`);
+      if (chipMoment !== s.moment) {
+        chipMoment = s.moment;
+        const [, label, ic] =
+          MOMENTS.find(([m]) => m === s.moment) ?? (MOMENTS[0] as (typeof MOMENTS)[number]);
+        chipLabel.textContent = label;
+        chip.replaceChildren(icon(ic), chipLabel);
+      }
+
+      lightsOn = s.lightsOn;
+      setAttr(play, "aria-pressed", String(s.lightsOn));
+      setText(lightsState, s.lightsOn ? "On · following the music" : "Off");
+      setText(stripLabel, stripName(s.strip));
+      setAttr(auto, "aria-pressed", String(s.auto));
+      momentBtns.forEach(({ m, b }) =>
+        setAttr(b, "aria-pressed", String(!s.auto && m === s.moment)),
+      );
       showSel(s.selection);
 
-      setText(midi.label, `MIDI · ${s.midi.source ?? "Deeboo Lighting In"}`);
-      dot(midi.dot, s.midi.ok ? "ok" : "bad");
-      setText(strip.label, `Strip · ${stripText(s.strip)}`);
-      stripStatus = s.strip;
-      const k = s.strip.kind;
-      dot(
-        strip.dot,
-        k === "connected" ? "ok" : k === "notConfigured" || k === "connecting" ? "off" : "bad",
-      );
-      reconnect.hidden = k !== "keyInvalid" && k !== "notFound";
-      const a = s.audio;
-      setText(audio.label, `Audio · ${a.ok ? (a.device ?? "on") : a.device ? "no access" : "off"}`);
-      dot(audio.dot, a.ok ? "ok" : a.device ? "bad" : "off");
-      level.hidden = !a.ok;
-      // -60 dBFS (silence) to 0 dBFS (clip) across the bar.
-      const pct = Math.round(Math.min(1, Math.max(0, ((a.levelDb ?? -60) + 60) / 60)) * 100);
-      if (levelFill.style.width !== `${pct}%`) levelFill.style.width = `${pct}%`;
+      [clockDot(s), audioDot(s), stripDot(s)].forEach((d, i) => {
+        const { b, dot, name } = dots[i] as (typeof dots)[number];
+        setAttr(dot, "data-state", d.state);
+        setAttr(b, "title", d.help);
+        setAttr(b, "aria-label", `${name}: ${d.help}`);
+      });
     },
   };
 }
