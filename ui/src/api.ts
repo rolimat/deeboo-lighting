@@ -22,6 +22,8 @@ export interface Hsv {
 /** The active set and the palette in force (Principal, Contraste, Suave). */
 export interface Selection {
   set: string;
+  /** Library id of the live set (names can repeat). */
+  setId: number;
   /** Nothing pinned: the palette follows the set's rotation. */
   paletteAuto: boolean;
   palette: { name: string; colours: [Hsv, Hsv, Hsv] };
@@ -74,14 +76,10 @@ export const api = {
   getStatus: (): Promise<Status> => invoke("get_status"),
   getSettings: (): Promise<Settings> => invoke("get_settings"),
   saveSettings: (settings: Settings): Promise<Settings> => invoke("save_settings", { settings }),
-  listMidiSources: (): Promise<string[]> => invoke("list_midi_sources"),
-  listAudioInputs: (): Promise<string[]> => invoke("list_audio_inputs"),
   uiCommand: (cmd: UiCommand): Promise<void> => invoke("ui_command", { cmd }),
   /** Steps the active set by -1 or 1 (wraps); resolves to the new selection. */
   selectSet: (delta: -1 | 1): Promise<Selection> => invoke("select_set", { delta }),
   selectPalette: (delta: -1 | 1): Promise<Selection> => invoke("select_palette", { delta }),
-  /** Makes a set live (Sets button); resolves to the new selection. */
-  setLiveSet: (id: number): Promise<Selection> => invoke("set_live_set", { id }),
   quit: (): Promise<void> => invoke("quit"),
   /** Opens (or focuses) the editor window on a section. */
   openEditor: (

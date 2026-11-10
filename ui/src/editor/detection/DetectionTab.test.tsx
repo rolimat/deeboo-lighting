@@ -48,6 +48,7 @@ const status = (over: Partial<Status> = {}): Status => ({
   audio: { ok: true, device: "Mic B", levelDb: -20 },
   selection: {
     set: "",
+    setId: 1,
     paletteAuto: true,
     palette: { name: "", colours: [hsv, hsv, hsv] },
   },
@@ -207,6 +208,31 @@ it("reset_to_defaults_is_one_call", async () => {
     settings({ sensitivity: 5, calmKickDb: 16, calmHighDb: 12, riserDb: 7 }),
   );
   expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("16");
+});
+
+it("reset_keeps_settings_changed_elsewhere_since_mount", async () => {
+  await mount();
+  vi.mocked(api.getSettings).mockResolvedValue(
+    settings({ lightsOn: false, brightnessPct: 30, helpTooltips: false }),
+  );
+  const reset = [...root.querySelectorAll("button")].find(
+    (b) => b.textContent === "Reset to defaults",
+  );
+  await act(async () => {
+    reset?.click();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(api.saveSettings).toHaveBeenLastCalledWith(
+    settings({
+      lightsOn: false,
+      brightnessPct: 30,
+      helpTooltips: false,
+      sensitivity: 5,
+      calmKickDb: 16,
+      calmHighDb: 12,
+      riserDb: 7,
+    }),
+  );
 });
 
 it("changes_slider_saves_sensitivity", async () => {

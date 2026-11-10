@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Settings, Status } from "../../api";
+import { patchSettings } from "../state/settings";
 import { api, type DetectorEvent, type Thresholds } from "../api";
 import { ChangesSlider } from "./ChangesSlider";
 import { pushBeat } from "./history";
@@ -155,11 +156,11 @@ export function DetectionTab({ onGoSetup }: { onGoSetup: () => void }) {
       );
     }, SEND_DELAY_MS);
   };
-  const save = (next: Settings) => {
+  const save = (patch: Partial<Settings>) => {
     clearTimeout(timer.current);
     pending.current = null;
-    setS(next);
-    api.saveSettings(next).then(
+    setS({ ...s, ...patch });
+    patchSettings(patch).then(
       (v) => (setS(v), setError("")),
       (e) => setError(String(e)),
     );
@@ -172,11 +173,11 @@ export function DetectionTab({ onGoSetup }: { onGoSetup: () => void }) {
         <span class="w-36 pt-0.5 text-xs uppercase tracking-wide text-dim">Moment changes</span>
         <ChangesSlider
           sensitivity={s.sensitivity}
-          onChange={(sensitivity) => save({ ...s, sensitivity })}
+          onChange={(sensitivity) => save({ sensitivity })}
         />
         <button
           type="button"
-          onClick={() => save({ ...s, ...DEFAULTS })}
+          onClick={() => save(DEFAULTS)}
           class="ml-auto rounded-card border border-border bg-card px-3 py-1 text-xs"
         >
           Reset to defaults

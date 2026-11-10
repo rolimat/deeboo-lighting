@@ -26,8 +26,10 @@ export function useLibrary() {
 
   const withLive = (l: Library): Library => ({ ...l, ...live.current });
 
+  const dirty = useRef(false);
   const flush = useCallback(async () => {
     const h = hist.current;
+    dirty.current = false;
     if (!h) return;
     const sent = rev.current;
     try {
@@ -44,10 +46,17 @@ export function useLibrary() {
 
   const schedule = useCallback(() => {
     rev.current += 1;
+    dirty.current = true;
     setSave({ state: "saving" });
     clearTimeout(timer.current);
     timer.current = setTimeout(() => void flush(), DEBOUNCE_MS);
     bump();
+  }, [flush]);
+
+  /** Saves an edit still waiting for its 400 ms timer (before a command that replaces the library). */
+  const flushNow = useCallback(async () => {
+    clearTimeout(timer.current);
+    if (dirty.current) await flush();
   }, [flush]);
 
   useEffect(() => {
@@ -129,6 +138,7 @@ export function useLibrary() {
     lib: hist.current?.present ?? null,
     edit,
     reset,
+    flushNow,
     undo,
     redo,
     canUndo: hist.current?.canUndo ?? false,

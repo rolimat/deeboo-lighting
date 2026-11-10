@@ -69,6 +69,7 @@ pub struct AudioStatus {
 #[serde(rename_all = "camelCase")]
 pub struct Selection {
     pub set: String,
+    pub set_id: u32,
     /// The palette follows the set's rotation (nothing pinned).
     pub palette_auto: bool,
     pub palette: PaletteView,
@@ -93,6 +94,7 @@ impl Selection {
             .and_then(|id| lib.palettes.iter().find(|(i, _)| *i == id))
             .map_or_else(|| lib.current_palette(), |(_, p)| p.clone());
         Self {
+            set_id: lib.active_set,
             set: lib
                 .current_set()
                 .map_or_else(String::new, |s| s.name.clone()),
@@ -441,6 +443,15 @@ impl AppState {
         })
     }
 
+    /// Switching a preview or the calibration off must not be dropped by a full queue.
+    fn send_off(&self, input: Input) -> Result<(), String> {
+        if lock(&self.runtime).is_none() {
+            return Err("engine not running".into());
+        }
+        self.deliver(input);
+        Ok(())
+    }
+
     fn send_strip_pause(&self, pause: bool) {
         self.deliver(Input::StripPause(pause));
     }
@@ -723,11 +734,10 @@ pub fn preview_palette(
     palette: light_core::model::Palette,
     sequence: u32,
 ) -> Result<(), String> {
-    let p = if on {
-        Some(preview_palette_of(&state.library(), palette, sequence)?)
-    } else {
-        None
-    };
+    if !on {
+        return state.send_off(Input::PreviewPalette(None));
+    }
+    let p = Some(preview_palette_of(&state.library(), palette, sequence)?);
     state.send(Input::PreviewPalette(p))
 }
 
@@ -736,7 +746,11 @@ pub fn preview_palette(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn calibrate_latency(state: tauri::State<'_, AppState>, on: bool) -> Result<(), String> {
-    state.send(Input::Calibrate(on))
+    if on {
+        state.send(Input::Calibrate(true))
+    } else {
+        state.send_off(Input::Calibrate(false))
+    }
 }
 
 /// What holding a set clip plays: the palette as sent (range-checked) with the clip's sequence, a
@@ -768,7 +782,10 @@ pub fn preview_sequence(
     sequence: light_core::library::SeqRef,
     moment: MomentDto,
 ) -> Result<(), String> {
-    let p = if on {
+    if !on {
+        return state.send_off(Input::PreviewPalette(None));
+    }
+    let p = {
         let moment = match moment {
             MomentDto::Rhythm => Moment::Rhythm,
             MomentDto::Calm => Moment::Calm,
@@ -784,8 +801,6 @@ pub fn preview_sequence(
             moment,
             seed,
         )?)
-    } else {
-        None
     };
     state.send(Input::PreviewPalette(p))
 }
@@ -874,7 +889,8 @@ pub async fn strip_identify(state: tauri::State<'_, AppState>, segment: u8) -> R
 /// The strip must be connected and `segment` (1-based) one of its segments.
 fn identify_check(strip: &StripStatus, segment: u8) -> Result<(), String> {
     match strip {
-        StripStatus::Connected { segments, .. } if (1..=*segments).contains(&segment) => Ok(()),
+        // Counts what the strip reports, so the unwired tail can be checked too.
+        StripStatus::Connected { reported, .. } if (1..=*reported).contains(&segment) => Ok(()),
         StripStatus::Connected { .. } => Err("No such segment.".into()),
         _ => Err("Strip not connected.".into()),
     }
@@ -953,11 +969,12 @@ impl AppState {
             return Err("Wired segments must be between 1 and what the strip reports.".into());
         }
         cfg.segments = n;
+        // Library first: if it fails, strip.json is not left ahead of it.
+        let lib = self.save_library(with_wired(&self.library(), n))?;
         strip_store::save(&path, &cfg).map_err(|e| {
             log::warn!("strip file not saved: {e}");
             "Strip not saved.".to_string()
         })?;
-        let lib = self.save_library(with_wired(&self.library(), n))?;
         self.deliver(Input::StripChanged(cfg));
         Ok(lib)
     }
@@ -1055,7 +1072,7 @@ mod tests {
         let json = serde_json::to_string(&Status::initial()).unwrap_or_default();
         assert_eq!(
             json,
-            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","paletteAuto":true,"palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}},"clip":null}"#
+            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","setId":1,"paletteAuto":true,"palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}},"clip":null}"#
         );
         let clip = ClipDto {
             moment: MomentDto::Calm,
@@ -1116,6 +1133,11 @@ mod tests {
         commands.sort();
         assert_eq!(commands.len(), 29);
         assert_eq!(granted, commands);
+        // The popover calls none of these; only the editor may.
+        let popover = include_str!("../capabilities/popover.json");
+        for unused in ["set-live-set", "list-midi-sources", "list-audio-inputs"] {
+            assert!(!popover.contains(unused), "{unused}");
+        }
     }
 
     #[test]
@@ -1188,6 +1210,35 @@ mod tests {
             identify_check(&StripStatus::Connecting, 1),
             Err("Strip not connected.".into())
         );
+    }
+
+    #[test]
+    fn identify_check_counts_the_unwired_tail_too() {
+        let on = StripStatus::Connected {
+            name: "dj".into(),
+            segments: 8,
+            reported: 10,
+            ip: None,
+        };
+        for ok in [1, 8, 9, 10] {
+            assert_eq!(identify_check(&on, ok), Ok(()));
+        }
+        for bad in [0, 11] {
+            assert_eq!(identify_check(&on, bad), Err("No such segment.".into()));
+        }
+    }
+
+    #[test]
+    fn turning_preview_or_calibration_off_survives_a_full_queue() {
+        let (state, rx) = full_queue();
+        assert!(state.send_off(Input::PreviewPalette(None)).is_ok());
+        assert!(state.send_off(Input::Calibrate(false)).is_ok());
+        assert!(matches!(rx.recv(), Ok(Input::PopoverShown)));
+        let got: Vec<Input> = (0..2)
+            .map(|_| rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap())
+            .collect();
+        assert!(got.iter().any(|i| matches!(i, Input::PreviewPalette(None))));
+        assert!(got.iter().any(|i| matches!(i, Input::Calibrate(false))));
     }
 
     #[test]

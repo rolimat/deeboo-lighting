@@ -47,7 +47,12 @@ const status = (over: Partial<Status> = {}): Status => ({
   lightsOn: true,
   midi: { source: "Clock A", ok: true },
   audio: { ok: true, device: "Mic B", levelDb: -20 },
-  selection: { set: "", paletteAuto: true, palette: { name: "", colours: [hsv, hsv, hsv] } },
+  selection: {
+    set: "",
+    setId: 1,
+    paletteAuto: true,
+    palette: { name: "", colours: [hsv, hsv, hsv] },
+  },
   clip: null,
   ...over,
 });
@@ -75,7 +80,11 @@ const saved = () => vi.mocked(api.saveSettings).mock.calls.at(-1)?.[0];
 beforeEach(() => {
   root = document.createElement("div");
   document.body.append(root);
-  vi.mocked(api.saveSettings).mockImplementation(async (s) => s);
+  // Like the backend: what was saved is what the next read returns.
+  vi.mocked(api.saveSettings).mockImplementation(async (s) => {
+    vi.mocked(api.getSettings).mockResolvedValue(s);
+    return s;
+  });
   vi.mocked(api.listMidiSources).mockResolvedValue(["Clock A"]);
   vi.mocked(api.listAudioInputs).mockResolvedValue(["Mic B"]);
   vi.mocked(api.onStatus).mockImplementation(async (cb) => {
@@ -137,12 +146,14 @@ it("latency_stepper_10ms_within_range", async () => {
   const input = q<HTMLInputElement>("input[aria-label='Send early by (ms)']");
   input.value = "9999";
   await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
+  await settle();
   expect(saved()?.leadMs).toBe(500);
   expect(q<HTMLButtonElement>("button[aria-label='Send earlier by 10 ms more']").disabled).toBe(
     true,
   );
   input.value = "abc";
   await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
+  await settle();
   expect(saved()?.leadMs).toBe(500);
   expect(input.value).toBe("500");
 });
@@ -209,4 +220,16 @@ it("copy_never_names_midi_sync", async () => {
     "Any MIDI clock works. The last input used is remembered; new sources appear on their own, and if the source goes away it reconnects when it comes back.",
   ])
     expect(root.textContent).toContain(t);
+});
+
+it("a_save_keeps_settings_changed_elsewhere_since_mount", async () => {
+  await mount();
+  // The engine picked the clock source by itself after the tab opened.
+  vi.mocked(api.getSettings).mockResolvedValue(
+    settings({ midiSource: "Clock A", brightnessPct: 40 }),
+  );
+  await click(q("button[aria-label='Send earlier by 10 ms more']"));
+  expect(saved()?.leadMs).toBe(110);
+  expect(saved()?.midiSource).toBe("Clock A");
+  expect(saved()?.brightnessPct).toBe(40);
 });

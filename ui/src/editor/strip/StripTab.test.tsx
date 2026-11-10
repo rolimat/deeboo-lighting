@@ -299,3 +299,16 @@ it("guide_visible_whenever_help_is_on", async () => {
   await g(true);
   expect(root.textContent).toContain("How to draw your strip");
 });
+
+it("changing_the_wired_count_saves_a_pending_shape_edit_first", async () => {
+  await mount(8, 8, 10);
+  await drag(segment(2), [1.5, 0.5], [1.5, 3.5]);
+  expect(api.saveLibrary).not.toHaveBeenCalled(); // still inside the 400 ms debounce
+  await act(async () => {
+    button("More segments").click();
+    await settle();
+  });
+  const saved = vi.mocked(api.saveLibrary).mock.invocationCallOrder[0] ?? Infinity;
+  const wired = vi.mocked(api.setWiredSegments).mock.invocationCallOrder[0] ?? 0;
+  expect(saved).toBeLessThan(wired);
+});

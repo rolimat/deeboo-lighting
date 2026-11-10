@@ -43,6 +43,7 @@ const base: Status = {
   clip: null,
   selection: {
     set: "Default",
+    setId: 1,
     paletteAuto: false,
     palette: {
       name: "Test",

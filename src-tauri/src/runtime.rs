@@ -634,8 +634,8 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     }
 
     fn identify(&mut self, segment: u8, now_us: u64) {
-        let ready = matches!(self.strip, StripStatus::Connected { .. })
-            && (1..=self.segments).contains(&segment)
+        // 1..=reported: the unwired tail can be counted too.
+        let ready = matches!(self.strip, StripStatus::Connected { reported, .. } if (1..=reported).contains(&segment))
             && self
                 .identify_at
                 .is_none_or(|t| now_us >= t + IDENTIFY_GATE_US);
@@ -1242,6 +1242,29 @@ mod tests {
         let _ = rx.try_recv();
         c.handle(Input::Identify(3), 5_000_000);
         assert!(rx.try_recv().is_err(), "paused");
+    }
+
+    #[test]
+    fn identify_accepts_the_unwired_tail_up_to_what_the_strip_reports() {
+        let (mut c, mut rx, _) = core(true);
+        c.handle(Input::StripChanged(new_cfg("dj", 8)), 500);
+        let _ = rx.try_recv();
+        let wired8 = StripStatus::Connected {
+            name: "dj".into(),
+            segments: 8,
+            reported: 10,
+            ip: None,
+        };
+        c.handle(Input::StripState(wired8), 1_000);
+        let _ = painted(&mut c, &mut rx);
+        for (i, seg) in [9u8, 10].into_iter().enumerate() {
+            c.handle(Input::Identify(seg), 2_000_000 + 1_000_000 * i as u64);
+            assert!(matches!(rx.try_recv(), Ok(StripMsg::Identify(n)) if n == seg));
+        }
+        c.handle(Input::Identify(11), 9_000_000);
+        while let Ok(m) = rx.try_recv() {
+            assert!(!matches!(m, StripMsg::Identify(_)), "11 is not a segment");
+        }
     }
 
     #[test]

@@ -335,3 +335,23 @@ it("playing_clip_glows_with_progress_only_on_the_live_set", async () => {
   await click(qa("nav button").find((b) => b.textContent === "Club"));
   expect(root.querySelector("[data-playing]")).toBeNull();
 });
+
+it("the_live_set_follows_the_status_when_the_popover_changes_it", async () => {
+  let push: (s: never) => void = () => {};
+  vi.mocked(api.onStatus).mockImplementation(async (cb) => {
+    push = cb as never;
+    return () => {};
+  });
+  await act(async () => render(null, root));
+  await mount();
+  expect(q("button[aria-label='Playing Main live']")).toBeTruthy();
+  await click(qa("nav button").find((b) => b.textContent === "Main")); // pin Main as the open set
+  const st = { ...status({ moment: "rhythm", index: 1, elapsed: 4, total: 16 }) };
+  st.selection = { palette: { name: "Neon" }, setId: 2 } as never;
+  await act(async () => void push(st as never));
+  expect(q("button[aria-label='Playing Club live']")).toBeTruthy();
+  expect(q("button[aria-label='Play Main live']")).toBeTruthy();
+  // Main is open but no longer live: no playing clip is drawn on it.
+  expect(root.querySelector("[data-playing]")).toBeNull();
+  expect(q("[data-live-state]")?.textContent).toContain("Not playing");
+});

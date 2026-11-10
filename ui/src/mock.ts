@@ -79,7 +79,7 @@ export function installMock(api: typeof realApi): void {
       audio: flags.has("audiofail")
         ? { ok: false, device: "Loopback" }
         : { ok: !noClock, device: "Loopback", levelDb: -24 },
-      selection: { set: SETS[set] as string, paletteAuto: pal < 0, palette: p },
+      selection: { set: SETS[set] as string, setId: set + 1, paletteAuto: pal < 0, palette: p },
       clip: null,
     };
   };

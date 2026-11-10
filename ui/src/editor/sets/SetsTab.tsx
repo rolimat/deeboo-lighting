@@ -57,12 +57,13 @@ export function SetsTab({
   const [drag, setDrag] = useState<Drag>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const held = useRef<(() => void) | null>(null);
+  // Which set is live: the library's answer, and the status stream when the popover changes it.
+  const [liveId, setLiveId] = useState(store.liveSet);
+  useEffect(() => setLiveId(store.liveSet), [store.liveSet]);
 
   const set =
-    lib?.sets.find((s) => s.id === sel) ??
-    lib?.sets.find((s) => s.id === store.liveSet) ??
-    lib?.sets[0];
-  const isLive = !!set && set.id === store.liveSet;
+    lib?.sets.find((s) => s.id === sel) ?? lib?.sets.find((s) => s.id === liveId) ?? lib?.sets[0];
+  const isLive = !!set && set.id === liveId;
   const sequences = lib?.sequences ?? [];
   const palettes = lib?.palettes ?? [];
   const firstPalette = palettes.find(([id]) => id === set?.palettes[0])?.[1];
@@ -124,6 +125,7 @@ export function SetsTab({
       .onStatus((st) => {
         pushed = true;
         setStatus(st);
+        if (st.selection.setId !== undefined) setLiveId(st.selection.setId);
       })
       .then(
         (u) => (alive ? (off = u) : u()),
@@ -260,7 +262,7 @@ export function SetsTab({
           {lib.sets
             .filter((s) => match(s.name))
             .map((s) => {
-              const playing = s.id === store.liveSet;
+              const playing = s.id === liveId;
               return (
                 <li key={s.id} class="flex items-center gap-1">
                   <button

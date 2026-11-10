@@ -53,16 +53,20 @@ export function StripTab({
   const change = (n: number) => {
     setConfirm(null);
     setError("");
-    api.setWiredSegments(n).then(
-      (l) => {
-        store.reset(l); // Settings are not part of undo: the history starts over.
-        setWired(n);
-        setSelected(null);
-        setLit(null);
-        onWired();
-      },
-      (e: unknown) => setError(String(e)),
-    );
+    // An edit still in its 400 ms debounce must reach Rust first, or the resize would drop it.
+    store
+      .flushNow()
+      .then(() => api.setWiredSegments(n))
+      .then(
+        (l) => {
+          store.reset(l); // Settings are not part of undo: the history starts over.
+          setWired(n);
+          setSelected(null);
+          setLit(null);
+          onWired();
+        },
+        (e: unknown) => setError(String(e)),
+      );
   };
 
   return (

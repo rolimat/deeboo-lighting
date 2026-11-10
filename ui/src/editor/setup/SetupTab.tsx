@@ -4,6 +4,7 @@ import type { Settings, Status } from "../../api";
 import { Icon } from "../../icons/Icon";
 import type { IconName } from "../../icons";
 import { api } from "../api";
+import { patchSettings } from "../state/settings";
 import { ChangesSlider } from "../detection/ChangesSlider";
 import { Level } from "../detection/DetectionTab";
 import { useHelp } from "../shell/Help";
@@ -111,9 +112,8 @@ export function SetupTab() {
   if (!s) return <p class="text-red">{err}</p>;
 
   const apply = (patch: Partial<Settings>) => {
-    const next = { ...s, ...patch };
-    setS(next);
-    api.saveSettings(next).then(setS, (e) => setErr(String(e)));
+    setS({ ...s, ...patch });
+    patchSettings(patch).then(setS, (e) => setErr(String(e)));
   };
   const setLead = (n: number) => {
     setTyped(null);

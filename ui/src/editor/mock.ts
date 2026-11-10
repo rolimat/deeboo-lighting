@@ -160,6 +160,7 @@ export function installMock(api: typeof realApi): void {
     })(),
     selection: {
       set: lib.sets.find((x) => x.id === lib.activeSet)?.name ?? "",
+      setId: lib.activeSet,
       paletteAuto: true,
       palette: { name: "Neon", colours: [hsv(300), hsv(180), hsv(260)] },
     },
