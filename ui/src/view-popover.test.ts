@@ -82,7 +82,10 @@ const sel = (over: Partial<Selection> = {}): Selection => ({ ...base.selection, 
 it("header_shows_bpm_beat_phrase_moment", () => {
   view.update(st({ bpm: 122.04, playing: true, beatInBar: 2, barInPhrase: 3, phraseBars: 8 }));
   expect(text(".bpm")).toBe("122.0");
-  expect(text(".tempo-sub")).toBe("BPM · beat 2phrase: bar 3 of 8");
+  expect(text(".tempo-sub")).toBe("BPMphrase: bar 3 of 8");
+  const lit = () => [...root.querySelectorAll(".beat")].map((b) => b.classList.contains("lit"));
+  expect(lit()).toEqual([false, true, false, false]);
+  expect(q(".beats")?.getAttribute("aria-label")).toBe("Beat 2 of 4");
   expect(text(".moment-chip")).toBe("Rhythm");
   expect(q(".moment-chip svg path")?.getAttribute("d")).toBe("M3 12h3l3-7 4 14 3-7h5");
   view.update(st({ moment: "calm" }));
@@ -94,7 +97,9 @@ it("header_shows_bpm_beat_phrase_moment", () => {
   ).toBe("M3 20 21 4M21 4v7M21 4h-7");
   view.update(base);
   expect(text(".bpm")).toBe("—");
-  expect(text(".tempo-sub")).toBe("BPM · beat —phrase: bar — of 8");
+  expect(text(".tempo-sub")).toBe("BPMphrase: bar — of 8");
+  expect(lit()).toEqual([false, false, false, false]);
+  expect(q(".beats")?.getAttribute("aria-label")).toBe("No beat");
 });
 
 it("lights_play_button_teal_on_grey_off", () => {
@@ -232,7 +237,7 @@ it("copy_is_english", () => {
   expect(words).toMatchInlineSnapshot(`
     [
       "—",
-      "BPM · beat —",
+      "BPM",
       "phrase: bar — of 8",
       "Rhythm",
       "Lights",

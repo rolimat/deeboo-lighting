@@ -45,3 +45,36 @@ body {
   border: 0;
   box-shadow: 0 0 0 1px #000;
 }
+
+/* Segmented control: the selected segment has its own rounded teal ring, fully inside the border. */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+.seg > button {
+  border-radius: 5px;
+  color: var(--color-dim);
+}
+.seg > button[aria-pressed="true"],
+.seg > button[aria-checked="true"] {
+  background: var(--color-card);
+  color: var(--color-text);
+  box-shadow: inset 0 0 0 1.5px var(--color-accent);
+}
+
+/* One size for every text field and select in the editor (unlayered: wins over utility classes). */
+select,
+input:not([type]),
+input[type="text"],
+input[type="search"] {
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 13px;
+  line-height: 1;
+  min-width: 0;
+  max-width: 100%;
+}

@@ -264,18 +264,14 @@ export function SetupTab() {
         hint={'How many bars count as one phrase. The counter "phrase: bar x of N" uses it.'}
       >
         <Row label="Bars per phrase">
-          <span
-            role="radiogroup"
-            aria-label="Bars per phrase"
-            class="inline-flex overflow-hidden rounded-card border border-border"
-          >
+          <span role="radiogroup" aria-label="Bars per phrase" class="seg">
             {[4, 8, 16].map((n) => (
               <button
                 key={n}
                 type="button"
                 role="radio"
                 aria-checked={s.phraseBars === n}
-                class={`px-3 py-1 ${s.phraseBars === n ? "bg-card text-text" : "text-dim"}`}
+                class="px-3 py-1"
                 onClick={() => apply({ phraseBars: n })}
               >
                 {n}

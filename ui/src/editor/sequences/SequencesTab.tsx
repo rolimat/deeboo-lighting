@@ -463,7 +463,7 @@ export function SequencesTab({
               {!readOnly && (
                 <div class="flex items-center gap-2" role="group" aria-label="Moment">
                   <span class="text-[10px] uppercase tracking-wider text-dim">Moment</span>
-                  <div class="inline-flex overflow-hidden rounded-md border border-border">
+                  <div class="seg">
                     {MOMENTS.map(([m, , icon, name]) => (
                       <button
                         type="button"
@@ -471,7 +471,7 @@ export function SequencesTab({
                         aria-label={`Moment ${name}`}
                         aria-pressed={shown.moment === m}
                         onClick={() => changeMoment(m)}
-                        class={`flex items-center gap-1.5 px-2 py-1 text-sm ${shown.moment === m ? "bg-card text-text" : "text-dim"}`}
+                        class="flex items-center gap-1.5 px-2 py-1 text-sm"
                       >
                         <Icon name={icon} />
                         {name}

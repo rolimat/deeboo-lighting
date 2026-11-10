@@ -27,11 +27,7 @@ export function OrderPicker({
   onChange: (o: Order) => void;
 }) {
   return (
-    <span
-      role="group"
-      aria-label={label}
-      class="inline-flex overflow-hidden rounded border border-border"
-    >
+    <span role="group" aria-label={label} class="seg">
       {options.map(([o, icon, name]) => (
         <button
           type="button"
@@ -40,7 +36,7 @@ export function OrderPicker({
           title={name}
           aria-pressed={o === value}
           onClick={() => onChange(o)}
-          class={`grid place-items-center px-1.5 py-1 ${o === value ? "bg-card text-text" : "text-dim"}`}
+          class="grid place-items-center px-1.5 py-1"
         >
           <Icon name={icon} />
         </button>

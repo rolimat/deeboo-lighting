@@ -80,6 +80,28 @@ button {
   line-height: 1.4;
 }
 
+.bpm-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.beats {
+  display: flex;
+  gap: 3px;
+}
+
+.beat {
+  width: 8px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.beat.lit {
+  background: var(--accent);
+}
+
 .moment-chip {
   display: flex;
   align-items: center;
@@ -162,9 +184,10 @@ input[type="range"] {
 
 .segmented {
   display: flex;
+  gap: 2px;
+  padding: 2px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
+  border-radius: 8px;
 }
 
 .segmented button {
@@ -172,13 +195,14 @@ input[type="range"] {
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 5px 0;
+  padding: 4px 0;
+  border-radius: 5px;
   color: var(--dim);
 }
 
 .segmented button[aria-pressed="true"] {
   background: var(--card);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
   color: var(--text);
 }
 

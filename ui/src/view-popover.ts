@@ -134,10 +134,14 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
 
   // Header: tempo and moment
   const bpm = el("div", "bpm", "—");
-  const beat = el("div");
+  const marks = [1, 2, 3, 4].map(() => el("span", "beat"));
+  const beats = el("div", "beats");
+  beats.append(...marks);
+  const bpmLine = el("div", "bpm-line");
+  bpmLine.append(el("span", "", "BPM"), beats);
   const phrase = el("div");
   const sub = el("div", "tempo-sub");
-  sub.append(beat, phrase);
+  sub.append(bpmLine, phrase);
   const chip = el("div", "moment-chip");
   const chipLabel = el("span");
   let chipMoment: MomentName | null = null;
@@ -232,7 +236,8 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
   return {
     update(s) {
       setText(bpm, s.bpm === null ? "—" : s.bpm.toFixed(1));
-      setText(beat, `BPM · beat ${s.beatInBar ?? "—"}`);
+      marks.forEach((m, i) => m.classList.toggle("lit", s.beatInBar === i + 1));
+      setAttr(beats, "aria-label", s.beatInBar === null ? "No beat" : `Beat ${s.beatInBar} of 4`);
       setText(phrase, `phrase: bar ${s.barInPhrase ?? "—"} of ${s.phraseBars}`);
       if (chipMoment !== s.moment) {
         chipMoment = s.moment;
