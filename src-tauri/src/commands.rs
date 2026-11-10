@@ -487,6 +487,7 @@ impl AppState {
         self.wizard.cancel(emit);
         self.deliver(Input::DetectionWatch(false));
         self.deliver(Input::PreviewPalette(None));
+        self.deliver(Input::Calibrate(false));
     }
 
     /// App exit: a running wizard is cancelled (its cloud session revoked) before the engine stops.
@@ -721,6 +722,14 @@ pub fn preview_palette(
         None
     };
     state.send(Input::PreviewPalette(p))
+}
+
+/// Setup's "Calibrate": while `on` and the clock plays, the strip flashes white on every beat instead of
+/// the show. Never persisted; the UI, a clock Stop and closing the editor all switch it off.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn calibrate_latency(state: tauri::State<'_, AppState>, on: bool) -> Result<(), String> {
+    state.send(Input::Calibrate(on))
 }
 
 /// What holding a set clip plays: the palette as sent (range-checked) with the clip's sequence, a
@@ -1010,13 +1019,11 @@ mod tests {
         let emit: Emit = Arc::new(|_| {});
         state.editor_closed(&emit);
         assert!(matches!(rx.recv(), Ok(Input::PopoverShown)));
-        let got = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
-        let got2 = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
-        assert!(
-            [got, got2]
-                .iter()
-                .any(|i| matches!(i, Input::PreviewPalette(None)))
-        );
+        let got: Vec<Input> = (0..3)
+            .map(|_| rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap())
+            .collect();
+        assert!(got.iter().any(|i| matches!(i, Input::PreviewPalette(None))));
+        assert!(got.iter().any(|i| matches!(i, Input::Calibrate(false))));
     }
 
     #[test]
@@ -1100,7 +1107,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 28);
+        assert_eq!(commands.len(), 29);
         assert_eq!(granted, commands);
     }
 
@@ -1394,7 +1401,7 @@ mod tests {
         let emit: Emit = Arc::new(|_| {});
         state.editor_closed(&emit);
         assert!(matches!(rx.recv(), Ok(Input::PopoverShown)));
-        let got: Vec<Input> = (0..3)
+        let got: Vec<Input> = (0..4)
             .map(|_| rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap())
             .collect();
         assert!(got.iter().any(|i| matches!(i, Input::Library(_))));

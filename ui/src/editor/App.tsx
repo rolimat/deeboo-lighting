@@ -7,7 +7,7 @@ import { SequencesTab, type BarActions, type Sel } from "./sequences/SequencesTa
 import { StripTab } from "./strip/StripTab";
 import { DetectionTab } from "./detection/DetectionTab";
 import { Wizard, wizardLine } from "./strip/Wizard";
-import { Setup } from "./setup/Setup";
+import { SetupTab } from "./setup/SetupTab";
 import { HelpProvider } from "./shell/Help";
 import { TopBar, TABS, type Tab } from "./shell/TopBar";
 import { useLibrary } from "./state/library";
@@ -32,6 +32,7 @@ function initialTab(): Tab {
 }
 
 const NO_UNDO = "This tab applies changes at once, so there is nothing to undo.";
+const NO_UNDO_SETUP = "Settings apply at once; use Reset to defaults instead.";
 
 export function App() {
   const [strip, setStrip] = useState<StripStatus | null>(null);
@@ -79,7 +80,7 @@ export function App() {
           onRedo={store.redo}
           {...(tab === "sets" || tab === "sequences" || tab === "palettes" ? actions : null)}
           save={store.save}
-          undoDisabledHint={libraryTab ? undefined : NO_UNDO}
+          undoDisabledHint={libraryTab ? undefined : tab === "setup" ? NO_UNDO_SETUP : NO_UNDO}
         />
         <section class="min-h-0 flex-1 overflow-auto p-6" aria-label={label}>
           {tab === "sets" && (
@@ -104,7 +105,7 @@ export function App() {
             <PalettesTab store={store} onActions={setActions} onGoSets={() => setTab("sets")} />
           )}
           {tab === "detection" && <DetectionTab onGoSetup={() => setTab("setup")} />}
-          {tab === "setup" && <Setup />}
+          {tab === "setup" && <SetupTab />}
           {tab === "strip" &&
             (strip?.kind === "connected" && !repair ? (
               <StripTab

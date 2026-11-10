@@ -27,6 +27,10 @@ import rotateccw from "./rotateccw.svg?raw";
 import rotatecw from "./rotatecw.svg?raw";
 import lightbulb from "./lightbulb.svg?raw";
 import preview from "./preview.svg?raw";
+import midi from "./midi.svg?raw";
+import mic from "./mic.svg?raw";
+import clock from "./clock.svg?raw";
+import phrase from "./phrase.svg?raw";
 
 /** Bundled line icons (24x24, stroke 2); see LICENSE.md. */
 export const icons = {
@@ -59,5 +63,9 @@ export const icons = {
   rotateccw,
   rotatecw,
   lightbulb,
+  midi,
+  mic,
+  clock,
+  phrase,
 };
 export type IconName = keyof typeof icons;

@@ -40,6 +40,8 @@ pub enum Input {
     /// "Show on strip" in the editor's Palettes tab: this palette and sequence replace the show
     /// (`Some`, already validated) until `None`.
     PreviewPalette(Option<Box<(Palette, Sequence)>>),
+    /// Setup's latency calibration: the strip flashes white on every beat (`true`) or goes back to the show.
+    Calibrate(bool),
     StripState(StripStatus),
     /// The wizard saved a new strip file: reconnect with it.
     StripChanged(StripConfig),
@@ -590,6 +592,10 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             Input::Identify(segment) => self.identify(segment, now_us),
             Input::PreviewPalette(p) => {
                 let cmds = self.engine.set_preview(now_us, p.map(|b| *b));
+                self.flush(cmds);
+            }
+            Input::Calibrate(on) => {
+                let cmds = self.engine.calibrate(now_us, on);
                 self.flush(cmds);
             }
             Input::StripState(_) if self.strip_paused => {

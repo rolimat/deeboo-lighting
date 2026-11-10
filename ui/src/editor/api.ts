@@ -162,6 +162,12 @@ export const api = {
   saveSettings: (settings: Settings): Promise<Settings> => invoke("save_settings", { settings }),
   listMidiSources: (): Promise<string[]> => invoke("list_midi_sources"),
   listAudioInputs: (): Promise<string[]> => invoke("list_audio_inputs"),
+  /** The OS's MIDI sources changed (event `midi-sources`; no polling). */
+  onMidiSources: (cb: (sources: string[]) => void): Promise<UnlistenFn> =>
+    listen<string[]>("midi-sources", (e) => cb(e.payload)),
+  /** Latency calibration: the strip flashes white on every beat while the clock plays, until `false`. */
+  calibrateLatency: (on: boolean): Promise<void> => invoke("calibrate_latency", { on }),
+  quit: (): Promise<void> => invoke("quit"),
   /** The live readout; the backend pushes it on every change (event `status`). */
   getFullStatus: (): Promise<Status> => invoke("get_status"),
   /** The editor was already open and was asked to show another tab (event `editor-section`). */

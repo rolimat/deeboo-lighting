@@ -10,7 +10,7 @@ const DEFAULTS = { sensitivity: 5, calmKickDb: 16, calmHighDb: 12, riserDb: 7 };
 const SEND_DELAY_MS = 300;
 const LEVEL_SEGMENTS = 12;
 
-function Level({ db }: { db: number }) {
+export function Level({ db }: { db: number }) {
   const lit = Math.round(Math.min(1, Math.max(0, (db + 60) / 60)) * LEVEL_SEGMENTS);
   return (
     <span

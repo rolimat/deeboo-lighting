@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "preview_generated",
     "preview_palette",
     "preview_sequence",
+    "calibrate_latency",
     "detection_watch",
     "set_detection_thresholds",
 ];

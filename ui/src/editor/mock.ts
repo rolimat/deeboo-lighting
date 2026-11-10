@@ -165,6 +165,13 @@ export function installMock(api: typeof realApi): void {
     },
   });
   const listeners = new Set<(s: Status) => void>();
+  const sourceListeners = new Set<(l: string[]) => void>();
+  let sources = ["Mock clock", "IAC Driver Bus 1"];
+  // A source that starts after the app: it appears on its own, with no refresh.
+  setTimeout(() => {
+    sources = [...sources, "Late Source"];
+    sourceListeners.forEach((cb) => cb(sources));
+  }, 4000);
   const detectors = new Set<(e: DetectorEvent) => void>();
   setInterval(() => {
     beat += 1;
@@ -201,7 +208,13 @@ export function installMock(api: typeof realApi): void {
       ),
     getSettings: async () => settings,
     saveSettings: async (s: Settings) => (settings = s),
-    listMidiSources: async () => ["Mock clock", "IAC Driver Bus 1"],
+    listMidiSources: async () => sources,
+    onMidiSources: async (cb: (l: string[]) => void) => {
+      sourceListeners.add(cb);
+      return () => void sourceListeners.delete(cb);
+    },
+    calibrateLatency: async () => {},
+    quit: async () => console.info("mock: quit"),
     listAudioInputs: async () => ["MacBook Microphone", "Mock interface"],
     // Shape only: the mock's sequences keep their 8 roles.
     setWiredSegments: async (n: number) => {

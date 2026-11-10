@@ -11,4 +11,4 @@
 > granted, provided that the above copyright notice and this permission notice appear in all copies.
 > THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES.
 
-`rhythm`, `calm`, `buildup` and `strip` are drawn for this project in the same style.
+`rhythm`, `calm`, `buildup`, `strip`, `midi`, `mic`, `clock` and `phrase` are drawn for this project in the same style.

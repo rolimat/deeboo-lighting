@@ -11,7 +11,7 @@ Popover width 340px, dark, rounded cards (spec §7.2, approved mockup `menubar-2
 - Save state: "Saving…", "✓ Saved", red "Not saved — <reason>". Live readout: "● 122.0 BPM · beat 2 · phrase: bar 3 of 8 · <icon> Rhythm" or "○ No clock". Delete asks: `Delete "<name>"? You can undo this with ⌘Z.` (Cancel / Delete).
 - Label left of its field, same row. Left navigator (search, list) in Sets, Sequences, Palettes.
 - One teal accent (`--color-accent`) for live, selection and valid drop targets; red only for delete and errors; no colour per moment. Moment icons: Rhythm pulse, Calm wave, Build-up rising arrow.
-- Icons: bundled line SVGs (Lucide, ISC, see `ui/src/icons/LICENSE.md`); no emoji or pictographs anywhere. Undo/redo are disabled on Strip, Detection and Setup with the hint "This tab applies changes at once, so there is nothing to undo."
+- Icons: bundled line SVGs (Lucide, ISC, see `ui/src/icons/LICENSE.md`); no emoji or pictographs anywhere. Undo/redo are disabled on Strip and Detection with the hint "This tab applies changes at once, so there is nothing to undo.", and on Setup with "Settings apply at once; use Reset to defaults instead."
 
 ## Component classes
 `.test-strip`: debug-builds-only "Test strip" button in the popover card.
@@ -32,3 +32,5 @@ The authoritative copy is in spec §6.7 and §7. Copy that exists in code is lis
 
 ## Detection tab
 "Moment changes" (Steady / Balanced / Reactive; per-step explanations in `ChangesSlider.tsx`), "Reset to defaults", "Last 8 bars", "now ▸", lanes Moment / Kick / Sub / Highs, "Calm when N dB below", "Build-up when N dB above", "Waiting for MIDI clock", "Start playback in your clock source (DJ software, drum machine…). Detection follows the beats it sends.", "Change in Setup", "Moment forced — switch to Auto to see detection", "Live view: it moves in real time while the clock plays and the audio input hears the music."
+
+Setup tab: sections "MIDI clock" (Where the tempo comes from. Deeboo Lighting listens; it never sends.; Input; "Virtual port (Deeboo Lighting In)"; "● Receiving · N BPM"; Any MIDI clock works...), "Audio input" (What the detector listens to...; Device; "Level OK"; "Microphone access: allowed"), "Light latency" (Send early by; Calibrate…; "Start the MIDI clock to calibrate."; the Calibrate box text), "Phrase" (Bars per phrase 4 | 8 | 16), "Moment changes", "Quit Deeboo Lighting". Exact strings are asserted in `SetupTab.test.tsx`; none names other software.

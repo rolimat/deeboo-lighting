@@ -64,6 +64,7 @@ pub fn run() -> tauri::Result<()> {
             commands::preview_generated,
             commands::preview_palette,
             commands::preview_sequence,
+            commands::calibrate_latency,
             commands::detection_watch,
             commands::set_detection_thresholds
         ])

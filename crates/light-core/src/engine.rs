@@ -211,6 +211,8 @@ const PREVIEW_HALF_US: u64 = 250_000;
 pub struct Engine {
     cfg: EngineConfig,
     preview: Option<Preview>,
+    /// Latency calibration: every wired segment flashes white on each beat instead of the show.
+    calibrating: bool,
     /// When the clock-less preview shows its next step.
     free_at: Option<u64>,
     clock: ClockTracker,
@@ -243,6 +245,7 @@ impl Engine {
     pub fn with_seed(cfg: EngineConfig, seed: u64) -> Self {
         Self {
             preview: None,
+            calibrating: false,
             free_at: None,
             generator: Generator::new(seed),
             seed,
@@ -340,6 +343,18 @@ impl Engine {
         self.resend = true;
         if self.cfg.lights_on && !self.clock.running() {
             self.rest_or_preview(now_us);
+        }
+        self.sched.due(now_us)
+    }
+
+    /// Latency calibration: while the clock plays, a short white flash on every beat (dark between)
+    /// replaces the show. It never persists: `false`, a clock Stop or no clock at all ends it.
+    pub fn calibrate(&mut self, now_us: u64, on: bool) -> Vec<PaintCommand> {
+        let on = on && self.clock.running();
+        if on != self.calibrating {
+            self.calibrating = on;
+            self.playing = None;
+            self.resend = true;
         }
         self.sched.due(now_us)
     }
@@ -447,6 +462,25 @@ impl Engine {
             self.last_beat_us = Some(at);
             let next_beat = self.clock.position_after(self.clock.position_after(pos));
             self.control.next(next_beat, self.cfg.phrase, detect());
+        }
+        if self.calibrating {
+            // The beat pulse plans the dark half, the half pulse the next beat's flash; a Start flashes now.
+            let start = pos.beat == 0 && !pos.half;
+            let role = if pos.half || start {
+                Role::White
+            } else {
+                Role::Off
+            };
+            let show_at = if start {
+                at
+            } else {
+                at.saturating_add(self.clock.half_period_us().unwrap_or(0))
+            };
+            let desired = self.scene(std::iter::repeat_n(role, usize::from(self.cfg.segments)));
+            if self.cfg.lights_on {
+                self.sched.plan(at, show_at, self.cfg.lead_us, &desired);
+            }
+            return;
         }
         let moment = if pos.half {
             self.control.applied()
@@ -565,6 +599,7 @@ impl Engine {
     }
 
     fn stopped(&mut self, now: u64) {
+        self.calibrating = false;
         self.playing = None;
         self.rot_moment = None;
         self.pos = None;

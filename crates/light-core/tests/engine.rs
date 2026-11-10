@@ -1000,3 +1000,67 @@ fn status_reports_the_playing_clip_and_its_progress() {
     s.beats_of(2, &mut none);
     assert_eq!(s.e.status().clip.map(|c| c.moment), Some(Calm));
 }
+
+// ---- latency calibration ----
+
+/// All four segments white (the built-in show only whitens some of them).
+fn is_white(c: &PaintCommand) -> bool {
+    match c {
+        PaintCommand::Bucket(color) => color.s == 0 && color.v > 0,
+        PaintCommand::Pencil { color, segments } => {
+            color.s == 0 && color.v > 0 && segments.len() == 4
+        }
+        PaintCommand::Eraser { .. } => false,
+    }
+}
+
+#[test]
+fn calibrate_flashes_on_beats_and_restores_show() {
+    let mut s = sim125();
+    s.start();
+    s.beats_of(2, &mut none);
+    let out = s.e.calibrate(s.now, true);
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.beats_of(6, &mut none);
+    let flashes: Vec<u64> = s.sends[mark..]
+        .iter()
+        .filter(|(_, c)| is_white(c))
+        .map(|(t, _)| *t)
+        .collect();
+    assert!(flashes.len() >= 4, "{flashes:?}");
+    for t in &flashes {
+        assert_eq!((t + LEAD - T0) % 480_000, 0, "flash lands on a beat: {t}");
+    }
+    assert!(
+        s.sends[mark..]
+            .iter()
+            .any(|(_, c)| matches!(c, PaintCommand::Eraser { .. })),
+        "dark between beats"
+    );
+    let out = s.e.calibrate(s.now, false);
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.beats_of(6, &mut none);
+    assert!(
+        s.sends[mark..].iter().all(|(_, c)| !is_white(c)),
+        "the show is back"
+    );
+    assert!(s.sends.len() > mark, "and it paints");
+}
+
+#[test]
+fn calibrate_needs_a_clock_and_ends_on_stop() {
+    let mut s = sim125();
+    let out = s.e.calibrate(s.now, true);
+    assert!(out.is_empty(), "no clock, no flash");
+    s.start();
+    s.beats_of(1, &mut none);
+    let out = s.e.calibrate(s.now, true);
+    s.record(s.now, out);
+    s.byte(0xFC, &mut none); // Stop
+    s.start();
+    let mark = s.sends.len();
+    s.beats_of(6, &mut none);
+    assert!(s.sends[mark..].iter().all(|(_, c)| !is_white(c)), "ended");
+}

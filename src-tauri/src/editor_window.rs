@@ -188,6 +188,8 @@ mod tests {
                 "allow-preview-generated",
                 "allow-preview-palette",
                 "allow-preview-sequence",
+                "allow-calibrate-latency",
+                "allow-quit",
                 "allow-set-live-set",
                 "allow-pattern-sequence",
                 "allow-detection-watch",
