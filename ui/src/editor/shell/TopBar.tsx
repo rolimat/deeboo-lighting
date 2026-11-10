@@ -46,7 +46,7 @@ function IconButton(p: {
       aria-label={p.label}
       disabled={p.disabled}
       onClick={p.onClick}
-      class={`rounded-card p-2 disabled:opacity-40 ${p.red ? "text-red" : ""}`}
+      class={`grid h-7 w-7 shrink-0 place-items-center rounded-lg border disabled:opacity-40 ${p.red ? "border-red-dark text-red" : "border-border text-dim"}`}
       {...help}
     >
       <Icon name={p.name} />
@@ -58,8 +58,8 @@ export function TopBar(p: TopBarProps) {
   const [confirm, setConfirm] = useState(false);
   const noUndo = p.undoDisabledHint;
   return (
-    <header class="flex items-center gap-1 border-b border-border px-3 py-2">
-      <div role="tablist" aria-label="Sections" class="flex gap-1">
+    <header class="flex min-w-0 items-center gap-1.5 border-b border-border px-3 py-2">
+      <div role="tablist" aria-label="Sections" class="flex shrink-0 gap-0.5">
         {TABS.map(([id, name]) => (
           <button
             type="button"
@@ -67,7 +67,7 @@ export function TopBar(p: TopBarProps) {
             key={id}
             aria-selected={id === p.tab}
             onClick={() => p.onTab(id)}
-            class={`flex items-center gap-2 rounded-card px-3 py-2 ${id === p.tab ? "bg-card text-accent" : "text-dim"}`}
+            class={`flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-sm ${id === p.tab ? "bg-card text-accent" : "text-dim"}`}
           >
             <Icon name={id} />
             {name}
@@ -88,14 +88,16 @@ export function TopBar(p: TopBarProps) {
         disabled={!!noUndo || !p.canRedo}
         onClick={p.onRedo}
       />
-      {(p.onDuplicate || p.onDelete) && <span class="mx-1 h-5 w-px bg-border" role="separator" />}
+      {(p.onDuplicate || p.onDelete) && (
+        <span class="mx-1 h-5 w-px shrink-0 bg-border" role="separator" />
+      )}
       {p.onDuplicate && <IconButton name="duplicate" label="Duplicate" onClick={p.onDuplicate} />}
       {p.onDelete && (
         <IconButton name="delete" label="Delete" red onClick={() => setConfirm(true)} />
       )}
       <span
         role="status"
-        class={`ml-auto px-2 text-sm ${p.save.state === "error" ? "text-red" : "text-dim"}`}
+        class={`ml-auto shrink-0 whitespace-nowrap px-2 text-sm ${p.save.state === "error" ? "text-red" : "text-dim"}`}
       >
         {p.save.state === "saving"
           ? "Saving…"

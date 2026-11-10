@@ -39,6 +39,23 @@ export function App() {
   const [tab, setTab] = useState<Tab>(initialTab);
   const store = useLibrary();
   useEffect(() => {
+    let off: (() => void) | undefined;
+    let alive = true;
+    api
+      .onSection((id) => {
+        const t = TABS.find(([name]) => name === id)?.[0];
+        if (t) setTab(t);
+      })
+      .then(
+        (u) => (alive ? (off = u) : u()),
+        () => {},
+      );
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, []);
+  useEffect(() => {
     api.getStatus().then(setStrip, () => setStrip({ kind: "error" }));
   }, [tab]); // current after a re-pair: the tab was left and re-entered
   const label = TABS.find(([id]) => id === tab)?.[1] ?? "";

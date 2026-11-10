@@ -123,6 +123,46 @@ it("live_readout_formats_status", async () => {
   );
 });
 
+it("top_bar_is_a_single_row_of_bordered_icon_buttons", async () => {
+  const root = await mount(bar({ onDelete: () => {}, onDuplicate: () => {} }));
+  const has = (el: Element | null | undefined, ...cls: string[]) =>
+    cls.forEach((c) => expect(el?.classList.contains(c), c).toBe(true));
+  for (const name of ["Undo", "Redo", "Duplicate", "Delete", "Help"])
+    has(root.querySelector(`[aria-label='${name}']`), "h-7", "w-7", "border", "rounded-lg");
+  has(root.querySelector("[aria-label='Delete']"), "text-red", "border-red-dark");
+  has(root.querySelector("[aria-label='Help']"), "text-accent", "border-accent");
+  has(root.querySelector("[aria-label='Undo']"), "text-dim");
+  has(root.querySelector("[role=separator]"), "w-px");
+  expect(
+    root.querySelector("[role=separator]")?.nextElementSibling?.getAttribute("aria-label"),
+  ).toBe("Duplicate");
+  has(root.querySelector("[role=status]"), "whitespace-nowrap");
+  has(root.querySelector("[aria-label='Live']"), "truncate", "bg-card", "rounded-full");
+  has(root.querySelector("[role=tab]"), "whitespace-nowrap");
+});
+
+it("live_readout_has_a_teal_dot_and_a_bold_moment", async () => {
+  vi.mocked(api.onStatus).mockImplementation(async (cb) => {
+    cb({
+      bpm: 90,
+      playing: true,
+      beatInBar: 1,
+      barInPhrase: 1,
+      phraseBars: 4,
+      moment: "calm",
+    } as unknown as Status);
+    return () => {};
+  });
+  const root = await mount(bar());
+  const live = root.querySelector("[aria-label='Live']");
+  expect(live?.classList.contains("text-accent")).toBe(false);
+  expect(live?.querySelector(".text-accent")?.textContent).toBe("●");
+  const moment = live?.querySelector(".font-bold");
+  expect(moment?.textContent).toBe("Calm");
+  expect(moment?.querySelector("svg")).not.toBeNull();
+  expect(live?.textContent).toBe("● 90.0 BPM · beat 1 · phrase: bar 1 of 4 · Calm");
+});
+
 it("no_emoji_in_rendered_shell", async () => {
   const root = await mount(bar({ onDelete: () => {}, onDuplicate: () => {} }));
   // ⌘ is the key symbol, ● ○ ✓ — are text glyphs the spec asks for; pictographs are not allowed.

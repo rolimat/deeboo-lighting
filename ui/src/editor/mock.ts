@@ -111,6 +111,7 @@ export function installMock(api: typeof realApi): void {
     setDetectionThresholds: async () => settings,
     onDetector: async () => () => {},
     onWizard: async () => () => {},
+    onSection: async () => () => {},
     wizardCancel: async () => {},
     identifySegment: async () => {},
   } satisfies Partial<typeof realApi>);

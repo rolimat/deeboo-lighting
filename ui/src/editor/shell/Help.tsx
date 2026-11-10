@@ -44,7 +44,7 @@ export function HelpToggle() {
       aria-pressed={on}
       title={on ? "Hover tips are on" : "Hover tips are off"}
       onClick={toggle}
-      class={`rounded-card p-2 ${on ? "text-accent" : "text-dim"}`}
+      class={`grid h-7 w-7 shrink-0 place-items-center rounded-lg border ${on ? "border-accent text-accent" : "border-border text-dim"}`}
     >
       <Icon name="help" />
     </button>

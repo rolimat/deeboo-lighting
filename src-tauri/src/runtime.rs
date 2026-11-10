@@ -831,8 +831,10 @@ pub fn spawn(
                 let app = app.clone();
                 move |s: &Status| {
                     app.state::<AppState>().set_status(s.clone());
-                    if let Err(e) = app.emit_to("popover", STATUS_EVENT, s) {
-                        log::warn!("status event not delivered: {e}");
+                    for window in ["popover", "editor"] {
+                        if let Err(e) = app.emit_to(window, STATUS_EVENT, s) {
+                            log::warn!("status event not delivered: {e}");
+                        }
                     }
                 }
             };

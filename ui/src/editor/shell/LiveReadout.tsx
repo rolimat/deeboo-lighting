@@ -35,9 +35,10 @@ export function LiveReadout() {
       off?.();
     };
   }, []);
+  const pill = "block min-w-0 truncate whitespace-nowrap rounded-full bg-card px-3 py-1 text-sm";
   if (!s || s.bpm === null || !s.playing)
     return (
-      <span aria-label="Live" class="text-dim">
+      <span aria-label="Live" class={`${pill} text-dim`}>
         ○ No clock
       </span>
     );
@@ -46,10 +47,13 @@ export function LiveReadout() {
   if (s.beatInBar !== null) parts.push(`beat ${s.beatInBar}`);
   if (s.barInPhrase !== null) parts.push(`phrase: bar ${s.barInPhrase} of ${s.phraseBars}`);
   return (
-    <span aria-label="Live" class="flex items-center gap-1 text-accent">
-      {`● ${parts.join(" · ")} · `}
-      <Icon name={icon} />
-      {name}
+    <span aria-label="Live" class={pill}>
+      <span class="text-accent">●</span>
+      {` ${parts.join(" · ")} · `}
+      <span class="inline-flex items-center gap-1 align-middle font-bold">
+        <Icon name={icon} />
+        {name}
+      </span>
     </span>
   );
 }

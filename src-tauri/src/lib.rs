@@ -67,10 +67,21 @@ pub fn run() -> tauri::Result<()> {
         ])
         .on_window_event(|window, event| {
             // Closing the editor mid-wizard must revoke the cloud session and drop the key.
-            if window.label() == "editor" && matches!(event, tauri::WindowEvent::Destroyed) {
-                let app = window.app_handle();
-                app.state::<commands::AppState>()
-                    .editor_closed(&commands::wizard_emit(app));
+            if window.label() != "editor" {
+                return;
+            }
+            let app = window.app_handle();
+            match event {
+                // The editor shows the live readout while it is open.
+                tauri::WindowEvent::Focused(true) => {
+                    app.state::<commands::AppState>().set_editor_visible(true);
+                }
+                tauri::WindowEvent::Destroyed => {
+                    let state = app.state::<commands::AppState>();
+                    state.set_editor_visible(false);
+                    state.editor_closed(&commands::wizard_emit(app));
+                }
+                _ => {}
             }
         })
         .setup(|app| {

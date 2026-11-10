@@ -82,7 +82,9 @@ export const api = {
   setLiveSet: (id: number): Promise<Selection> => invoke("set_live_set", { id }),
   quit: (): Promise<void> => invoke("quit"),
   /** Opens (or focuses) the editor window on a section. */
-  openEditor: (section: "strip"): Promise<void> => invoke("open_editor", { section }),
+  openEditor: (
+    section: "sets" | "sequences" | "palettes" | "strip" | "detection" | "setup",
+  ): Promise<void> => invoke("open_editor", { section }),
   setWindowHeight: (height: number): Promise<void> =>
     getCurrentWindow().setSize(new LogicalSize(340, height)),
   /** The backend pushes the whole status on every change, only while the popover is visible (event `status`). */

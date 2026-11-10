@@ -14,6 +14,7 @@ vi.mock("./api", () => ({
       sequences: [],
       sets: [],
     })),
+    onSection: vi.fn(async () => () => {}),
     onWizard: vi.fn(async () => () => {}),
     wizardCancel: vi.fn(),
   },
@@ -69,4 +70,19 @@ it("opens_on_the_section_in_the_url", async () => {
   const root = document.createElement("div");
   await mount(root);
   expect(root.querySelector("section")?.getAttribute("aria-label")).toBe("Palettes");
+});
+
+it("switches_tab_when_the_open_editor_is_told_a_section", async () => {
+  let push: (s: string) => void = () => {};
+  vi.mocked(api.onSection).mockImplementation(async (cb) => {
+    push = cb;
+    return () => {};
+  });
+  vi.mocked(api.getStatus).mockResolvedValue({ kind: "notConfigured" });
+  const root = document.createElement("div");
+  await mount(root);
+  await act(async () => push("setup"));
+  expect(root.querySelector("section")?.getAttribute("aria-label")).toBe("Setup");
+  await act(async () => push("nonsense"));
+  expect(root.querySelector("section")?.getAttribute("aria-label")).toBe("Setup");
 });

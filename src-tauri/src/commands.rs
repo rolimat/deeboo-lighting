@@ -195,8 +195,10 @@ pub struct AppState {
     /// `library.json`; set at startup.
     library_path: Mutex<Option<std::path::PathBuf>>,
     runtime: Mutex<Option<RuntimeHandle>>,
-    /// Read by the engine thread: status goes out only while this is true.
+    /// Read by the engine thread: status goes out only while this is true (popover or editor shows).
     visible: Arc<AtomicBool>,
+    popover_shown: AtomicBool,
+    editor_shown: AtomicBool,
     wizard: Wizard,
 }
 
@@ -210,6 +212,8 @@ impl Default for AppState {
             library_path: Mutex::new(None),
             runtime: Mutex::new(None),
             visible: Arc::new(AtomicBool::new(false)),
+            popover_shown: AtomicBool::new(false),
+            editor_shown: AtomicBool::new(false),
             wizard: Wizard::default(),
         }
     }
@@ -433,9 +437,22 @@ impl AppState {
 
     /// Called by the tray when the popover shows or hides.
     pub fn set_popover_visible(&self, visible: bool) {
-        self.visible.store(visible, Ordering::Relaxed);
-        if visible && self.send(Input::PopoverShown).is_err() {
-            log::debug!("popover shown but the engine did not get the news");
+        self.popover_shown.store(visible, Ordering::Relaxed);
+        self.refresh_visible();
+    }
+
+    /// Called when the editor window opens or closes: it shows the live readout.
+    pub fn set_editor_visible(&self, visible: bool) {
+        self.editor_shown.store(visible, Ordering::Relaxed);
+        self.refresh_visible();
+    }
+
+    fn refresh_visible(&self) {
+        let any =
+            self.popover_shown.load(Ordering::Relaxed) || self.editor_shown.load(Ordering::Relaxed);
+        self.visible.store(any, Ordering::Relaxed);
+        if any && self.send(Input::PopoverShown).is_err() {
+            log::debug!("a window shown but the engine did not get the news");
         }
     }
 
@@ -838,6 +855,23 @@ pub fn quit(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_flows_while_either_window_shows() {
+        let state = AppState::default();
+        let flag = state.visible_flag();
+        assert!(!flag.load(Ordering::Relaxed));
+        state.set_editor_visible(true);
+        assert!(flag.load(Ordering::Relaxed));
+        state.set_popover_visible(true);
+        state.set_editor_visible(false);
+        assert!(flag.load(Ordering::Relaxed), "the popover still shows");
+        state.set_popover_visible(false);
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "both hidden: nothing is sent"
+        );
+    }
 
     #[test]
     fn status_serialises_as_the_ui_expects() {

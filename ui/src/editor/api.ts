@@ -150,6 +150,9 @@ export const api = {
   listAudioInputs: (): Promise<string[]> => invoke("list_audio_inputs"),
   /** The live readout; the backend pushes it on every change (event `status`). */
   getFullStatus: (): Promise<Status> => invoke("get_status"),
+  /** The editor was already open and was asked to show another tab (event `editor-section`). */
+  onSection: (cb: (section: string) => void): Promise<UnlistenFn> =>
+    listen<string>("editor-section", (e) => cb(e.payload)),
   onStatus: (cb: (status: Status) => void): Promise<UnlistenFn> =>
     listen<Status>("status", (e) => cb(e.payload)),
   /** The editor's Detection section is open (`true`) or closed: `detector` events flow only while open. */
