@@ -110,7 +110,13 @@ export function installMock(api: typeof realApi): void {
   let beat = 0;
   let wired = SEGS;
   const status = (): Status => ({
-    strip: { kind: "connected", name: "dj lights", segments: wired, reported: 10 },
+    strip: {
+      kind: "connected",
+      name: "dj lights",
+      segments: wired,
+      reported: 10,
+      ip: "192.168.1.42",
+    },
     bpm: 122,
     playing: true,
     beatInBar: (beat % 4) + 1,

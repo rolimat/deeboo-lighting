@@ -42,7 +42,7 @@ function Harness({ wired = 8, reported = 10 }: { wired?: number; reported?: numb
   return (
     <StripTab
       store={store}
-      strip={{ name: "dj lights", segments: wired, reported }}
+      strip={{ name: "dj lights", segments: wired, reported, ip: "192.168.1.42" }}
       onRepair={onRepair}
       onWired={onWired}
     />
@@ -249,7 +249,7 @@ it("presets_replace_the_shape_in_one_undo_step", async () => {
 it("header_card_has_status_and_both_reconnect_buttons", async () => {
   await mount(8, 8, 10);
   expect(root.textContent).toContain("dj lights");
-  expect(root.textContent).toContain("Connected");
+  expect(root.textContent).toContain("Connected · 192.168.1.42");
   await act(async () => button("Reconnect…").click());
   await act(async () => button("Change strip…").click());
   expect(onRepair).toHaveBeenCalledTimes(2);
@@ -275,5 +275,27 @@ it("guide_shows_first_time_and_with_help", async () => {
   await g(false)();
   expect(root.textContent).not.toContain("How to draw your strip");
   await g(true)();
+  expect(root.textContent).toContain("How to draw your strip");
+});
+
+it("guide_visible_whenever_help_is_on", async () => {
+  const g = (helpOn: boolean) =>
+    act(async () => {
+      render(<Guide helpOn={helpOn} />, root);
+      await settle();
+    });
+  localStorage.setItem("deeboo.stripGuide", "done");
+  await g(false);
+  expect(root.textContent).not.toContain("How to draw your strip");
+  await g(true);
+  expect(root.textContent).toContain("How to draw your strip");
+  await act(async () => button("Got it").click());
+  expect(root.textContent).not.toContain("How to draw your strip");
+  await g(false);
+  await g(true); // help toggled off and on again
+  expect(root.textContent).toContain("How to draw your strip");
+  // Opened with help already on: shown even though it was dismissed before.
+  await act(async () => render(null, root));
+  await g(true);
   expect(root.textContent).toContain("How to draw your strip");
 });

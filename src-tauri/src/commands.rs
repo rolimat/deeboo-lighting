@@ -35,6 +35,9 @@ pub enum StripStatus {
         segments: u8,
         /// What the controller reports (at least `segments`).
         reported: u8,
+        /// The strip's LAN address (private ranges only), when known.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ip: Option<std::net::Ipv4Addr>,
     },
     Error,
     /// The strip refused the saved key (re-added in Smart Life): pair again.
@@ -1054,6 +1057,7 @@ mod tests {
             name: "dj lights".into(),
             segments: 10,
             reported: 10,
+            ip: None,
         };
         assert_eq!(
             serde_json::to_string(&connected).unwrap_or_default(),
@@ -1147,6 +1151,7 @@ mod tests {
             name: "dj".into(),
             segments: 12,
             reported: 12,
+            ip: None,
         };
         state.set_strip(on.clone());
         assert_eq!(lock(&state.status).strip, on);
@@ -1158,6 +1163,7 @@ mod tests {
             name: "dj".into(),
             segments: 10,
             reported: 10,
+            ip: None,
         };
         assert_eq!(identify_check(&on, 1), Ok(()));
         assert_eq!(identify_check(&on, 10), Ok(()));
@@ -1259,12 +1265,31 @@ mod tests {
             name: "dj".into(),
             segments: 8,
             reported: 10,
+            ip: None,
         };
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(
             (v["segments"].as_u64(), v["reported"].as_u64()),
             (Some(8), Some(10))
         );
+    }
+
+    #[test]
+    fn connected_status_shows_only_a_private_ip() {
+        let mut c = strip_store::StripConfig {
+            id: "bf1234".into(),
+            name: "dj".into(),
+            local_key: secrecy::SecretString::from("0123456789abcdef"),
+            segments: 8,
+            reported: 10,
+            last_ip: Some("192.168.1.42".parse().unwrap()),
+        };
+        let json = |c: &strip_store::StripConfig| {
+            serde_json::to_value(crate::strip::connected_status(c)).unwrap()
+        };
+        assert_eq!(json(&c)["ip"], "192.168.1.42");
+        c.last_ip = Some("8.8.8.8".parse().unwrap());
+        assert!(json(&c).get("ip").is_none());
     }
 
     #[test]

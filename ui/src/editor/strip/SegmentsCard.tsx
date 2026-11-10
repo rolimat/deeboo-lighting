@@ -6,6 +6,8 @@ export interface StripInfo {
   segments: number;
   /** What the controller reports. */
   reported: number;
+  /** Private LAN address, when known. */
+  ip?: string;
 }
 
 const chip = "rounded-lg border border-border bg-bg px-3 py-1";
@@ -30,7 +32,9 @@ export function SegmentsCard(p: {
         </span>
         <div>
           <b>{name}</b>
-          <div class="text-xs text-dim">Connected</div>
+          <div class="text-xs text-dim">
+            {p.strip.ip ? `Connected · ${p.strip.ip}` : "Connected"}
+          </div>
         </div>
         <div class="flex items-center gap-2">
           <span class="text-[10px] tracking-wider text-dim uppercase">Segments</span>

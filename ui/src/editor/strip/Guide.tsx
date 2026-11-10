@@ -10,22 +10,22 @@ function dismissed(): boolean {
   }
 }
 
-/** The three-step drawing guide: shown the first time, and again whenever help is switched on. */
+/** The three-step drawing guide: shown while never dismissed or while help is on; "Got it" hides it for now. */
 export function Guide({ helpOn }: { helpOn: boolean }) {
-  const [shown, setShown] = useState(() => !dismissed());
+  const [closed, setClosed] = useState(false);
   const was = useRef(helpOn);
   useEffect(() => {
-    if (helpOn && !was.current) setShown(true);
+    if (helpOn && !was.current) setClosed(false);
     was.current = helpOn;
   }, [helpOn]);
-  if (!shown) return null;
+  if (closed || !(helpOn || !dismissed())) return null;
   const close = () => {
     try {
       localStorage.setItem(KEY, "done");
     } catch {
       // Private mode: the guide simply comes back next time.
     }
-    setShown(false);
+    setClosed(true);
   };
   return (
     <aside

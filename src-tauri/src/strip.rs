@@ -285,11 +285,12 @@ fn wired_cmd(c: &StripConfig, cmd: &PaintCommand) -> PaintCommand {
     }
 }
 
-fn connected_status(c: &StripConfig) -> StripStatus {
+pub(crate) fn connected_status(c: &StripConfig) -> StripStatus {
     StripStatus::Connected {
         name: c.name.clone(),
         segments: c.segments,
         reported: c.reported,
+        ip: c.last_ip.filter(std::net::Ipv4Addr::is_private),
     }
 }
 
@@ -684,6 +685,7 @@ mod tests {
             name: "dj".into(),
             segments: 10,
             reported: 10,
+            ip: None,
         };
         assert_eq!(
             *log.lock().unwrap(),
@@ -1052,6 +1054,7 @@ mod tests {
             name: n.into(),
             segments: 10,
             reported: 10,
+            ip: None,
         };
         let r = drive_task(None, ok_fake, async |tx, _| {
             settle().await;
@@ -1098,6 +1101,7 @@ mod tests {
                 name: "new".into(),
                 segments: 10,
                 reported: 10,
+                ip: None
             })
         );
     }
@@ -1110,6 +1114,7 @@ mod tests {
             name: n.into(),
             segments: 10,
             reported: 10,
+            ip: None,
         };
         let r = drive_task(
             Some(cfg("old", None)),
