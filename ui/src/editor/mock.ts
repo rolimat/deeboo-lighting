@@ -1,23 +1,46 @@
 import type { Settings, Status } from "../api";
 import type { Library, Sequence, api as realApi } from "./api";
+import { fromCells } from "./sequences/cells";
 
 /** Dev-only (`npm run dev`, open `editor.html?mock`); the marker lets the build check prove it is gone from dist. */
 export const MOCK_MARKER = "__DEEBOO_EDITOR_MOCK_HARNESS__";
 
 const hsv = (h: number, s = 1000, v = 1000) => ({ h, s, v });
-const seq = (name: string, moment: string, rows: string[][]): Sequence => ({
-  name,
-  moment,
-  steps: rows.map((roles) => ({ len: "one", roles })),
-});
-const off = Array<string>(8).fill("off");
+const SEGS = 8;
+/** A sequence of `bars` bars from a (segment, half-beat) -> role rule. */
+const gen = (
+  name: string,
+  moment: string,
+  bars: number,
+  role: (s: number, h: number) => string,
+) => {
+  const cols = Array.from({ length: bars * 8 }, (_, h) =>
+    Array.from({ length: SEGS }, (_, s) => role(s, h)),
+  );
+  return { name, moment, steps: fromCells(cols) } satisfies Sequence;
+};
+const PATTERNS: Record<string, (s: number, h: number) => string> = {
+  halves: (s, h) => (s < 4 === (Math.floor(h / 2) % 2 === 0) ? "principal" : "contraste"),
+  snake: (s, h) => (s === Math.floor(h / 2) % SEGS ? "principal" : "off"),
+  drift: (s, h) => (s === Math.floor(h / 4) % SEGS ? "suave" : "off"),
+  strobe: (_, h) => (h % 2 === 0 ? "white" : "off"),
+};
+const halves = (s: number, h: number) =>
+  s < 4 === (Math.floor(h / 2) % 2 === 0) ? "principal" : "contraste";
+const pat = (p: string) => PATTERNS[p] ?? halves;
 
 export function installMock(api: typeof realApi): void {
   console.info(MOCK_MARKER);
   let lib: Library = {
     schemaVersion: 2,
     shape: {
-      pieces: [0, 1, 2, 3].map((i) => ({ x: i * 2, y: 0, angle: 0 as const, len: 2 as const })),
+      pieces: [
+        ...[0, 1, 2, 3].map((i) => ({ x: i * 2, y: 3, angle: 0 as const, len: 2 as const })),
+        { x: 8, y: 3, angle: 270 as const, len: 2 as const },
+        { x: 8, y: 1, angle: 0 as const, len: 2 as const },
+        { x: 10, y: 1, angle: 0 as const, len: 2 as const },
+        { x: 12, y: 1, angle: 0 as const, len: 2 as const },
+      ],
     },
     palettes: [
       [1, { name: "Neon", principal: hsv(300), contraste: hsv(180), suave: hsv(260, 600, 700) }],
@@ -25,14 +48,25 @@ export function installMock(api: typeof realApi): void {
       [3, { name: "Ice", principal: hsv(200), contraste: hsv(0, 0), suave: hsv(220, 500, 600) }],
     ],
     sequences: [
-      [1, seq("Pulse", "rhythm", [["principal", ...off.slice(1)], off])],
-      [2, seq("Strobe", "rhythm", [Array(8).fill("white"), off])],
-      [3, seq("Drift", "calm", [["suave", "suave", ...off.slice(2)], off])],
-      [4, seq("Rise", "buildUp", [["principal", "contraste", ...off.slice(2)], off])],
+      [
+        1,
+        gen("Pulse", "rhythm", 2, (s, h) =>
+          s % 2 === Math.floor(h / 2) % 2 ? "principal" : "off",
+        ),
+      ],
+      [
+        2,
+        gen("Chase", "rhythm", 2, (s, h) => (s === Math.floor(h / 2) % SEGS ? "contraste" : "off")),
+      ],
+      [3, gen("Strobe", "rhythm", 1, pat("strobe"))],
+      [4, gen("Breathe", "calm", 2, (s, h) => (h < 8 ? "suave" : s % 2 ? "off" : "suave"))],
+      [5, gen("Glow", "calm", 1, (s) => (s % 3 === 0 ? "suave" : "off"))],
+      [6, gen("Riser", "buildUp", 2, (s, h) => (s <= h / 2 ? "principal" : "off"))],
+      [7, gen("Sparkle", "buildUp", 1, (s, h) => ((s * 3 + h) % 5 === 0 ? "white" : "off"))],
     ],
     sets: [1, 2].map((id) => {
       const m = {
-        sequences: [{ id }, "generated" as const],
+        sequences: [{ id: id === 1 ? 1 : 2 }, "generated" as const],
         order: "inOrder" as const,
         interval: { bars: 4 },
       };
@@ -40,8 +74,8 @@ export function installMock(api: typeof realApi): void {
         id,
         name: id === 1 ? "Warm-up" : "Peak time",
         rhythm: m,
-        calm: { ...m, sequences: [{ id: 3 }] },
-        buildup: { ...m, sequences: [{ id: 4 }] },
+        calm: { ...m, sequences: [{ id: 4 }] },
+        buildup: { ...m, sequences: [{ id: 6 }] },
         palettes: [1, 2],
         paletteOrder: "inOrder" as const,
         paletteChange: "atDrop" as const,
@@ -99,9 +133,23 @@ export function installMock(api: typeof realApi): void {
     getLibrary: async () => lib,
     saveLibrary: async (l: Library) =>
       (lib = { ...l, activeSet: lib.activeSet, activePalette: lib.activePalette }),
-    messageCounts: async (s: Sequence) => s.steps.map(() => 1),
-    previewGenerated: async () => lib.sequences[0]?.[1] as Sequence,
-    patternSequence: async () => lib.sequences[1]?.[1] as Sequence,
+    // one step of "Strobe" costs two messages, to show the warning
+    messageCounts: async (s: Sequence) =>
+      s.steps.map((_, i) => (s.name === "Strobe" && i === 1 ? 2 : 1)),
+    previewGenerated: async (m: string) =>
+      gen(
+        "Generated",
+        m,
+        2,
+        m === "calm" ? pat("drift") : m === "buildUp" ? pat("strobe") : pat("snake"),
+      ),
+    patternSequence: async (p: string) =>
+      gen(
+        p,
+        "rhythm",
+        2,
+        p === "snake" || p === "drift" || p === "strobe" ? pat(p) : pat("halves"),
+      ),
     getSettings: async () => settings,
     saveSettings: async (s: Settings) => (settings = s),
     listMidiSources: async () => ["Mock clock", "IAC Driver Bus 1"],

@@ -3,7 +3,7 @@ import type { StripStatus } from "../api";
 import { api } from "./api";
 import { PaletteEditor } from "./palettes/PaletteEditor";
 import { SetEditor } from "./sets/SetEditor";
-import { SequenceList } from "./sequences/SequenceList";
+import { SequencesTab, type BarActions } from "./sequences/SequencesTab";
 import { ShapeEditor } from "./strip/ShapeEditor";
 import { DetectionPanel } from "./detection/DetectionPanel";
 import { Wizard } from "./strip/Wizard";
@@ -38,6 +38,7 @@ export function App() {
   const [repair, setRepair] = useState(false);
   const [tab, setTab] = useState<Tab>(initialTab);
   const store = useLibrary();
+  const [actions, setActions] = useState<BarActions | null>(null);
   useEffect(() => {
     let off: (() => void) | undefined;
     let alive = true;
@@ -71,13 +72,16 @@ export function App() {
           canRedo={store.canRedo}
           onUndo={store.undo}
           onRedo={store.redo}
+          {...(tab === "sequences" ? actions : null)}
           save={store.save}
           undoDisabledHint={libraryTab ? undefined : NO_UNDO}
         />
         <section class="min-h-0 flex-1 overflow-auto p-6" aria-label={label}>
           {tab === "sets" && <SetEditor />}
           {tab === "sequences" && (
-            <SequenceList
+            <SequencesTab
+              store={store}
+              onActions={setActions}
               stripSegments={strip?.kind === "connected" ? strip.segments : undefined}
             />
           )}

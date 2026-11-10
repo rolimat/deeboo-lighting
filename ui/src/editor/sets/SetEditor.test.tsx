@@ -4,7 +4,13 @@ import { render } from "preact";
 import type { Library, MomentSet } from "../api";
 
 vi.mock("../api", () => ({
-  api: { getLibrary: vi.fn(), saveLibrary: vi.fn(), previewGenerated: vi.fn() },
+  api: {
+    getLibrary: vi.fn(),
+    saveLibrary: vi.fn(),
+    previewGenerated: vi.fn(),
+    getFullStatus: vi.fn(async () => ({ playing: false })),
+    onStatus: vi.fn(async () => () => {}),
+  },
 }));
 import { api } from "../api";
 import { SetEditor } from "./SetEditor";

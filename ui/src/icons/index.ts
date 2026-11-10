@@ -6,6 +6,12 @@ import help from "./help.svg?raw";
 import rhythm from "./rhythm.svg?raw";
 import calm from "./calm.svg?raw";
 import buildup from "./buildup.svg?raw";
+import generated from "./generated.svg?raw";
+import play from "./play.svg?raw";
+import pause from "./pause.svg?raw";
+import zoomin from "./zoomin.svg?raw";
+import zoomout from "./zoomout.svg?raw";
+import plus from "./plus.svg?raw";
 import sets from "./sets.svg?raw";
 import sequences from "./sequences.svg?raw";
 import palettes from "./palettes.svg?raw";
@@ -23,6 +29,12 @@ export const icons = {
   rhythm,
   calm,
   buildup,
+  generated,
+  play,
+  pause,
+  zoomin,
+  zoomout,
+  plus,
   sets,
   sequences,
   palettes,

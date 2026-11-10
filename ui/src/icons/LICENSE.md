@@ -1,7 +1,7 @@
 # Icon licence
 
 `undo`, `redo`, `duplicate` (Lucide `copy`), `delete` (`trash`), `help` (`circle-help`), `sets` (`layers`),
-`sequences` (`rows-3`), `palettes`, `detection` (`audio-lines`) and `setup` (`sliders-horizontal`) are copied from
+`sequences` (`rows-3`), `play`, `pause`, `zoomin` (`zoom-in`), `zoomout` (`zoom-out`), `plus`, `generated` (`sun`-style rays), `palettes`, `detection` (`audio-lines`) and `setup` (`sliders-horizontal`) are copied from
 [Lucide](https://lucide.dev), ISC licence:
 
 > Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT).

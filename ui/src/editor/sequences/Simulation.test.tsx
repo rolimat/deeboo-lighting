@@ -4,6 +4,15 @@ import { render } from "preact";
 import type { Palette, Piece, Sequence } from "../api";
 import { Simulation } from "./Simulation";
 import { roleColour } from "./RolePicker";
+import type { Status } from "../../api";
+
+vi.mock("../api", () => ({
+  api: {
+    getFullStatus: vi.fn(async () => ({ playing: false })),
+    onStatus: vi.fn(async () => () => {}),
+  },
+}));
+import { api } from "../api";
 
 const hsv = (h: number) => ({ h, s: 1000, v: 1000 });
 const pal = (h: number): Palette => ({
@@ -35,10 +44,11 @@ const mount = (p = pal(0), s = seq) =>
   act(() => {
     render(<Simulation sequence={s} pieces={pieces} palette={p} />, root);
   });
-const fills = () => [...root.querySelectorAll("rect")].map((r) => r.getAttribute("fill"));
+const fills = () =>
+  [...root.querySelectorAll("svg[aria-label=Simulation] rect")].map((r) => r.getAttribute("fill"));
 const play = () =>
   act(() => {
-    [...root.querySelectorAll("button")].find((b) => b.textContent === "Play")?.click();
+    root.querySelector<HTMLElement>("button[aria-label='Play']")?.click();
   });
 
 beforeEach(() => {
@@ -111,21 +121,35 @@ it("shows_a_notice_when_pieces_and_roles_differ", async () => {
     render(<Simulation sequence={seq} pieces={pieces.slice(0, 1)} palette={pal(0)} />, root);
   });
   expect(root.textContent).toContain("does not match");
-  expect(root.querySelector("svg")).toBeNull();
+  expect(root.querySelector("svg[aria-label=Simulation]")).toBeNull();
 });
 
-it("bpm_is_kept_between_60_and_180", async () => {
+it("has_no_bpm_control", async () => {
   await mount();
-  const input = root.querySelector<HTMLInputElement>("input[aria-label='BPM']");
-  if (!input) throw new Error("no bpm");
-  for (const [typed, shown] of [
-    ["500", "180"],
-    ["10", "60"],
-  ] as const) {
-    input.value = typed;
-    await act(() => {
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+  expect(root.querySelector("input")).toBeNull();
+});
+
+it("follows_the_clock_when_it_plays_else_120", async () => {
+  let push: (s: Partial<Status>) => void = () => {};
+  vi.mocked(api.onStatus).mockImplementation(async (cb) => {
+    push = (s) => cb(s as Status);
+    return () => {};
+  });
+  await mount();
+  await play();
+  const t0 = performance.now();
+  const tick = (ms: number) =>
+    act(() => {
+      const cbs = [...frames.values()];
+      frames.clear();
+      cbs.forEach((cb) => cb(t0 + ms));
     });
-    expect(input.value).toBe(shown);
-  }
+  await tick(0);
+  // The clock says: bar 1, beat 2 (half-beat 2) at 60 BPM. Steps are 2 half-beats: step 1 shows.
+  await act(() => push({ playing: true, bpm: 60, beatInBar: 2, barInPhrase: 1 }));
+  await tick(10);
+  expect(fills()[1]).toBe(roleColour("principal", pal(0)));
+  // 60 BPM: half a second per half-beat, so 1.2 s later we are at half-beat 4 -> step 0 again.
+  await tick(1300);
+  expect(fills()[0]).toBe(roleColour("principal", pal(0)));
 });
