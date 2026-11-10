@@ -1,5 +1,5 @@
 import type { Settings, Status } from "../api";
-import type { Library, Sequence, api as realApi } from "./api";
+import type { DetectorEvent, Library, Sequence, Thresholds, api as realApi } from "./api";
 import { fromCells } from "./sequences/cells";
 
 /** Dev-only (`npm run dev`, open `editor.html?mock`); the marker lets the build check prove it is gone from dist. */
@@ -28,6 +28,26 @@ const PATTERNS: Record<string, (s: number, h: number) => string> = {
 const halves = (s: number, h: number) =>
   s < 4 === (Math.floor(h / 2) % 2 === 0) ? "principal" : "contraste";
 const pat = (p: string) => PATTERNS[p] ?? halves;
+
+/** Fake detector beat on a 64-beat loop: Rhythm, a break (Calm), a riser (Build-up), then the drop. */
+function detectorBeat(b: number): DetectorEvent {
+  const p = ((b % 64) + 64) % 64;
+  const wob = (k: number) => Math.sin(b * 1.7 + k) * 1.5;
+  const calm = p >= 24 && p < 40;
+  const rise = p >= 40 && p < 56;
+  const kickRefDb = -20;
+  const subRefDb = -26;
+  const highRefDb = -30;
+  return {
+    kickDb: kickRefDb + wob(0) - (calm ? 28 : rise ? 6 : 0),
+    subDb: subRefDb + wob(1) - (calm ? 24 : rise ? 4 : 0),
+    highDb: highRefDb + wob(2) - (calm ? 16 : 0) + (rise ? (p - 40) * 0.8 : 0),
+    kickRefDb,
+    subRefDb,
+    highRefDb,
+    moment: calm ? "calm" : rise ? "buildUp" : "rhythm",
+  };
+}
 
 export function installMock(api: typeof realApi): void {
   console.info(MOCK_MARKER);
@@ -109,6 +129,7 @@ export function installMock(api: typeof realApi): void {
   };
   let beat = 0;
   let wired = SEGS;
+  const noClock = new URLSearchParams(location.search).has("noclock");
   const status = (): Status => ({
     strip: {
       kind: "connected",
@@ -117,8 +138,8 @@ export function installMock(api: typeof realApi): void {
       reported: 10,
       ip: "192.168.1.42",
     },
-    bpm: 122,
-    playing: true,
+    bpm: noClock ? null : 122,
+    playing: !noClock,
     beatInBar: (beat % 4) + 1,
     barInPhrase: (Math.floor(beat / 4) % 8) + 1,
     phraseBars: 8,
@@ -127,7 +148,7 @@ export function installMock(api: typeof realApi): void {
     predicted: false,
     lightsOn: true,
     midi: { source: "Mock clock", ok: true },
-    audio: { ok: true },
+    audio: { ok: true, device: "MacBook Pro Microphone", levelDb: -18 },
     clip: (() => {
       const n = lib.sets.find((x) => x.id === lib.activeSet)?.rhythm.sequences.length ?? 1;
       return {
@@ -144,9 +165,11 @@ export function installMock(api: typeof realApi): void {
     },
   });
   const listeners = new Set<(s: Status) => void>();
+  const detectors = new Set<(e: DetectorEvent) => void>();
   setInterval(() => {
     beat += 1;
     listeners.forEach((cb) => cb(status()));
+    if (!noClock) detectors.forEach((cb) => cb(detectorBeat(beat)));
   }, 500);
 
   Object.assign(api, {
@@ -188,8 +211,13 @@ export function installMock(api: typeof realApi): void {
       return (lib = { ...lib, shape: { pieces: ps } });
     },
     detectionWatch: async () => {},
-    setDetectionThresholds: async () => settings,
-    onDetector: async () => () => {},
+    setDetectionThresholds: async (t: Thresholds) => (settings = { ...settings, ...t }),
+    onDetector: async (cb: (e: DetectorEvent) => void) => {
+      detectors.add(cb);
+      // Replay the last 8 bars so the timeline is not empty while it fills.
+      if (!noClock) for (let b = beat - 31; b <= beat; b++) cb(detectorBeat(b));
+      return () => void detectors.delete(cb);
+    },
     onWizard: async () => () => {},
     onSection: async () => () => {},
     wizardCancel: async () => {},

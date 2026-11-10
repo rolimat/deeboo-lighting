@@ -5,7 +5,7 @@ import { PalettesTab } from "./palettes/PalettesTab";
 import { SetsTab } from "./sets/SetsTab";
 import { SequencesTab, type BarActions, type Sel } from "./sequences/SequencesTab";
 import { StripTab } from "./strip/StripTab";
-import { DetectionPanel } from "./detection/DetectionPanel";
+import { DetectionTab } from "./detection/DetectionTab";
 import { Wizard, wizardLine } from "./strip/Wizard";
 import { Setup } from "./setup/Setup";
 import { HelpProvider } from "./shell/Help";
@@ -103,7 +103,7 @@ export function App() {
           {tab === "palettes" && (
             <PalettesTab store={store} onActions={setActions} onGoSets={() => setTab("sets")} />
           )}
-          {tab === "detection" && <DetectionPanel />}
+          {tab === "detection" && <DetectionTab onGoSetup={() => setTab("setup")} />}
           {tab === "setup" && <Setup />}
           {tab === "strip" &&
             (strip?.kind === "connected" && !repair ? (
