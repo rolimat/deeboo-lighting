@@ -334,6 +334,14 @@ export function SequencesTab({
                       onClick={() => select({ k: "seq", id })}
                       class={itemClass(picked?.k === "seq" && picked.id === id)}
                     >
+                      <span
+                        data-grip
+                        aria-hidden="true"
+                        class="text-[#555b63] before:content-['⋮⋮']"
+                      />
+                      <span data-moment-icon class="text-dim">
+                        <Icon name={icon} />
+                      </span>
                       <span class="truncate">{s.name}</span>
                     </button>
                   </li>
@@ -351,6 +359,14 @@ export function SequencesTab({
                         onClick={() => select({ k: "gen", moment: m, pattern: p })}
                         class={itemClass(on)}
                       >
+                        <span
+                          data-grip
+                          aria-hidden="true"
+                          class="text-[#555b63] before:content-['⋮⋮']"
+                        />
+                        <span data-moment-icon class="text-dim">
+                          <Icon name={icon} />
+                        </span>
                         <span class="truncate">{l}</span>
                         <span data-generated class="ml-auto text-accent">
                           <Icon name="generated" />

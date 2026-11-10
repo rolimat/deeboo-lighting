@@ -18,6 +18,6 @@ export function roleColour(role: string, p: Palette): string {
     case "white":
       return "#fff";
     default:
-      return "var(--color-bg)";
+      return "var(--color-off)";
   }
 }

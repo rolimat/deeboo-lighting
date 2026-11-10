@@ -143,6 +143,22 @@ it("browser_groups_by_moment_with_icons", async () => {
   expect(byText("button", "Pulse")?.getAttribute("aria-current")).toBe("true");
 });
 
+it("browser_items_show_grip_and_moment_icon", async () => {
+  await mount();
+  for (const label of ["Pulse", "Drift", "Halves", "Fast snake"]) {
+    const b = byText("nav button", label);
+    expect(b?.querySelector("[data-grip]"), label).not.toBeNull();
+    expect(b?.querySelector("[data-moment-icon] svg"), label).not.toBeNull();
+  }
+});
+
+it("off_cells_are_filled_rectangles", async () => {
+  await mount();
+  const off = cell(1, 0) as HTMLElement; // Pulse: S2 at 1.1 is off
+  expect(role(1, 0)).toBe("Off");
+  expect(off.style.background).toContain("var(--color-off)");
+});
+
 it("name_label_left_of_input", async () => {
   await mount();
   const label = q("label[for]");

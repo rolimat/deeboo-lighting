@@ -107,12 +107,10 @@ export function Simulation({
               x={p.x}
               y={p.y}
               width={p.len}
-              height={1}
-              rx={0.15}
+              height={0.7}
+              rx={0.35}
               transform={`rotate(${p.angle} ${p.x} ${p.y})`}
               fill={roleColour(step.roles[i] ?? "off", palette)}
-              stroke="var(--color-text)"
-              stroke-width={0.06}
             />
           ))}
         </svg>

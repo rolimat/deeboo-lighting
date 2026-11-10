@@ -123,6 +123,29 @@ it("live_readout_formats_status", async () => {
   );
 });
 
+it("live_readout_never_truncates_the_moment", async () => {
+  vi.mocked(api.onStatus).mockImplementation(async (cb) => {
+    cb({
+      bpm: 122,
+      playing: true,
+      beatInBar: 2,
+      barInPhrase: 3,
+      phraseBars: 8,
+      moment: "calm",
+    } as unknown as Status);
+    return () => {};
+  });
+  const root = await mount(bar());
+  const live = root.querySelector("[aria-label='Live']");
+  const moment = live?.querySelector("[data-moment]");
+  expect(moment?.textContent).toBe("Calm");
+  expect(moment?.classList.contains("shrink-0")).toBe(true);
+  const mid = live?.querySelector("[data-live-text]");
+  expect(mid?.classList.contains("truncate")).toBe(true);
+  expect(mid?.contains(moment ?? null)).toBe(false);
+  expect(mid?.querySelector("[data-beat]")?.className).toContain("max-[1100px]:hidden");
+});
+
 it("top_bar_is_a_single_row_of_bordered_icon_buttons", async () => {
   const root = await mount(bar({ onDelete: () => {}, onDuplicate: () => {} }));
   const has = (el: Element | null | undefined, ...cls: string[]) =>
@@ -137,7 +160,7 @@ it("top_bar_is_a_single_row_of_bordered_icon_buttons", async () => {
     root.querySelector("[role=separator]")?.nextElementSibling?.getAttribute("aria-label"),
   ).toBe("Duplicate");
   has(root.querySelector("[role=status]"), "whitespace-nowrap");
-  has(root.querySelector("[aria-label='Live']"), "truncate", "bg-card", "rounded-full");
+  has(root.querySelector("[aria-label='Live']"), "min-w-0", "bg-card", "rounded-full");
   has(root.querySelector("[role=tab]"), "whitespace-nowrap");
 });
 
