@@ -238,11 +238,15 @@ export function SetsTab({
   const item =
     "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm cursor-grab";
   const playingMoment = isLive && status?.playing ? status.moment : null;
+  const clip = isLive && status?.playing ? (status.clip ?? null) : null;
   const playingPalette = isLive && status?.playing ? status.selection.palette.name : null;
 
   return (
-    <div class="-m-6 flex min-h-[calc(100%+3rem)]">
-      <nav aria-label="Sets" class="w-52 shrink-0 space-y-1 border-r border-border p-3">
+    <div class="-m-6 flex h-[calc(100%+3rem)]">
+      <nav
+        aria-label="Sets"
+        class="w-52 shrink-0 space-y-1 overflow-y-auto border-r border-border p-3"
+      >
         <input
           type="search"
           aria-label="Search sets"
@@ -356,8 +360,8 @@ export function SetsTab({
             </div>
           ))}
       </nav>
-      <div class="flex min-w-0 flex-1 flex-col gap-3 p-4">
-        <div class="flex flex-wrap items-center gap-3">
+      <div data-main class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden p-4">
+        <div class="flex shrink-0 flex-wrap items-center gap-3">
           <label for="set-name" class="text-[10px] uppercase tracking-wider text-dim">
             Set name
           </label>
@@ -401,11 +405,14 @@ export function SetsTab({
           </span>
         </div>
         {notice && (
-          <p role="alert" class="text-sm text-red">
+          <p role="alert" class="shrink-0 text-sm text-red">
             {notice}
           </p>
         )}
-        <div class="grid grid-cols-3 gap-3">
+        <div
+          data-tracks
+          class="grid min-h-0 flex-1 grid-cols-3 content-start gap-3 overflow-y-auto"
+        >
           {MOMENTS.map(([m, f, icon, name]) => (
             <Track
               key={f}
@@ -418,6 +425,8 @@ export function SetsTab({
               sequences={sequences}
               drag={drag}
               playing={playingMoment === m}
+              playingIndex={clip?.moment === m ? clip.index : null}
+              progress={clip && clip.total > 0 ? clip.elapsed / clip.total : 0}
               onDragClip={(index) =>
                 setDrag({
                   item: { kind: "clip", from: m, index },

@@ -41,6 +41,8 @@ export interface Status {
   midi: { source: string | null; ok: boolean };
   audio: { ok: boolean; device?: string; levelDb?: number };
   selection: Selection;
+  /** The entry of the live set's list playing now, with the loop position in half beats. */
+  clip: { moment: MomentName; index: number; elapsed: number; total: number } | null;
 }
 
 export interface Settings {

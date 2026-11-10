@@ -30,6 +30,16 @@ pub enum UiCommand {
     LeadMs(u16),
 }
 
+/// The set's sequence playing now, for the Sets tab: its index in the active set's list for the
+/// moment in force, and where the loop is (half beats done of the total).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlayingClip {
+    pub moment: Moment,
+    pub index: usize,
+    pub elapsed: u32,
+    pub total: u32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // status snapshot for the UI
 pub struct EngineStatus {
@@ -46,6 +56,8 @@ pub struct EngineStatus {
     pub predicted: bool,
     pub lights_on: bool,
     pub last_beat_us: Option<u64>,
+    /// `None` while stopped or when the built-in look plays.
+    pub clip: Option<PlayingClip>,
 }
 
 #[derive(Clone, Copy)]
@@ -370,7 +382,27 @@ impl Engine {
             predicted: self.control.predicted(),
             lights_on: self.cfg.lights_on,
             last_beat_us: self.last_beat_us,
+            clip: self.clip(),
         }
+    }
+
+    fn clip(&self) -> Option<PlayingClip> {
+        if !self.clock.running() {
+            return None;
+        }
+        let moment = self.control.applied();
+        let index = self.look.rot.as_ref()?.rots[slot(moment)].index();
+        let steps = &self.look.seqs[slot(moment)].steps;
+        let len = |i: usize| steps.get(i).map_or(0, |s| u32::from(s.len.half_beats()));
+        let elapsed = self.playing.filter(|p| p.moment == moment).map_or(0, |p| {
+            (0..p.idx).map(len).sum::<u32>() + len(p.idx).saturating_sub(u32::from(p.left))
+        });
+        Some(PlayingClip {
+            moment,
+            index,
+            elapsed,
+            total: (0..steps.len()).map(len).sum(),
+        })
     }
 
     /// A stopped show uses the library at once; a running one from its next bar start.

@@ -66,6 +66,12 @@ impl Rotator {
         self.seqs.get(self.seq_i).copied()
     }
 
+    /// Index into the set's `sequences` of the one in force.
+    #[must_use]
+    pub fn index(&self) -> usize {
+        self.seq_i
+    }
+
     /// Called at bar starts (and on entering the moment, `entered`). `Bars(n)` counts from the last
     /// change and fires only on a bar start; `OncePerBreak` advances on each entry after the first.
     pub fn on_boundary(&mut self, pos: Position, entered: bool) -> Option<SeqRef> {

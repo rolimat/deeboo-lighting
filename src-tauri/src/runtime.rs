@@ -16,7 +16,7 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::audio::{AudioError, AudioIn, RING_SECONDS};
 use crate::clock::MonoClock;
-use crate::commands::{AppState, AudioStatus, MidiStatus, Selection, Status, StripStatus};
+use crate::commands::{AppState, AudioStatus, ClipDto, MidiStatus, Selection, Status, StripStatus};
 use crate::midi::{MidiEvent, MidiIn, QUEUE};
 use crate::settings::{Settings, detector_params};
 use crate::strip::{self, StripMsg};
@@ -427,6 +427,12 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 || Selection::of(&Library::builtin(self.segments)),
                 Selection::of,
             ),
+            clip: s.clip.map(|c| ClipDto {
+                moment: c.moment.into(),
+                index: c.index,
+                elapsed: c.elapsed,
+                total: c.total,
+            }),
         }
     }
 

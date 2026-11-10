@@ -38,7 +38,7 @@ export function PaletteRow({
   const ok = !drag || canDrop(drag.item, { kind: "palettes" });
   const value = set.paletteChange === "atDrop" ? "atDrop" : String(set.paletteChange.bars);
   return (
-    <div data-palette-row class="mt-auto rounded-lg border border-border bg-card/40 p-2">
+    <div data-palette-row class="shrink-0 rounded-lg border border-border bg-card/40 p-2">
       <div class="mb-1.5 flex items-center gap-2 text-[11px] text-dim">
         <b class="text-text">Palettes</b> · change
         <select

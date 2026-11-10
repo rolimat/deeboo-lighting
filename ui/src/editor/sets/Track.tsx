@@ -49,7 +49,7 @@ export function OrderPicker({
   );
 }
 
-export const selectClass = "rounded border border-border bg-card px-1.5 py-0.5 text-text";
+export const selectClass = "rounded border border-border bg-card px-1 py-0.5 text-text";
 
 const patternLabel = (m: MomentName, p: string) => PATTERNS[m].find(([id]) => id === p)?.[1] ?? p;
 
@@ -58,13 +58,18 @@ export function describeRef(
   ref: SeqRef,
   moment: MomentName,
   sequences: [number, Sequence][],
-): { name: string; generated: boolean; bars: number | null; cols: string[][] } {
-  if (ref === "generated") return { name: "Any pattern", generated: true, bars: null, cols: [] };
+): { name: string; generated: boolean; bars: number | null; roles: string[] } {
+  if (ref === "generated") return { name: "Any pattern", generated: true, bars: null, roles: [] };
   if ("pattern" in ref)
-    return { name: patternLabel(moment, ref.pattern), generated: true, bars: null, cols: [] };
+    return { name: patternLabel(moment, ref.pattern), generated: true, bars: null, roles: [] };
   const s = sequences.find(([id]) => id === ref.id)?.[1];
-  const cols = s ? toCells(s.steps) : [];
-  return { name: s?.name ?? "Missing sequence", generated: false, bars: cols.length / 8, cols };
+  const bars = s ? toCells(s.steps).length / 8 : 0;
+  return {
+    name: s?.name ?? "Missing sequence",
+    generated: false,
+    bars,
+    roles: s?.steps[0]?.roles ?? [],
+  };
 }
 
 export interface TrackProps {
@@ -78,6 +83,9 @@ export interface TrackProps {
   drag: { item: DragItem; name: string } | null;
   /** This moment is the one in force on the live set. */
   playing: boolean;
+  /** Entry of `data.sequences` that plays now (live set only) and the loop position 0..1. */
+  playingIndex: number | null;
+  progress: number;
   onDragClip: (index: number) => void;
   onDragEnd: () => void;
   onDropAt: (index: number) => void;
@@ -103,7 +111,7 @@ export function Track(p: TrackProps) {
   const bars = p.moment === "calm" ? ["oncePerBreak", ...BARS] : BARS;
   const value = p.data.interval === "oncePerBreak" ? "oncePerBreak" : String(p.data.interval.bars);
   return (
-    <section data-track={p.field} aria-label={`${p.label} track`} class="min-w-0">
+    <section data-track={p.field} aria-label={`${p.label} track`} class="@container min-w-0">
       <h3
         class={`flex items-center gap-2 rounded-t-lg border border-b-0 border-border bg-card px-2 py-1.5 font-semibold ${p.playing ? "text-accent" : ""}`}
       >
@@ -111,8 +119,11 @@ export function Track(p: TrackProps) {
         {p.label}
       </h3>
       <div class="flex flex-col gap-1.5 border border-t-0 border-border p-1.5">
-        <div data-options class="flex flex-wrap items-center gap-1.5 text-[11px] text-dim">
-          Order
+        <div
+          data-options
+          class="flex flex-nowrap items-center gap-1 whitespace-nowrap text-[11px] text-dim"
+        >
+          <span class="hidden @[20rem]:inline">Order</span>
           <OrderPicker
             label={`${p.label} order`}
             value={p.data.order}
@@ -120,7 +131,7 @@ export function Track(p: TrackProps) {
             onChange={p.onOrder}
           />
           <span class="flex-1" />
-          <label class="flex items-center gap-1.5">
+          <label class="flex min-w-0 items-center gap-1">
             Change every
             <select
               aria-label={`${p.label} change every`}
@@ -138,6 +149,7 @@ export function Track(p: TrackProps) {
         </div>
         {p.data.sequences.map((ref, i) => {
           const d = describeRef(ref, p.moment, p.sequences);
+          const playing = p.playingIndex === i;
           const x = (
             <>
               <button
@@ -180,7 +192,8 @@ export function Track(p: TrackProps) {
                 p.onDropAt(i);
               }}
               onDblClick={() => p.onOpen(ref)}
-              class="cursor-grab rounded-md border border-border bg-card px-2 py-1.5"
+              data-playing={playing ? "" : undefined}
+              class={`relative cursor-grab rounded-md border bg-card px-2 py-1.5 ${playing ? "border-accent shadow-[inset_0_0_0_1px_var(--color-accent)]" : "border-border"}`}
             >
               <div class="flex items-center justify-between gap-2">
                 <span class="flex min-w-0 items-center gap-1.5">
@@ -196,23 +209,28 @@ export function Track(p: TrackProps) {
                   {x}
                 </span>
               </div>
-              {d.cols.length > 0 && (
+              {d.roles.length > 0 && (
                 <div data-mini class="mt-1 flex gap-0.5">
-                  {Array.from({ length: 8 }, (_, k) => {
-                    const col = d.cols[Math.floor((k * d.cols.length) / 8)] ?? [];
-                    const role = col.find((r) => r !== "off");
-                    return (
-                      <i
-                        key={k}
-                        class="block h-1.5 flex-1 rounded-sm"
-                        style={{
-                          background:
-                            role && p.palette ? roleColour(role, p.palette) : "var(--color-off)",
-                        }}
-                      />
-                    );
-                  })}
+                  {d.roles.map((role, k) => (
+                    <i
+                      key={k}
+                      class="block h-1.5 flex-1 rounded-sm"
+                      style={{
+                        background:
+                          role !== "off" && p.palette
+                            ? roleColour(role, p.palette)
+                            : "var(--color-off)",
+                      }}
+                    />
+                  ))}
                 </div>
+              )}
+              {playing && (
+                <div
+                  data-progress
+                  class="absolute bottom-0 left-0 h-0.5 rounded-b-md bg-accent"
+                  style={{ width: `${Math.round(p.progress * 100)}%` }}
+                />
               )}
             </div>
           );

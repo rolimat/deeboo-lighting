@@ -33,6 +33,7 @@ const base: Omit<Status, "strip"> = {
   lightsOn: true,
   midi: { source: null, ok: true },
   audio: { ok: false },
+  clip: null,
   selection: {
     set: "Default",
     paletteAuto: false,

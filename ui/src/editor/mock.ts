@@ -121,6 +121,15 @@ export function installMock(api: typeof realApi): void {
     lightsOn: true,
     midi: { source: "Mock clock", ok: true },
     audio: { ok: true },
+    clip: (() => {
+      const n = lib.sets.find((x) => x.id === lib.activeSet)?.rhythm.sequences.length ?? 1;
+      return {
+        moment: "rhythm" as const,
+        index: Math.floor(beat / 8) % n,
+        elapsed: (beat * 2) % 16,
+        total: 16,
+      };
+    })(),
     selection: {
       set: lib.sets.find((x) => x.id === lib.activeSet)?.name ?? "",
       paletteAuto: true,

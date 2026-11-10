@@ -980,3 +980,23 @@ fn preview_follows_the_clock_when_it_runs() {
     let after = hues(&s.sends[mark..]);
     assert!(!after.contains(&111) && !after.contains(&222), "{after:?}");
 }
+
+#[test]
+fn status_reports_the_playing_clip_and_its_progress() {
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_seq_lib());
+    assert_eq!(s.e.status().clip, None, "stopped: nothing plays");
+    s.start();
+    s.beats_of(2, &mut none);
+    let c = s.e.status().clip.expect("a clip plays");
+    assert_eq!((c.moment, c.index), (Rhythm, 0));
+    assert!(c.total > 0 && c.elapsed < c.total, "{c:?}");
+    let first = c.elapsed;
+    s.ticks(12, &mut none); // half a beat later
+    assert_ne!(s.e.status().clip.map(|c| c.elapsed), Some(first));
+    s.beats_of(16, &mut none); // Bars(4) later the second sequence plays
+    assert_eq!(s.e.status().clip.map(|c| c.index), Some(1));
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(2, &mut none);
+    assert_eq!(s.e.status().clip.map(|c| c.moment), Some(Calm));
+}

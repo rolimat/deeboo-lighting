@@ -117,6 +117,18 @@ pub struct Status {
     pub midi: MidiStatus,
     pub audio: AudioStatus,
     pub selection: Selection,
+    /// Which entry of the live set's list plays now (the Sets tab highlights it).
+    pub clip: Option<ClipDto>,
+}
+
+/// `PlayingClip` for the UI.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipDto {
+    pub moment: MomentDto,
+    pub index: usize,
+    pub elapsed: u32,
+    pub total: u32,
 }
 
 impl Status {
@@ -139,6 +151,7 @@ impl Status {
             },
             audio: AudioStatus::default(),
             selection: Selection::of(&Library::builtin(10)),
+            clip: None,
         }
     }
 }
@@ -1018,7 +1031,17 @@ mod tests {
         let json = serde_json::to_string(&Status::initial()).unwrap_or_default();
         assert_eq!(
             json,
-            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","paletteAuto":true,"palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}}}"#
+            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","paletteAuto":true,"palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}},"clip":null}"#
+        );
+        let clip = ClipDto {
+            moment: MomentDto::Calm,
+            index: 1,
+            elapsed: 3,
+            total: 16,
+        };
+        assert_eq!(
+            serde_json::to_string(&clip).unwrap_or_default(),
+            r#"{"moment":"calm","index":1,"elapsed":3,"total":16}"#
         );
         let connected = StripStatus::Connected {
             name: "dj lights".into(),

@@ -116,6 +116,13 @@ const dragDrop = async (from: Element | null, to: Element | null) => {
   await fire(to, "drop");
   await fire(from, "dragend");
 };
+const status = (clip: object | null) => ({
+  bpm: 120,
+  playing: true,
+  moment: "rhythm",
+  clip,
+  selection: { palette: { name: "Neon" } },
+});
 const refs = (m: "rhythm" | "calm" | "buildup", set = 0) => store.lib?.sets[set]?.[m].sequences;
 
 beforeEach(async () => {
@@ -283,4 +290,48 @@ it("duplicate_and_delete_act_on_the_open_set_and_last_set_is_protected", async (
   await act(async () => void (guarded = actions?.deleteGuard?.()));
   expect(guarded).toBe(true);
   expect(root.textContent).toContain("You need at least one set.");
+});
+
+it("browser_and_main_pane_are_separate_scroll_containers", () => {
+  const nav = q("nav[aria-label='Sets']");
+  expect(nav?.className).toContain("overflow-y-auto");
+  const main = q("[data-main]");
+  expect(main?.className).toContain("min-h-0");
+  const tracks = q("[data-tracks]");
+  expect(tracks?.className).toContain("overflow-y-auto");
+  expect(main?.contains(tracks as Node)).toBe(true);
+  // the palette row is pinned: a sibling after the scrolling tracks, never inside them
+  expect(tracks?.contains(q("[data-palette-row]"))).toBe(false);
+  expect(q("[data-palette-row]")?.className).toContain("shrink-0");
+  expect(nav?.parentElement?.className).toContain("h-[calc(100%+3rem)]");
+});
+
+it("order_and_change_every_never_wrap", () => {
+  for (const f of ["rhythm", "calm", "buildup"]) {
+    const row = q(`[data-track='${f}'] [data-options]`);
+    expect(row?.className).toContain("flex-nowrap");
+    expect(row?.className).not.toContain("flex-wrap");
+  }
+});
+
+it("clip_mini_preview_shows_the_first_steps_segments", () => {
+  const pills = qa("[data-clip='rhythm-0'] [data-mini] i");
+  expect(pills).toHaveLength(2); // one per segment of the first step
+  expect(pills[0]?.getAttribute("style")).not.toContain("--color-off");
+  expect(pills[1]?.getAttribute("style")).toContain("--color-off");
+});
+
+it("playing_clip_glows_with_progress_only_on_the_live_set", async () => {
+  vi.mocked(api.getFullStatus).mockResolvedValue(
+    status({ moment: "rhythm", index: 1, elapsed: 4, total: 16 }) as never,
+  );
+  await act(async () => render(null, root));
+  await mount();
+  const clip = q("[data-clip='rhythm-1']");
+  expect(clip?.hasAttribute("data-playing")).toBe(true);
+  expect(clip?.className).toContain("border-accent");
+  expect(clip?.querySelector<HTMLElement>("[data-progress]")?.style.width).toBe("25%");
+  expect(q("[data-clip='rhythm-0']")?.hasAttribute("data-playing")).toBe(false);
+  await click(qa("nav button").find((b) => b.textContent === "Club"));
+  expect(root.querySelector("[data-playing]")).toBeNull();
 });
