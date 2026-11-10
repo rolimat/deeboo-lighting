@@ -130,7 +130,7 @@ it("status_rows_render_each_state", () => {
   view.update(
     st({
       midi: { source: "Pioneer DJ", ok: true },
-      strip: { kind: "connected", name: "dj lights", segments: 10 },
+      strip: { kind: "connected", name: "dj lights", segments: 10, reported: 10 },
       audio: { ok: true, device: "Loopback", levelDb: -30 },
     }),
   );
@@ -205,7 +205,7 @@ it("settings_lists_sources_and_saves_changes", async () => {
 });
 
 it("settings_shows_strip_and_change_button", async () => {
-  view.update(st({ strip: { kind: "connected", name: "Strip A", segments: 10 } }));
+  view.update(st({ strip: { kind: "connected", name: "Strip A", segments: 10, reported: 10 } }));
   byLabel("Settings").click();
   await flush();
   expect(text(".view-settings .strip-line")).toBe("Strip · Strip A (10)");
@@ -236,7 +236,7 @@ it("status_offers_reconnect_on_key_invalid", () => {
   view.update(st({ strip: { kind: "notFound" } }));
   expect(text(".row-strip .row-text")).toBe("Strip · not found");
   expect(reconnect.hidden).toBe(false);
-  view.update(st({ strip: { kind: "connected", name: "dj", segments: 10 } }));
+  view.update(st({ strip: { kind: "connected", name: "dj", segments: 10, reported: 10 } }));
   expect(reconnect.hidden).toBe(true);
 });
 

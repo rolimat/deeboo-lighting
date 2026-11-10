@@ -192,6 +192,44 @@ it("renders_identify_step_and_lights_a_piece", async () => {
   expect(api.wizardSave).toHaveBeenCalledWith(3);
 });
 
+it("identify_step_has_hint", async () => {
+  await mount();
+  await emit({ kind: "identify", device: dev("a"), segments: 3 });
+  expect(root.textContent).toContain("Click a number to light that segment on the strip.");
+});
+
+it("wizard_segments_editable_detected_value", async () => {
+  vi.mocked(api.wizardSave).mockResolvedValue(undefined);
+  await mount();
+  await emit({ kind: "identify", device: dev("a"), segments: 10 });
+  expect(root.textContent).toContain("Detected 10. How many light up?");
+  const input = root.querySelector<HTMLInputElement>("input[aria-label='Wired segments']");
+  expect(input?.value).toBe("10");
+  const type = async (v: string) =>
+    act(async () => {
+      if (input) input.value = v;
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+      await settle();
+    });
+  await type("8");
+  // Numbers past the wired count are greyed.
+  const wired = [...root.querySelectorAll<HTMLElement>("[data-segment-number]")].map(
+    (n) => n.dataset.wired,
+  );
+  expect(wired).toEqual([...Array(8).fill("true"), "false", "false"]);
+  await act(async () => {
+    button("Save").click();
+    await settle();
+  });
+  expect(api.wizardSave).toHaveBeenCalledWith(8);
+  await type("11"); // never more than the controller reports
+  await act(async () => {
+    button("Save").click();
+    await settle();
+  });
+  expect(api.wizardSave).toHaveBeenLastCalledWith(10);
+});
+
 it("shows_the_error_when_save_is_rejected", async () => {
   vi.mocked(api.wizardSave).mockRejectedValue("Saved. Restart the app to use the new strip.");
   await mount();

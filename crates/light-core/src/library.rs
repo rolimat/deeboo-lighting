@@ -293,8 +293,8 @@ impl Library {
                     return err(at(name), "must be finite and within the 0-64 grid");
                 }
             }
-            if !matches!(p.angle, 0 | 90 | 180 | 270) {
-                return err(at("angle"), "must be 0, 90, 180 or 270");
+            if p.angle >= 360 || p.angle % 15 != 0 {
+                return err(at("angle"), "must be a multiple of 15 below 360");
             }
             if !(1..=4).contains(&p.len) {
                 return err(at("len"), "must be 1 to 4 cells");

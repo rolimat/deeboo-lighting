@@ -89,6 +89,16 @@ export function useLibrary() {
     bump();
   }, []);
 
+  /** Adopts a library Rust already saved (a command's result): no save, and the undo history starts over. */
+  const reset = useCallback((l: Library) => {
+    clearTimeout(timer.current);
+    rev.current += 1;
+    hist.current = createHistory({ ...l, ...live.current });
+    gesture.current = null;
+    setSave({ state: "saved" });
+    bump();
+  }, []);
+
   const undo = useCallback(() => {
     if (!hist.current?.canUndo) return;
     hist.current.undo();
@@ -118,6 +128,7 @@ export function useLibrary() {
   return {
     lib: hist.current?.present ?? null,
     edit,
+    reset,
     undo,
     redo,
     canUndo: hist.current?.canUndo ?? false,

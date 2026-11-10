@@ -108,8 +108,9 @@ export function installMock(api: typeof realApi): void {
     helpTooltips: true,
   };
   let beat = 0;
+  let wired = SEGS;
   const status = (): Status => ({
-    strip: { kind: "connected", name: "Mock strip", segments: 8 },
+    strip: { kind: "connected", name: "dj lights", segments: wired, reported: 10 },
     bpm: 122,
     playing: true,
     beatInBar: (beat % 4) + 1,
@@ -173,7 +174,13 @@ export function installMock(api: typeof realApi): void {
     saveSettings: async (s: Settings) => (settings = s),
     listMidiSources: async () => ["Mock clock", "IAC Driver Bus 1"],
     listAudioInputs: async () => ["MacBook Microphone", "Mock interface"],
-    setWiredSegments: async () => lib,
+    // Shape only: the mock's sequences keep their 8 roles.
+    setWiredSegments: async (n: number) => {
+      wired = n;
+      const ps = lib.shape.pieces.slice(0, n);
+      while (ps.length < n) ps.push({ x: ps.length % 30, y: 8, angle: 0, len: 1 });
+      return (lib = { ...lib, shape: { pieces: ps } });
+    },
     detectionWatch: async () => {},
     setDetectionThresholds: async () => settings,
     onDetector: async () => () => {},

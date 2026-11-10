@@ -48,8 +48,10 @@ export type Order = "inOrder" | "random" | "fixed";
 export interface Piece {
   x: number;
   y: number;
-  angle: 0 | 90 | 180 | 270;
-  len: 1 | 2 | 3 | 4;
+  /** Degrees clockwise, a multiple of 15 below 360. */
+  angle: number;
+  /** Cells, 1 to 4. */
+  len: number;
 }
 export interface Hsv {
   h: number;

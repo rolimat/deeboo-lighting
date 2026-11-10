@@ -35,6 +35,11 @@ export function useHelp(text: string): { title?: string } {
   return useContext(Ctx).on ? { title: text } : {};
 }
 
+/** Whether hover help is switched on. */
+export function useHelpOn(): boolean {
+  return useContext(Ctx).on;
+}
+
 export function HelpToggle() {
   const { on, toggle } = useContext(Ctx);
   return (

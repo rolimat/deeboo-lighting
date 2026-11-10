@@ -95,3 +95,14 @@ it("rejected_save_keeps_state", async () => {
   expect(h.save.state).toBe("saved");
   expect(vi.mocked(api.saveLibrary).mock.calls.at(-1)?.[0].shape.pieces).toHaveLength(2);
 });
+
+it("reset_adopts_a_library_and_clears_undo", async () => {
+  await act(async () => addPiece(1)());
+  expect(h.canUndo).toBe(true);
+  await act(async () => h.reset({ ...lib0, shape: { pieces: [piece(7), piece(8)] } }));
+  expect(h.lib?.shape.pieces).toHaveLength(2);
+  expect(h.canUndo).toBe(false);
+  await tick(500);
+  expect(api.saveLibrary).not.toHaveBeenCalled();
+  expect(h.save.state).toBe("saved");
+});

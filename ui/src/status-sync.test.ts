@@ -50,7 +50,7 @@ const base: Omit<Status, "strip"> = {
 const connecting: Status = { ...base, strip: { kind: "connecting" } };
 const connected: Status = {
   ...base,
-  strip: { kind: "connected", name: "dj lights", segments: 10 },
+  strip: { kind: "connected", name: "dj lights", segments: 10, reported: 10 },
 };
 
 beforeEach(() => {

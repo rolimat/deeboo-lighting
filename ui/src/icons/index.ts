@@ -22,6 +22,10 @@ import inorder from "./inorder.svg?raw";
 import random from "./random.svg?raw";
 import fixed from "./fixed.svg?raw";
 import close from "./close.svg?raw";
+import wifi from "./wifi.svg?raw";
+import rotateccw from "./rotateccw.svg?raw";
+import rotatecw from "./rotatecw.svg?raw";
+import lightbulb from "./lightbulb.svg?raw";
 import preview from "./preview.svg?raw";
 
 /** Bundled line icons (24x24, stroke 2); see LICENSE.md. */
@@ -51,5 +55,9 @@ export const icons = {
   fixed,
   close,
   preview,
+  wifi,
+  rotateccw,
+  rotatecw,
+  lightbulb,
 };
 export type IconName = keyof typeof icons;

@@ -992,6 +992,7 @@ mod tests {
         StripStatus::Connected {
             name: "dj".into(),
             segments: 10,
+            reported: 10,
         }
     }
 
@@ -1228,6 +1229,7 @@ mod tests {
         let again = StripStatus::Connected {
             name: "new".into(),
             segments: 10,
+            reported: 10,
         };
         c.handle(Input::StripState(again), 3_000_000);
         assert!(
@@ -1272,6 +1274,7 @@ mod tests {
         let now = StripStatus::Connected {
             name: "short".into(),
             segments: 4,
+            reported: 4,
         };
         c.handle(Input::StripState(now), 3_000_000);
         let cmds = painted(&mut c, &mut rx);

@@ -19,7 +19,7 @@ vi.mock("./api", () => ({
     wizardCancel: vi.fn(),
   },
 }));
-import { api } from "./api";
+import { api, type WizardState } from "./api";
 import { App } from "./App";
 
 async function mount(root: HTMLElement) {
@@ -39,12 +39,14 @@ it("renders_strip_tab_by_default", async () => {
     kind: "connected",
     name: "dj lights",
     segments: 10,
+    reported: 10,
   });
   const root = document.createElement("div");
   await mount(root);
   const tab = root.querySelector("[role=tab][aria-selected=true]");
   expect(tab?.textContent).toBe("Strip");
-  expect(root.querySelector("section")?.textContent).toContain("dj lights (10 segments)");
+  expect(root.querySelector("section")?.textContent).toContain("dj lights");
+  expect(root.querySelector("section")?.textContent).toContain("Connected");
 });
 
 it("shows_not_connected_when_no_strip", async () => {
@@ -85,4 +87,24 @@ it("switches_tab_when_the_open_editor_is_told_a_section", async () => {
   expect(root.querySelector("section")?.getAttribute("aria-label")).toBe("Setup");
   await act(async () => push("nonsense"));
   expect(root.querySelector("section")?.getAttribute("aria-label")).toBe("Setup");
+});
+
+it("wizard_shows_its_own_state_not_runtime_not_connected", async () => {
+  let push: (s: WizardState) => void = () => {};
+  vi.mocked(api.onWizard).mockImplementation(async (cb) => {
+    push = cb;
+    return () => {};
+  });
+  vi.mocked(api.getStatus).mockResolvedValue({ kind: "notConfigured" });
+  const root = document.createElement("div");
+  await mount(root);
+  expect(root.querySelector("section")?.textContent).toContain("not connected");
+  const device = { id: "a", name: "dj lights", product: "P", online: true, supported: true };
+  await act(async () => push({ kind: "listening", device, sinceUs: 1 }));
+  const text = root.querySelector("section")?.textContent ?? "";
+  expect(text).toContain("Connected to dj lights — waiting for paint data");
+  expect(text).not.toContain("not connected");
+  await act(async () => push({ kind: "identify", device, segments: 10 }));
+  expect(root.querySelector("section")?.textContent).toContain("Connected to dj lights");
+  expect(root.querySelector("section")?.textContent).not.toContain("not connected");
 });

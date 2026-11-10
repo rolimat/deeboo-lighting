@@ -285,6 +285,14 @@ fn wired_cmd(c: &StripConfig, cmd: &PaintCommand) -> PaintCommand {
     }
 }
 
+fn connected_status(c: &StripConfig) -> StripStatus {
+    StripStatus::Connected {
+        name: c.name.clone(),
+        segments: c.segments,
+        reported: c.reported,
+    }
+}
+
 /// Switches the unwired tail (N+1..=M) off; `None` when every reported segment is wired.
 fn park_tail(c: &StripConfig) -> Option<PaintCommand> {
     (c.segments < c.reported).then(|| PaintCommand::Eraser {
@@ -535,10 +543,7 @@ pub async fn run<P, Fut>(
                     }
                     park_unwired(&p, &c).await;
                     painter = Some(p);
-                    report(StripStatus::Connected {
-                        name: c.name.clone(),
-                        segments: c.segments,
-                    });
+                    report(connected_status(&c));
                 }
                 Ok(Err(e)) => {
                     log::error!("strip connection failed: {e}");
@@ -678,6 +683,7 @@ mod tests {
         let connected = StripStatus::Connected {
             name: "dj".into(),
             segments: 10,
+            reported: 10,
         };
         assert_eq!(
             *log.lock().unwrap(),
@@ -1045,6 +1051,7 @@ mod tests {
         let connected = |n: &str| StripStatus::Connected {
             name: n.into(),
             segments: 10,
+            reported: 10,
         };
         let r = drive_task(None, ok_fake, async |tx, _| {
             settle().await;
@@ -1089,7 +1096,8 @@ mod tests {
             r.last(),
             Some(&StripStatus::Connected {
                 name: "new".into(),
-                segments: 10
+                segments: 10,
+                reported: 10,
             })
         );
     }
@@ -1101,6 +1109,7 @@ mod tests {
         let connected = |n: &str| StripStatus::Connected {
             name: n.into(),
             segments: 10,
+            reported: 10,
         };
         let r = drive_task(
             Some(cfg("old", None)),

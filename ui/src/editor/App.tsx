@@ -1,12 +1,12 @@
 import { useEffect, useState } from "preact/hooks";
 import type { StripStatus } from "../api";
-import { api } from "./api";
+import { api, type WizardState } from "./api";
 import { PalettesTab } from "./palettes/PalettesTab";
 import { SetsTab } from "./sets/SetsTab";
 import { SequencesTab, type BarActions, type Sel } from "./sequences/SequencesTab";
-import { ShapeEditor } from "./strip/ShapeEditor";
+import { StripTab } from "./strip/StripTab";
 import { DetectionPanel } from "./detection/DetectionPanel";
-import { Wizard } from "./strip/Wizard";
+import { Wizard, wizardLine } from "./strip/Wizard";
 import { Setup } from "./setup/Setup";
 import { HelpProvider } from "./shell/Help";
 import { TopBar, TABS, type Tab } from "./shell/TopBar";
@@ -36,6 +36,8 @@ const NO_UNDO = "This tab applies changes at once, so there is nothing to undo."
 export function App() {
   const [strip, setStrip] = useState<StripStatus | null>(null);
   const [repair, setRepair] = useState(false);
+  const [wizard, setWizard] = useState<WizardState>({ kind: "idle" });
+  const refresh = () => api.getStatus().then(setStrip, () => setStrip({ kind: "error" }));
   const [tab, setTab] = useState<Tab>(initialTab);
   const store = useLibrary();
   const [actions, setActions] = useState<BarActions | null>(null);
@@ -58,11 +60,13 @@ export function App() {
     };
   }, []);
   useEffect(() => {
-    api.getStatus().then(setStrip, () => setStrip({ kind: "error" }));
+    void refresh();
   }, [tab]); // current after a re-pair: the tab was left and re-entered
   const label = TABS.find(([id]) => id === tab)?.[1] ?? "";
   // Until each tab uses the shared store, undo/redo are only live on tabs that edit the library.
-  const libraryTab = tab === "sets" || tab === "sequences" || tab === "palettes";
+  const showStrip = strip?.kind === "connected" && !repair;
+  const libraryTab =
+    tab === "sets" || tab === "sequences" || tab === "palettes" || (tab === "strip" && showStrip);
   return (
     <HelpProvider>
       <div class="flex h-screen flex-col">
@@ -101,25 +105,38 @@ export function App() {
           )}
           {tab === "detection" && <DetectionPanel />}
           {tab === "setup" && <Setup />}
-          {tab === "strip" && (
-            <>
-              <p class="mb-4 text-dim">{describe(strip)}</p>
-              {strip?.kind === "connected" && !repair ? (
-                <div class="space-y-4">
-                  <ShapeEditor segments={strip.segments} />
+          {tab === "strip" &&
+            (strip?.kind === "connected" && !repair ? (
+              <StripTab
+                store={store}
+                strip={strip}
+                onRepair={() => setRepair(true)}
+                onWired={() => void refresh()}
+              />
+            ) : (
+              <>
+                <p class="mb-4 text-dim">{wizardLine(wizard) ?? describe(strip)}</p>
+                <Wizard
+                  onState={setWizard}
+                  onDone={() => {
+                    setRepair(false);
+                    setWizard({ kind: "idle" });
+                    void refresh();
+                    // The wizard rebuilt the library for the new strip.
+                    void api.getLibrary().then(store.reset, () => {});
+                  }}
+                />
+                {repair && strip?.kind === "connected" && wizard.kind === "idle" && (
                   <button
                     type="button"
-                    onClick={() => setRepair(true)}
-                    class="rounded-card border border-border px-4 py-2"
+                    onClick={() => setRepair(false)}
+                    class="mt-4 rounded-card border border-border px-4 py-2"
                   >
-                    Pair a different strip
+                    Back to the strip
                   </button>
-                </div>
-              ) : (
-                <Wizard />
-              )}
-            </>
-          )}
+                )}
+              </>
+            ))}
         </section>
       </div>
     </HelpProvider>

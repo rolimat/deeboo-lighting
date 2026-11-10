@@ -31,7 +31,10 @@ pub enum StripStatus {
     Connecting,
     Connected {
         name: String,
+        /// Wired segments.
         segments: u8,
+        /// What the controller reports (at least `segments`).
+        reported: u8,
     },
     Error,
     /// The strip refused the saved key (re-added in Smart Life): pair again.
@@ -905,7 +908,11 @@ fn with_wired(lib: &Library, n: u8) -> Library {
             90 => (0.0, 1.0),
             180 => (-1.0, 0.0),
             270 => (0.0, -1.0),
-            _ => (1.0, 0.0),
+            0 => (1.0, 0.0),
+            a => {
+                let (sin, cos) = f32::from(a).to_radians().sin_cos();
+                (cos, sin)
+            }
         };
         let step = f32::from(last.len.max(1));
         out.shape.pieces.push(Piece {
@@ -1046,10 +1053,11 @@ mod tests {
         let connected = StripStatus::Connected {
             name: "dj lights".into(),
             segments: 10,
+            reported: 10,
         };
         assert_eq!(
             serde_json::to_string(&connected).unwrap_or_default(),
-            r#"{"kind":"connected","name":"dj lights","segments":10}"#
+            r#"{"kind":"connected","name":"dj lights","segments":10,"reported":10}"#
         );
     }
 
@@ -1138,6 +1146,7 @@ mod tests {
         let on = StripStatus::Connected {
             name: "dj".into(),
             segments: 12,
+            reported: 12,
         };
         state.set_strip(on.clone());
         assert_eq!(lock(&state.status).strip, on);
@@ -1148,6 +1157,7 @@ mod tests {
         let on = StripStatus::Connected {
             name: "dj".into(),
             segments: 10,
+            reported: 10,
         };
         assert_eq!(identify_check(&on, 1), Ok(()));
         assert_eq!(identify_check(&on, 10), Ok(()));
@@ -1241,6 +1251,37 @@ mod tests {
         };
         strip_store::save(&dir.path().join("strip.json"), &cfg).unwrap();
         (dir, state)
+    }
+
+    #[test]
+    fn connected_status_carries_the_reported_count() {
+        let s = StripStatus::Connected {
+            name: "dj".into(),
+            segments: 8,
+            reported: 10,
+        };
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(
+            (v["segments"].as_u64(), v["reported"].as_u64()),
+            (Some(8), Some(10))
+        );
+    }
+
+    #[test]
+    fn growing_continues_along_an_off_axis_piece() {
+        let mut lib = Library::builtin(1);
+        lib.shape.pieces[0] = light_core::library::Piece {
+            x: 10.0,
+            y: 10.0,
+            angle: 45,
+            len: 1,
+        };
+        let grown = with_wired(&lib, 2);
+        let p = grown.shape.pieces[1];
+        assert!(
+            (p.x - 10.707).abs() < 0.01 && (p.y - 10.707).abs() < 0.01,
+            "{p:?}"
+        );
     }
 
     #[test]

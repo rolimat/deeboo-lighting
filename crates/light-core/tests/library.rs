@@ -152,7 +152,11 @@ fn validate_rejects_each_limit() {
         ),
         (
             "shape.pieces[0].angle",
-            Box::new(|l| l.shape.pieces[0].angle = 45),
+            Box::new(|l| l.shape.pieces[0].angle = 50),
+        ),
+        (
+            "shape.pieces[0].angle",
+            Box::new(|l| l.shape.pieces[0].angle = 360),
         ),
         (
             "shape.pieces[0].len",
@@ -470,4 +474,13 @@ fn validate_palette_checks_name_and_ranges() {
     bad = ok;
     bad.name = String::new();
     assert!(validate_palette(&bad).is_err());
+}
+
+#[test]
+fn angles_in_15_degree_steps_validate() {
+    let mut l = Library::builtin(3);
+    for a in (0..360).step_by(15) {
+        l.shape.pieces[0].angle = a;
+        assert_eq!(l.validate(), Ok(()), "angle {a}");
+    }
 }

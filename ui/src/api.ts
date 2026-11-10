@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 export type StripStatus =
   | { kind: "notConfigured" }
   | { kind: "connecting" }
-  | { kind: "connected"; name: string; segments: number }
+  | { kind: "connected"; name: string; segments: number; reported: number }
   | { kind: "error" }
   | { kind: "keyInvalid" }
   | { kind: "notFound" };
