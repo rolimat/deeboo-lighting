@@ -32,6 +32,8 @@ import mic from "./mic.svg?raw";
 import clock from "./clock.svg?raw";
 import phrase from "./phrase.svg?raw";
 import power from "./power.svg?raw";
+import refresh from "./refresh.svg?raw";
+import swap from "./swap.svg?raw";
 
 /** Bundled line icons (24x24, stroke 2); see LICENSE.md. */
 export const icons = {
@@ -69,5 +71,7 @@ export const icons = {
   clock,
   phrase,
   power,
+  refresh,
+  swap,
 };
 export type IconName = keyof typeof icons;

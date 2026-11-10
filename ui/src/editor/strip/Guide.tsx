@@ -30,9 +30,9 @@ export function Guide({ helpOn }: { helpOn: boolean }) {
   return (
     <aside
       aria-label="How to draw your strip"
-      class="absolute top-2 right-2 z-10 w-60 rounded-card border border-accent bg-card p-3 text-xs"
+      class="absolute top-2 right-2 z-10 w-60 rounded-card border border-accent bg-card p-3 text-small"
     >
-      <b>How to draw your strip</b>
+      <b class="t-head">How to draw your strip</b>
       <ol class="my-2 ml-4 list-decimal space-y-1">
         <li>Pick the preset closest to how the strip is mounted.</li>
         <li>

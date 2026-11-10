@@ -15,7 +15,7 @@ const MOMENTS: Record<MomentName, [IconName, string]> = {
 const FLOOR_DB = 60;
 const yPct = (db: number) => Math.min(100, Math.max(0, (-db / FLOOR_DB) * 100));
 const COL = "grid grid-cols-[120px_1fr]";
-const HEAD = "border-b border-r border-border bg-card p-2 text-xs";
+const HEAD = "border-b border-r border-border bg-card p-2 text-small";
 const BAR_LABELS = ["8 bars ago", "7", "6", "5", "4", "3", "2", "1"];
 
 type Band = "kickDb" | "subDb" | "highDb";
@@ -110,7 +110,7 @@ function Lane(props: {
   return (
     <>
       <div class={HEAD}>
-        <b class="text-sm">{def.title}</b>
+        <b class="t-head">{def.title}</b>
         <small class="mt-0.5 block text-dim">{def.desc}</small>
       </div>
       <div ref={box} data-lane={def.id} class="relative h-20 border-b border-border bg-bg">
@@ -184,7 +184,7 @@ export function Timeline(props: {
   return (
     <div class={`${COL} overflow-hidden rounded-card border border-border`}>
       <div class={`${HEAD} text-dim`}>Last 8 bars</div>
-      <div class="grid grid-cols-8 border-b border-border bg-card text-[10px] text-dim">
+      <div class="grid grid-cols-8 border-b border-border bg-card text-small text-dim">
         {BAR_LABELS.map((b, i) => (
           <span key={b} data-bar class="flex justify-between border-l border-border px-1 py-1">
             {b}
@@ -193,7 +193,7 @@ export function Timeline(props: {
         ))}
       </div>
       <div class={HEAD}>
-        <b class="text-sm">Moment</b>
+        <b class="t-head">Moment</b>
         <small class="mt-0.5 block text-dim">What the show used</small>
       </div>
       <div class="flex h-[34px] border-b border-border bg-bg">
@@ -207,7 +207,7 @@ export function Timeline(props: {
               data-moment-run
               {...(now ? { "data-now": "" } : {})}
               style={{ flex: n }}
-              class={`flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap border-r border-bg bg-card px-1.5 text-xs ${now ? "outline outline-1 -outline-offset-1 outline-accent" : ""}`}
+              class={`flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap border-r border-bg bg-card px-1.5 text-small ${now ? "outline outline-1 -outline-offset-1 outline-accent" : ""}`}
             >
               <Icon name={icon} />
               {name}

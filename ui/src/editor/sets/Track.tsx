@@ -109,7 +109,7 @@ export function Track(p: TrackProps) {
   return (
     <section data-track={p.field} aria-label={`${p.label} track`} class="@container min-w-0">
       <h3
-        class={`flex items-center gap-2 rounded-t-lg border border-b-0 border-border bg-card px-2 py-1.5 font-semibold ${p.playing ? "text-accent" : ""}`}
+        class={`flex items-center gap-2 rounded-t-lg border border-b-0 border-border bg-card px-2 py-1.5 t-head ${p.playing ? "text-accent" : ""}`}
       >
         <Icon name={p.icon} />
         {p.label}
@@ -117,7 +117,7 @@ export function Track(p: TrackProps) {
       <div class="flex flex-col gap-1.5 border border-t-0 border-border p-1.5">
         <div
           data-options
-          class="flex flex-nowrap items-center gap-1 whitespace-nowrap text-[11px] text-dim"
+          class="flex flex-nowrap items-center gap-1 whitespace-nowrap text-small text-dim"
         >
           <span class="hidden @[20rem]:inline">Order</span>
           <OrderPicker
@@ -128,8 +128,9 @@ export function Track(p: TrackProps) {
           />
           <span class="flex-1" />
           <label class="flex min-w-0 items-center gap-1">
-            Change every
+            <span class="hidden @[26rem]:inline">Change every</span>
             <select
+              title="Change every"
               aria-label={`${p.label} change every`}
               value={value}
               onChange={(e) => p.onInterval(e.currentTarget.value)}
@@ -200,7 +201,7 @@ export function Track(p: TrackProps) {
                     </span>
                   )}
                 </span>
-                <span class="flex shrink-0 items-center gap-1.5 text-dim">
+                <span class="flex shrink-0 items-center gap-1.5 text-small text-dim">
                   {d.bars === null ? "auto" : `${d.bars} ${d.bars === 1 ? "bar" : "bars"}`}
                   {x}
                 </span>

@@ -1,3 +1,5 @@
+@import "./tokens.css";
+
 :root {
   --bg: #1c1d24;
   --card: #262833;
@@ -19,7 +21,7 @@ body {
   background: transparent;
   color: var(--text);
   font:
-    12px -apple-system,
+    var(--fs-body) -apple-system,
     system-ui,
     sans-serif;
   user-select: none;
@@ -69,14 +71,14 @@ button {
 }
 
 .bpm {
-  font-size: 26px;
+  font-size: var(--fs-display);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
 .tempo-sub {
   color: var(--dim);
-  font-size: 11px;
+  font-size: var(--fs-small);
   line-height: 1.4;
 }
 
@@ -127,7 +129,7 @@ button {
 
 .field-title {
   color: var(--dim);
-  font-size: 10px;
+  font-size: var(--fs-label);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -140,13 +142,15 @@ button {
 }
 
 .lights-state {
-  font-size: 10px;
+  font-size: var(--fs-small);
+  white-space: nowrap;
   color: var(--dim);
 }
 
 .strip-name {
   color: var(--dim);
-  font-size: 11px;
+  font-size: var(--fs-small);
+  white-space: nowrap;
 }
 
 .play-btn {
@@ -249,7 +253,7 @@ input[type="range"] {
   padding: 8px 12px;
   border-top: 1px solid var(--border);
   color: var(--dim);
-  font-size: 11px;
+  font-size: var(--fs-small);
 }
 
 .dot-btn {

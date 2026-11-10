@@ -317,7 +317,7 @@ export function SequencesTab({
 
   const matches = (t: string) => t.toLowerCase().includes(q.toLowerCase());
   const itemClass = (on: boolean) =>
-    `flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm ${on ? "bg-card text-accent outline outline-1 outline-accent" : ""}`;
+    `flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-body ${on ? "bg-card text-accent outline outline-1 outline-accent" : ""}`;
   const info = shown ? momentInfo(shown.moment) : null;
 
   return (
@@ -333,7 +333,7 @@ export function SequencesTab({
         />
         {MOMENTS.map(([m, , icon, name]) => (
           <div key={m}>
-            <h3 class="mb-1 mt-3 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-dim">
+            <h3 class="mb-1 mt-3 flex items-center gap-1.5 t-label">
               <Icon name={icon} />
               {name}
             </h3>
@@ -403,14 +403,12 @@ export function SequencesTab({
               steps: fromCells(Array.from({ length: BAR }, () => off)),
             });
           }}
-          class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-dim disabled:opacity-40"
+          class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-body text-dim disabled:opacity-40"
         >
           <Icon name="plus" />
           New sequence
         </button>
-        <h4 class="mt-4 text-[10px] uppercase tracking-wider text-dim">
-          Palettes (drag onto the grid)
-        </h4>
+        <h4 class="mt-4 t-label">Palettes (drag onto the grid)</h4>
         <ul>
           {lib.palettes.map(([id, p]) => (
             <li key={id}>
@@ -448,10 +446,10 @@ export function SequencesTab({
           <>
             <div class="flex flex-wrap items-center gap-x-5 gap-y-2">
               {readOnly ? (
-                <span class="text-sm font-semibold">{shown.name}</span>
+                <span class="t-head">{shown.name}</span>
               ) : (
                 <div class="flex items-center gap-2">
-                  <label for="seq-name" class="text-[10px] uppercase tracking-wider text-dim">
+                  <label for="seq-name" class="t-label">
                     Name
                   </label>
                   <input
@@ -469,7 +467,7 @@ export function SequencesTab({
               )}
               {!readOnly && (
                 <div class="flex items-center gap-2" role="group" aria-label="Moment">
-                  <span class="text-[10px] uppercase tracking-wider text-dim">Moment</span>
+                  <span class="t-label">Moment</span>
                   <div class="seg">
                     {MOMENTS.map(([m, , icon, name]) => (
                       <button
@@ -478,7 +476,7 @@ export function SequencesTab({
                         aria-label={`Moment ${name}`}
                         aria-pressed={shown.moment === m}
                         onClick={() => changeMoment(m)}
-                        class="flex items-center gap-1.5 px-2 py-1 text-sm"
+                        class="flex items-center gap-1.5 px-2 py-1 text-body"
                       >
                         <Icon name={icon} />
                         {name}
@@ -488,7 +486,7 @@ export function SequencesTab({
                 </div>
               )}
               <div class="flex items-center gap-2">
-                <label for="seq-palette" class="text-[10px] uppercase tracking-wider text-dim">
+                <label for="seq-palette" class="t-label">
                   Preview palette
                 </label>
                 <select
@@ -556,7 +554,7 @@ export function SequencesTab({
                 />
               }
             />
-            <div class="flex flex-wrap items-center gap-2 text-sm text-dim">
+            <div class="flex flex-wrap items-center gap-2 text-body text-dim">
               Paint
               {PAINT.map((r) => (
                 <button

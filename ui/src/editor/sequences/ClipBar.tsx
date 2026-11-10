@@ -38,7 +38,7 @@ export function ClipBar({
     <div ref={track} data-clip-track class="relative h-[30px] py-0.5">
       <div
         data-clip
-        class="relative flex h-full items-center gap-2 rounded-md border border-accent bg-card pl-2 pr-4 text-xs font-semibold"
+        class="relative flex h-full items-center gap-2 rounded-md border border-accent bg-card pl-2 pr-4 text-small font-semibold"
       >
         <span class="text-dim">
           <Icon name={icon} />

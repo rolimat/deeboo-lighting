@@ -60,7 +60,7 @@ export function ThresholdLine(p: Props) {
       {...useHelp(p.hint)}
     >
       <div class="absolute inset-x-0 top-2 border-t-2 border-dashed border-accent group-focus-visible:border-solid" />
-      <span class="absolute right-1.5 -top-1 select-none rounded border border-accent bg-card px-1.5 text-[10px] text-accent">
+      <span class="absolute right-1.5 -top-1 select-none rounded border border-accent bg-card px-1.5 text-small text-accent">
         {p.words}
       </span>
     </div>

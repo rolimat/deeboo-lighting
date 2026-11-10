@@ -34,7 +34,7 @@ function StatusBar({ s }: { s: Status | null }) {
   return (
     <div
       data-status-bar
-      class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-border bg-card px-3 py-2 text-xs"
+      class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-border bg-card px-3 py-2 text-small"
     >
       <span
         data-clock
@@ -170,7 +170,7 @@ export function DetectionTab({ onGoSetup }: { onGoSetup: () => void }) {
     <div class="max-w-5xl space-y-3">
       <StatusBar s={st} />
       <div class="flex items-start gap-4">
-        <span class="w-36 pt-0.5 text-xs uppercase tracking-wide text-dim">Moment changes</span>
+        <span class="t-label w-36 pt-0.5">Moment changes</span>
         <ChangesSlider
           sensitivity={s.sensitivity}
           onChange={(sensitivity) => save({ sensitivity })}
@@ -178,7 +178,7 @@ export function DetectionTab({ onGoSetup }: { onGoSetup: () => void }) {
         <button
           type="button"
           onClick={() => save(DEFAULTS)}
-          class="ml-auto rounded-card border border-border bg-card px-3 py-1 text-xs"
+          class="ml-auto rounded-card border border-border bg-card px-3 py-1 text-small"
         >
           Reset to defaults
         </button>
@@ -189,7 +189,7 @@ export function DetectionTab({ onGoSetup }: { onGoSetup: () => void }) {
         <Empty s={st} onGoSetup={onGoSetup} />
       )}
       {live && (
-        <p class="text-xs text-dim">
+        <p class="text-small text-dim">
           The drop is detected when the kick comes back after a Build-up. Drag the dashed lines to
           change when each moment starts. Changes apply on the next beat.
         </p>

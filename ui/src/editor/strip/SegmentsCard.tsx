@@ -11,6 +11,7 @@ export interface StripInfo {
 }
 
 const chip = "rounded-lg border border-border bg-bg px-3 py-1";
+const iconChip = `${chip} inline-flex items-center gap-1.5`;
 
 /** The connected strip: its state, how many segments are wired, and the way back into the wizard. */
 export function SegmentsCard(p: {
@@ -32,12 +33,12 @@ export function SegmentsCard(p: {
         </span>
         <div>
           <b>{name}</b>
-          <div class="text-xs text-dim">
+          <div class="text-small text-dim">
             {p.strip.ip ? `Connected · ${p.strip.ip}` : "Connected"}
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <span class="text-[10px] tracking-wider text-dim uppercase">Segments</span>
+          <span class="t-label">Segments</span>
           <span class="inline-flex items-center overflow-hidden rounded-lg border border-border">
             <button
               type="button"
@@ -71,21 +72,23 @@ export function SegmentsCard(p: {
               data-wired={String(n <= p.wired)}
               aria-label={`Light segment ${n}`}
               onClick={() => p.onNumber(n)}
-              class={`grid h-6 w-7 place-items-center rounded-md border text-xs ${n <= p.wired ? "border-border bg-bg" : "border-dashed border-border opacity-40"}`}
+              class={`grid h-6 w-7 place-items-center rounded-md border text-small ${n <= p.wired ? "border-border bg-bg" : "border-dashed border-border opacity-40"}`}
             >
               {n}
             </button>
           ))}
         </div>
         <span class="flex-1" />
-        <button type="button" class={chip} onClick={p.onRepair}>
+        <button type="button" class={iconChip} onClick={p.onRepair}>
+          <Icon name="refresh" />
           Reconnect…
         </button>
-        <button type="button" class={chip} onClick={p.onRepair}>
+        <button type="button" class={iconChip} onClick={p.onRepair}>
+          <Icon name="swap" />
           Change strip…
         </button>
       </div>
-      <p class="mt-2 text-xs text-dim">
+      <p class="mt-2 text-small text-dim">
         {`The controller reports ${reported}; only ${p.wired} are wired. Click a number to light that segment and count.`}
       </p>
       {p.confirm !== null && (

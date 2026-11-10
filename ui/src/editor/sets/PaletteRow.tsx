@@ -39,7 +39,7 @@ export function PaletteRow({
   const value = set.paletteChange === "atDrop" ? "atDrop" : String(set.paletteChange.bars);
   return (
     <div data-palette-row class="shrink-0 rounded-lg border border-border bg-card/40 p-2">
-      <div class="mb-1.5 flex items-center gap-2 text-[11px] text-dim">
+      <div class="mb-1.5 flex items-center gap-2 text-small text-dim">
         <b class="text-text">Palettes</b> · change
         <select
           aria-label="Palette change"

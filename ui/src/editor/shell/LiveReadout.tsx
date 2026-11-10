@@ -35,7 +35,8 @@ export function LiveReadout() {
       off?.();
     };
   }, []);
-  const pill = "flex min-w-0 items-center whitespace-nowrap rounded-full bg-card px-3 py-1 text-sm";
+  const pill =
+    "flex min-w-0 items-center whitespace-nowrap rounded-full bg-card px-3 py-1 text-body";
   if (!s || s.bpm === null || !s.playing)
     return (
       <span aria-label="Live" class={`${pill} text-dim`}>

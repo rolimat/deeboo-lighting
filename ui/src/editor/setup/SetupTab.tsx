@@ -26,11 +26,11 @@ function Section(props: {
       class={`grid grid-cols-[220px_1fr] gap-[18px] py-3.5 ${props.last ? "" : "border-b border-border"}`}
     >
       <div>
-        <h3 class="flex items-center gap-2 text-sm font-semibold">
+        <h3 class="t-head flex items-center gap-2">
           <Icon name={props.icon} />
           {props.title}
         </h3>
-        <p class="mt-1 text-xs text-dim">{props.hint}</p>
+        <p class="mt-1 text-small text-dim">{props.hint}</p>
       </div>
       <div class="space-y-2">{props.children}</div>
     </section>
@@ -40,7 +40,7 @@ function Section(props: {
 function Row(props: { label: string; children: ComponentChildren }) {
   return (
     <div class="flex flex-wrap items-center gap-2.5">
-      <span class="text-[10px] uppercase tracking-wider text-dim">{props.label}</span>
+      <span class="t-label">{props.label}</span>
       {props.children}
     </div>
   );
@@ -152,7 +152,7 @@ export function SetupTab() {
             </span>
           )}
         </Row>
-        <p class="text-xs text-dim">
+        <p class="text-small text-dim">
           Any MIDI clock works. The last input used is remembered; new sources appear on their own,
           and if the source goes away it reconnects when it comes back.
         </p>
@@ -187,7 +187,7 @@ export function SetupTab() {
         </Row>
         {/* shortcut: no reliable permission signal (capture opens only while the clock plays), so
             "allowed" is inferred from a working stream and no System Settings link is offered. */}
-        <p class="text-xs text-dim">
+        <p class="text-small text-dim">
           {st?.audio.ok
             ? "Microphone access: allowed"
             : "Microphone access: macOS asks the first time the detector listens. To change it later, open System Settings > Privacy & Security > Microphone."}
@@ -245,10 +245,10 @@ export function SetupTab() {
           >
             {calibrating ? "Stop calibrating" : "Calibrate…"}
           </button>
-          {!playing && <span class="text-xs text-dim">Start the MIDI clock to calibrate.</span>}
+          {!playing && <span class="text-small text-dim">Start the MIDI clock to calibrate.</span>}
         </Row>
         {calibrating && (
-          <div class="flex items-center gap-4 rounded-card border border-border bg-bg p-2.5 text-xs">
+          <div class="flex items-center gap-4 rounded-card border border-border bg-bg p-2.5 text-small">
             <span aria-hidden="true" class="block h-3.5 w-14 rounded-full bg-text" />
             <div>
               <b>Calibrate:</b> the strip flashes on every beat while the clock plays. Use − / +

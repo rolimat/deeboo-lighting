@@ -84,7 +84,7 @@ export function StripTab({
         onRepair={onRepair}
       />
       <div class="flex items-center gap-2">
-        <span class="text-[10px] tracking-wider text-dim uppercase">Start from</span>
+        <span class="t-label">Start from</span>
       </div>
       <div class="flex flex-wrap gap-2">
         {PRESETS.map((x) => (
@@ -95,7 +95,7 @@ export function StripTab({
               setShape(preset(x.name, pieces.length || wired));
               setSelected(null);
             }}
-            class="flex w-21 flex-col items-center gap-1 rounded-lg border border-border bg-card px-2 py-1.5 text-[11px] text-dim hover:border-accent"
+            class="flex w-21 flex-col items-center gap-1 rounded-lg border border-border bg-card px-2 py-1.5 text-small text-dim hover:border-accent"
           >
             <svg
               width="44"
@@ -129,7 +129,7 @@ export function StripTab({
           {error}
         </p>
       )}
-      <p class="text-xs text-dim">
+      <p class="text-small text-dim">
         Arrows move the selected piece · ⇧ + drag moves the whole shape · ⌘Z undo
       </p>
     </div>

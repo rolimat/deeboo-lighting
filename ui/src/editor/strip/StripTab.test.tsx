@@ -253,6 +253,11 @@ it("header_card_has_status_and_both_reconnect_buttons", async () => {
   await act(async () => button("Reconnect…").click());
   await act(async () => button("Change strip…").click());
   expect(onRepair).toHaveBeenCalledTimes(2);
+  for (const name of ["Reconnect…", "Change strip…"]) {
+    const b = button(name);
+    expect(b.querySelectorAll("svg[stroke='currentColor']").length).toBe(1);
+    expect(b.querySelector("[aria-hidden='true']")).not.toBeNull();
+  }
   expect(root.textContent).toContain(
     "Arrows move the selected piece · ⇧ + drag moves the whole shape · ⌘Z undo",
   );

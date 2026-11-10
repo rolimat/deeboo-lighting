@@ -238,7 +238,7 @@ export function SetsTab({
   });
   const grip = <span data-grip aria-hidden="true" class="text-[#555b63] before:content-['⋮⋮']" />;
   const item =
-    "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm cursor-grab";
+    "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-body cursor-grab";
   const playingMoment = isLive && status?.playing ? status.moment : null;
   const clip = isLive && status?.playing ? (status.clip ?? null) : null;
   const playingPalette = isLive && status?.playing ? status.selection.palette.name : null;
@@ -257,7 +257,7 @@ export function SetsTab({
           onInput={(e) => setQ(e.currentTarget.value)}
           class="mb-2 w-full rounded-card border border-border bg-card px-3 py-2"
         />
-        <h3 class="text-[10px] uppercase tracking-wider text-dim">Sets</h3>
+        <h3 class="t-label">Sets</h3>
         <ul>
           {lib.sets
             .filter((s) => match(s.name))
@@ -278,7 +278,7 @@ export function SetsTab({
                     type="button"
                     aria-current={s.id === set.id ? "true" : undefined}
                     onClick={() => setSel(s.id)}
-                    class={`min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-left text-sm ${s.id === set.id ? "bg-card text-accent outline outline-1 outline-accent" : ""}`}
+                    class={`min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-left text-body ${s.id === set.id ? "bg-card text-accent outline outline-1 outline-accent" : ""}`}
                   >
                     {s.name}
                   </button>
@@ -289,15 +289,15 @@ export function SetsTab({
         <button
           type="button"
           onClick={addSet}
-          class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-dim"
+          class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-body text-dim"
         >
           <Icon name="plus" />
           New set
         </button>
-        <h3 class="pt-3 text-[10px] uppercase tracking-wider text-dim">Sequences</h3>
+        <h3 class="pt-3 t-label">Sequences</h3>
         {MOMENTS.map(([m, , icon, name]) => (
           <div key={m}>
-            <h4 class="mb-1 mt-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-dim">
+            <h4 class="mb-1 mt-2 flex items-center gap-1.5 t-label">
               <Icon name={icon} />
               {name}
             </h4>
@@ -346,7 +346,7 @@ export function SetsTab({
               ))}
           </div>
         ))}
-        <h3 class="pt-3 text-[10px] uppercase tracking-wider text-dim">Palettes</h3>
+        <h3 class="pt-3 t-label">Palettes</h3>
         {palettes
           .filter(([, p]) => match(p.name))
           .map(([id, p]) => (
@@ -364,7 +364,7 @@ export function SetsTab({
       </nav>
       <div data-main class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden p-4">
         <div class="flex shrink-0 flex-wrap items-center gap-3">
-          <label for="set-name" class="text-[10px] uppercase tracking-wider text-dim">
+          <label for="set-name" class="t-label">
             Set name
           </label>
           <input
@@ -384,7 +384,7 @@ export function SetsTab({
             class="min-w-32 rounded-card border border-border bg-bg px-2 py-1"
           />
           <span class="flex-1" />
-          <span data-live-state class="flex items-center gap-2 text-sm">
+          <span data-live-state class="flex items-center gap-2 text-body">
             {isLive ? (
               <span class="flex items-center gap-1.5 text-accent">
                 <Icon name="play" />
@@ -407,7 +407,7 @@ export function SetsTab({
           </span>
         </div>
         {notice && (
-          <p role="alert" class="shrink-0 text-sm text-red">
+          <p role="alert" class="shrink-0 text-body text-red">
             {notice}
           </p>
         )}

@@ -69,7 +69,7 @@ export function TopBar(p: TopBarProps) {
             key={id}
             aria-selected={id === p.tab}
             onClick={() => p.onTab(id)}
-            class={`flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-sm ${id === p.tab ? "bg-card text-accent" : "text-dim"}`}
+            class={`flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-body ${id === p.tab ? "bg-card text-accent" : "text-dim"}`}
           >
             <Icon name={id} />
             {name}
@@ -104,7 +104,7 @@ export function TopBar(p: TopBarProps) {
       )}
       <span
         role="status"
-        class={`ml-auto shrink-0 whitespace-nowrap px-2 text-sm ${p.save.state === "error" ? "text-red" : "text-dim"}`}
+        class={`ml-auto shrink-0 whitespace-nowrap px-2 text-body ${p.save.state === "error" ? "text-red" : "text-dim"}`}
       >
         {p.save.state === "saving"
           ? "Saving…"

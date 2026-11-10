@@ -219,7 +219,7 @@ export function PalettesTab({
     }
   };
   const itemClass = (on: boolean) =>
-    `flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm ${on ? "bg-card text-accent outline outline-1 outline-accent" : ""}`;
+    `flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-body ${on ? "bg-card text-accent outline outline-1 outline-accent" : ""}`;
 
   return (
     <div class="-m-6 flex min-h-[calc(100%+3rem)]">
@@ -232,7 +232,7 @@ export function PalettesTab({
           onInput={(e) => setQ(e.currentTarget.value)}
           class="w-full rounded-card border border-border bg-card px-3 py-2"
         />
-        <h3 class="mb-1 mt-3 text-[10px] uppercase tracking-wider text-dim">Palettes</h3>
+        <h3 class="mb-1 mt-3 t-label">Palettes</h3>
         <ul>
           {lib.palettes
             .filter(([, p]) => matches(p.name))
@@ -271,7 +271,7 @@ export function PalettesTab({
           type="button"
           disabled={lib.palettes.length >= MAX_PALETTES}
           onClick={() => add(NEW_PALETTE)}
-          class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-dim disabled:opacity-40"
+          class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-body text-dim disabled:opacity-40"
         >
           <Icon name="plus" />
           New palette
@@ -281,7 +281,7 @@ export function PalettesTab({
         {palette && colour && pickedId !== null ? (
           <>
             <div class="flex items-center gap-2">
-              <label for="pal-name" class="text-[10px] uppercase tracking-wider text-dim">
+              <label for="pal-name" class="t-label">
                 Name
               </label>
               <input
@@ -324,17 +324,15 @@ export function PalettesTab({
                     class="mb-1.5 block h-14 rounded-md"
                     style={{ background: css(palette[r]) }}
                   />
-                  <b class="block">{title}</b>
-                  <small class="block text-dim">{sub}</small>
+                  <b class="t-head block">{title}</b>
+                  <small class="block text-small text-dim">{sub}</small>
                 </button>
               ))}
             </div>
             <div class="flex items-start gap-5 rounded-card border border-border bg-card p-3">
               <ColourWheel value={colour} onChange={(c) => setColour(c, "wheel")} />
               <div class="min-w-0 flex-1 space-y-2">
-                <div class="text-[10px] uppercase tracking-wider text-dim">
-                  Editing: {ROLES.find(([r]) => r === role)?.[1]}
-                </div>
+                <div class="t-label">Editing: {ROLES.find(([r]) => r === role)?.[1]}</div>
                 <div class="flex items-center gap-3">
                   <span
                     data-big-swatch
@@ -363,10 +361,7 @@ export function PalettesTab({
                     {HEX_MSG}
                   </p>
                 )}
-                <div
-                  data-brightness
-                  class="flex items-center gap-2 text-[10px] uppercase tracking-wider text-dim"
-                >
+                <div data-brightness class="flex items-center gap-2 t-label">
                   <label for="pal-bright">Brightness</label>
                   <span>· {Math.round(colour.v / 10)} %</span>
                 </div>
@@ -385,7 +380,7 @@ export function PalettesTab({
                     background: `linear-gradient(90deg,#000,${css({ ...colour, v: 1000 })})`,
                   }}
                 />
-                <div class="text-[10px] uppercase tracking-wider text-dim">Quick colours</div>
+                <div class="t-label">Quick colours</div>
                 <div class="flex flex-wrap gap-1.5">
                   {QUICK.map((hex) => (
                     <button
@@ -405,7 +400,7 @@ export function PalettesTab({
             </div>
             {previewEntry && previewSeq !== null && (
               <Simulation sequence={previewEntry[1]} pieces={lib.shape.pieces} palette={palette}>
-                <label class="flex items-center gap-2 text-sm text-dim">
+                <label class="flex items-center gap-2 text-body text-dim">
                   Sequence:
                   <select
                     aria-label="Sequence"
@@ -425,7 +420,7 @@ export function PalettesTab({
                   aria-label="Show on strip"
                   aria-pressed={onStrip}
                   onClick={() => setOnStrip((v) => !v)}
-                  class={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-sm ${onStrip ? "border-accent text-accent" : "border-border text-dim"}`}
+                  class={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-body ${onStrip ? "border-accent text-accent" : "border-border text-dim"}`}
                   {...showHelp}
                 >
                   <Icon name="strip" />

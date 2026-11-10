@@ -1,6 +1,8 @@
 @import "tailwindcss";
+@import "../tokens.css";
 
 @theme {
+  --text-*: initial;
   --color-bg: #1c1d24;
   --color-card: #262833;
   --color-border: #33364a;
@@ -14,7 +16,29 @@
   --radius-card: 12px;
 }
 
+/* Role tokens for utilities (text-title ...): read the variables in tokens.css. */
+@theme inline {
+  --text-display: var(--fs-display);
+  --text-title: var(--fs-title);
+  --text-body: var(--fs-body);
+  --text-small: var(--fs-small);
+  --text-label: var(--fs-label);
+}
+
+/* Component classes for the two roles that need more than a size. */
+.t-head {
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
+.t-label {
+  font-size: var(--fs-label);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-dim);
+}
+
 body {
+  font-size: var(--fs-body);
   @apply bg-bg text-text;
 }
 
@@ -73,7 +97,7 @@ input[type="search"] {
   box-sizing: border-box;
   height: 28px;
   padding: 0 8px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1;
   min-width: 0;
   max-width: 100%;

@@ -44,7 +44,7 @@ export function ChangesSlider(props: {
           <i key={v} class={`h-2 w-0.5 ${i <= step ? "bg-accent" : "bg-border"}`} />
         ))}
       </div>
-      <div class="mt-1 flex justify-between text-xs text-dim">
+      <div class="mt-1 flex justify-between text-small text-dim">
         {NAMES.map(([i, name]) =>
           i === step ? (
             <b key={name} data-current class="text-text">
@@ -55,7 +55,7 @@ export function ChangesSlider(props: {
           ),
         )}
       </div>
-      <p class="mt-1 text-xs text-dim">{EXPLAIN[step]}</p>
+      <p class="mt-1 text-small text-dim">{EXPLAIN[step]}</p>
     </div>
   );
 }

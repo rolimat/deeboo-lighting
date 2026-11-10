@@ -224,7 +224,7 @@ export function ShapeCanvas(p: {
               <Icon name="lightbulb" />
             </span>
           )}
-          <span class="px-1 text-[10px] text-dim">{`Segment ${p.selected + 1} · ${Math.round(sel.angle)}°`}</span>
+          <span class="px-1 text-small text-dim">{`Segment ${p.selected + 1} · ${Math.round(sel.angle)}°`}</span>
         </div>
       )}
     </div>

@@ -59,7 +59,7 @@ export function ArrangementGrid({
 
   return (
     <div class="flex">
-      <div class="w-11 shrink-0 text-[10px] leading-[18px] text-dim">
+      <div class="w-11 shrink-0 text-small leading-[18px] text-dim">
         <div class="h-[18px]" />
         <div class="h-[30px] leading-[30px]">Clip</div>
         <div class="h-[14px]" />
@@ -95,7 +95,7 @@ export function ArrangementGrid({
             <div
               key={b}
               style={{ gridColumn: "span 2" }}
-              class={`h-[18px] truncate pl-1 text-[10px] text-dim ${b % 4 === 0 ? "font-semibold text-text" : ""}`}
+              class={`h-[18px] truncate pl-1 text-small text-dim ${b % 4 === 0 ? "font-semibold text-text" : ""}`}
             >
               {b % 4 === 0 ? `Bar ${b / 4 + 1}` : `${Math.floor(b / 4) + 1}.${(b % 4) + 1}`}
             </div>
@@ -108,7 +108,7 @@ export function ArrangementGrid({
                 role="status"
                 data-col={c}
                 style={{ left: `${(c / n) * 100}%` }}
-                class="absolute whitespace-nowrap text-[10px] leading-[14px] text-red"
+                class="absolute whitespace-nowrap text-small leading-[14px] text-red"
               >
                 Shown in {k} parts
               </span>
