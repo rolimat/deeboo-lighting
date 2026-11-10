@@ -287,7 +287,7 @@ it("moment_change_warns_and_removes_from_other_tracks", async () => {
 
 it("delete_is_blocked_while_a_set_uses_the_sequence", async () => {
   await mount();
-  actions?.onDelete?.();
+  expect(actions?.deleteGuard?.()).toBe(true); // TopBar skips the confirm dialog
   await tick();
   expect(store.lib?.sequences).toHaveLength(2);
   expect(root.textContent).toContain("Used by Club night");

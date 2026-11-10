@@ -166,7 +166,11 @@ export function SequencesTab({
   }, [entry?.[1].steps, paletteId]);
 
   // The top bar's actions read the latest state through this ref, so they can stay stable.
-  const live = useRef<{ dup: () => void; del: () => void }>({ dup: () => {}, del: () => {} });
+  const live = useRef<{ dup: () => void; del: () => void; guard: () => boolean }>({
+    dup: () => {},
+    del: () => {},
+    guard: () => false,
+  });
   const newId = () => Math.max(1_000_000, ...(lib?.sequences.map(([id]) => id) ?? [])) + 1;
   const add = (seq: Sequence) => {
     if ((lib?.sequences.length ?? 0) >= MAX_SEQUENCES) return setNotice("At most 64 sequences.");
@@ -185,20 +189,22 @@ export function SequencesTab({
         name: [...`${shown.name} copy`].slice(0, 63).join(""),
         steps: shown.steps.map((s) => ({ ...s, roles: [...s.roles] })),
       }),
-    del: () => {
-      if (!lib || !entry) return;
-      const [id, s] = entry;
+    guard: () => {
+      if (!lib || !entry) return false;
+      const id = entry[0];
       const users = lib.sets.filter((set) =>
         Object.values(tracksOf(set)).some((t) => hasId(t.sequences, id)),
       );
-      if (users.length)
-        return setNotice(
-          `Used by ${users.map((u) => u.name).join(", ")}. Remove it from there first.`,
-        );
+      if (!users.length) return false;
+      setNotice(`Used by ${users.map((u) => u.name).join(", ")}. Remove it from there first.`);
+      return true;
+    },
+    del: () => {
+      if (!lib || !entry || live.current.guard()) return;
+      const id = entry[0];
       edit((l) => ({ ...l, sequences: l.sequences.filter(([i]) => i !== id) }));
       setSel(null);
       setNotice("");
-      void s;
     },
   };
   const canAct = !!entry;
@@ -209,6 +215,7 @@ export function SequencesTab({
         ? {
             onDuplicate: () => live.current.dup(),
             onDelete: () => live.current.del(),
+            deleteGuard: () => live.current.guard(),
             deleteLabel: label,
           }
         : {},

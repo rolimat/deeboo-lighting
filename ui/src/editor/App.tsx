@@ -32,7 +32,7 @@ function initialTab(): Tab {
 }
 
 const NO_UNDO = "This tab applies changes at once, so there is nothing to undo.";
-const NO_UNDO_SETUP = "Settings apply at once; use Reset to defaults instead.";
+const NO_UNDO_SETUP = "Settings apply at once.";
 
 export function App() {
   const [strip, setStrip] = useState<StripStatus | null>(null);

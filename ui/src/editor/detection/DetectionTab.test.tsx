@@ -265,3 +265,12 @@ it("forced_state_message", async () => {
   expect(root.textContent).toContain("Moment forced — switch to Auto to see detection");
   expect(root.querySelector("[data-lane]")).toBeNull();
 });
+
+it("status_bar_is_above_the_moment_changes_slider", async () => {
+  await mount();
+  const bar = root.querySelector("[data-status-bar]");
+  const slider = [...root.querySelectorAll("span")].find((e) => e.textContent === "Moment changes");
+  expect(bar?.compareDocumentPosition(slider as Node)).toBeGreaterThanOrEqual(
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+});

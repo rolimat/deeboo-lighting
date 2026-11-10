@@ -167,6 +167,7 @@ export function DetectionTab({ onGoSetup }: { onGoSetup: () => void }) {
   const live = !!st && st.playing && st.bpm !== null && st.auto;
   return (
     <div class="max-w-5xl space-y-3">
+      <StatusBar s={st} />
       <div class="flex items-start gap-4">
         <span class="w-36 pt-0.5 text-xs uppercase tracking-wide text-dim">Moment changes</span>
         <ChangesSlider
@@ -181,7 +182,6 @@ export function DetectionTab({ onGoSetup }: { onGoSetup: () => void }) {
           Reset to defaults
         </button>
       </div>
-      <StatusBar s={st} />
       {live ? (
         <Timeline ring={ring.current} t={t} onChange={setThreshold} />
       ) : (

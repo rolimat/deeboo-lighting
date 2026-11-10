@@ -108,3 +108,12 @@ it("wizard_shows_its_own_state_not_runtime_not_connected", async () => {
   expect(root.querySelector("section")?.textContent).toContain("Connected to dj lights");
   expect(root.querySelector("section")?.textContent).not.toContain("not connected");
 });
+
+it("setup_tab_undo_hint_does_not_mention_reset", async () => {
+  history.replaceState(null, "", "/?section=setup");
+  vi.mocked(api.getStatus).mockResolvedValue({ kind: "notConfigured" });
+  const root = document.createElement("div");
+  await mount(root);
+  const undo = root.querySelector("button[aria-label=Undo]");
+  expect(undo?.getAttribute("title")).toBe("Settings apply at once.");
+});
