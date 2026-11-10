@@ -218,6 +218,8 @@ elegible en ajustes. Es una sola feature.
 
 ### 6.3 Modelo
 
+> Nota (2026-11-09): donde esta sección entre en conflicto con `2026-11-09-redesign-and-e2e-fixes-design.md`, manda ese documento.
+
 - **Tira:** ID, IP y versión, número de segmentos (N) y **forma**. La forma es una lista de N piezas, cada una con
   posición, ángulo y longitud en una cuadrícula.
 - **Papeles de color:** `Principal`, `Contraste`, `Suave`, más `White` y `Off`, que son fijos.
@@ -318,6 +320,8 @@ usuario tiene que abrir esa app. *(mi decisión: excepción a la regla de MIDI S
 
 ### 7.1 Barra de menú (cerrada)
 
+> Nota (2026-11-09): donde esta sección entre en conflicto con `2026-11-09-redesign-and-e2e-fixes-design.md`, manda ese documento.
+
 `[icono] ● 125.0 [onda]`
 
 - **Icono:** versión monocroma (plantilla) del icono de la app.
@@ -340,6 +344,8 @@ usuario tiene que abrir esa app. *(mi decisión: excepción a la regla de MIDI S
 
 ### 7.2 Popover (aprobado, como el boceto `menubar-2.html`)
 
+> Nota (2026-11-09): donde esta sección entre en conflicto con `2026-11-09-redesign-and-e2e-fixes-design.md`, manda ese documento.
+
 Mismo estilo visual que Deeboo MIDI Sync: los mismos tokens de color y tarjetas.
 
 - Cabecera "Deeboo Lighting" + ⚙.
@@ -357,6 +363,8 @@ Mismo estilo visual que Deeboo MIDI Sync: los mismos tokens de color y tarjetas.
   - **phrase length (4 / 8 / 16 bars)**.
 
 ### 7.3 Ventana del editor
+
+> Nota (2026-11-09): donde esta sección entre en conflicto con `2026-11-09-redesign-and-e2e-fixes-design.md`, manda ese documento.
 
 Secciones *(mi decisión en la agrupación)*:
 
@@ -475,6 +483,8 @@ El repositorio remoto se crea igual que el de MIDI Sync *(constructor: confirmar
   de aceptación 7, con música real en la habitación.
 
 ## 11. Pruebas de aceptación (manuales, en macOS, con la tira real)
+
+> Nota (2026-11-09): donde esta sección entre en conflicto con `2026-11-09-redesign-and-e2e-fixes-design.md`, manda ese documento.
 
 1. Asistente: con el User Code y el QR aparece "dj lights"; las bombillas salen como no compatibles. La app encuentra la
    tira en la wifi. Tras pintar un segmento en Smart Life, detecta el número real de segmentos de la tira.
