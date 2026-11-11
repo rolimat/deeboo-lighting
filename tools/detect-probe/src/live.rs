@@ -2,6 +2,7 @@
 //! ends after it. The detector never sees audio that is later than the beat it is asked about.
 
 use light_core::clock::{PhraseBars, Position};
+use light_core::detect::BeatFeatures;
 use light_core::detect::bands::BandAnalyzer;
 use light_core::detect::moment::{DetectorParams, Moment, MomentDetector, PositionRules};
 
@@ -73,6 +74,9 @@ impl Transition {
     }
 }
 
+/// One closed beat: its time, clock position, features and the moment after it.
+pub type FeatureRow = (f64, Option<Position>, BeatFeatures, Moment);
+
 pub struct LiveOrder {
     analyzer: BandAnalyzer,
     detector: MomentDetector,
@@ -86,6 +90,7 @@ pub struct LiveOrder {
     pending: Vec<f32>,
     pub beats_seen: usize,
     pub kick_beats: usize,
+    pub features: Vec<FeatureRow>,
 }
 
 impl LiveOrder {
@@ -112,6 +117,7 @@ impl LiveOrder {
             pending: Vec::new(),
             beats_seen: 0,
             kick_beats: 0,
+            features: Vec::new(),
         }
     }
 
@@ -132,7 +138,11 @@ impl LiveOrder {
             let closed = index
                 .checked_sub(1)
                 .and_then(|i| self.positions.get(i).copied().flatten());
+            let closed_t = index.checked_sub(1).map(|i| self.beats[i]);
             let (m, feat) = self.detector.on_beat(closed);
+            if let (Some(f), Some(t)) = (feat, closed_t) {
+                self.features.push((t, closed, f, m));
+            }
             if let Some(f) = feat {
                 self.beats_seen += 1;
                 if f.kick_db >= f.kick_ref_db - self.back_db {
@@ -179,6 +189,43 @@ pub fn mmss(t: f64) -> String {
     format!("{:02}:{:04.1}", tenths / 600, (tenths % 600) as f64 / 10.0)
 }
 
+/// `P<phrase>.<bar>.<beat>`.
+fn phrase_label(p: Position) -> String {
+    format!(
+        "P{}.{}.{}",
+        p.beat / (4 * u64::from(p.phrase_bars)) + 1,
+        p.bar_in_phrase,
+        p.beat_in_bar
+    )
+}
+
+/// `mm:ss.s  P1.2.3|-  kick dB (vs ref)  sub ..  high ..  MOMENT`.
+#[must_use]
+pub fn feature_line(t: f64, pos: Option<Position>, f: &BeatFeatures, m: Moment) -> String {
+    let band = |n: &str, db: f32, r: f32| format!("{n} {db:.1} ({:+.1})", db - r);
+    format!(
+        "{}  {}  {}  {}  {}  {}",
+        mmss(t),
+        pos.map_or("-".to_string(), phrase_label),
+        band("kick", f.kick_db, f.kick_ref_db),
+        band("sub", f.sub_db, f.sub_ref_db),
+        band("high", f.high_db, f.high_ref_db),
+        name(m)
+    )
+}
+
+/// `from-to` in seconds, `from < to`.
+pub fn parse_range(s: &str) -> Result<(f64, f64), String> {
+    let bad = || format!("bad range '{s}' (use from-to seconds, e.g. 160-215)");
+    let (a, b) = s.split_once('-').ok_or_else(bad)?;
+    let (a, b): (f64, f64) = (a.parse().map_err(|_| bad())?, b.parse().map_err(|_| bad())?);
+    if a.is_finite() && b.is_finite() && 0.0 <= a && a < b {
+        Ok((a, b))
+    } else {
+        Err(bad())
+    }
+}
+
 fn name(m: Moment) -> &'static str {
     match m {
         Moment::Rhythm => "RHYTHM",
@@ -203,14 +250,7 @@ pub fn timeline(
                 .get(tr.index)
                 .copied()
                 .flatten()
-                .map_or(String::new(), |p| {
-                    format!(
-                        "  P{}.{}.{}",
-                        p.beat / (4 * u64::from(p.phrase_bars)) + 1,
-                        p.bar_in_phrase,
-                        p.beat_in_bar
-                    )
-                });
+                .map_or(String::new(), |p| format!("  {}", phrase_label(p)));
             format!(
                 "{}  {}{phrase}  {}  ({:.1} s)",
                 mmss(tr.t),
@@ -393,5 +433,31 @@ mod tests {
         live.finish(&mut |t| out.push(t));
         let calm = out.iter().find(|t| t.moment == Moment::Calm).unwrap();
         assert!(calm.t > 20.0, "calm shown at {}", calm.t);
+    }
+
+    #[test]
+    fn feature_line_formats_values_and_position() {
+        let f = BeatFeatures {
+            kick_db: -12.34,
+            sub_db: -20.0,
+            high_db: -31.26,
+            kick_ref_db: -10.0,
+            sub_ref_db: -20.0,
+            high_ref_db: -30.0,
+        };
+        let beats: Vec<f64> = (0..40).map(|k| f64::from(k) * 0.5).collect();
+        let pos = positions(&beats, &[2.0], PhraseBars::Four);
+        assert_eq!(
+            feature_line(75.25, pos[6], &f, Moment::BuildUp),
+            "01:15.3  P1.1.3  kick -12.3 (-2.3)  sub -20.0 (+0.0)  high -31.3 (-1.3)  BUILD-UP"
+        );
+        assert!(feature_line(0.0, None, &f, Moment::Rhythm).contains("  -  kick"));
+    }
+
+    #[test]
+    fn parse_range_accepts_from_to() {
+        assert_eq!(parse_range("160-215"), Ok((160.0, 215.0)));
+        assert!(parse_range("215-160").is_err());
+        assert!(parse_range("x").is_err());
     }
 }

@@ -24,7 +24,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "usage: detect-probe <audio> [--labels file.json] [--min-beats 4] [--timeline] [--bpm 128] [--realtime]
-       [--downbeat <s>]... [--phrase 4|8|16] [--rules all|none|calm,drop,riser,bars] (default: the app's rules)";
+       [--features [from-to]] [--downbeat <s>]... [--phrase 4|8|16] [--rules all|none|calm,drop,riser,bars] (default: the app's rules)";
 const TOLERANCE_S: f64 = 4.0;
 
 #[derive(Debug)]
@@ -59,6 +59,9 @@ struct Args {
     labels: Option<PathBuf>,
     min_beats: usize,
     timeline: bool,
+    /// `--features`: with an optional range (s), else every beat.
+    features: bool,
+    features_range: Option<(f64, f64)>,
     bpm: Option<f64>,
     realtime: bool,
     downbeats: Vec<f64>,
@@ -72,6 +75,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, CliError> {
         labels: None,
         min_beats: 4,
         timeline: false,
+        features: false,
+        features_range: None,
         bpm: None,
         realtime: false,
         downbeats: Vec::new(),
@@ -79,7 +84,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, CliError> {
         rules: DetectorParams::default().rules,
     };
     let mut audio = None;
-    let mut it = args;
+    let mut it = args.peekable();
     let bad = |what: &str| CliError::Usage(format!("bad or missing value for {what}"));
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -120,6 +125,20 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, CliError> {
             "--rules" => {
                 let v = it.next().ok_or_else(|| bad("--rules"))?;
                 a.rules = live::parse_rules(&v).map_err(CliError::Usage)?;
+            }
+            "--features" => {
+                // The range is optional: only a digit-led next argument is one.
+                let range = if it
+                    .peek()
+                    .is_some_and(|v| v.starts_with(|c: char| c.is_ascii_digit()))
+                {
+                    let v = it.next().unwrap_or_default();
+                    Some(live::parse_range(&v).map_err(CliError::Usage)?)
+                } else {
+                    None
+                };
+                a.features = true;
+                a.features_range = range;
             }
             "--timeline" => a.timeline = true,
             "--realtime" => a.realtime = true,
@@ -192,6 +211,16 @@ fn run(args: &Args) -> Result<(), CliError> {
     } else {
         100.0 * live.kick_beats as f64 / live.beats_seen as f64
     };
+    if args.features {
+        for &(t, pos, ref f, m) in &live.features {
+            if args
+                .features_range
+                .is_none_or(|(a, b)| (a..=b).contains(&t))
+            {
+                println!("{}", live::feature_line(t, pos, f, m));
+            }
+        }
+    }
     println!(
         "duration {}  beats {}  bpm {:.1}  kick {kick_pct:.0}%",
         live::mmss(duration),
