@@ -138,7 +138,14 @@ impl Default for DetectorParams {
             collapse_beats: 16,
             refractory_beats: 16,
             buildup_max_beats: 96,
-            rules: PositionRules::ALL,
+            // aligned_bars and late_riser wait for a listening check: they moved a song's
+            // build-up later / added a false one in the measurement.
+            rules: PositionRules {
+                phrase_quick: true,
+                bar_drop: true,
+                late_riser: false,
+                aligned_bars: false,
+            },
         }
     }
 }
@@ -733,7 +740,10 @@ mod tests {
     #[test]
     fn bars_close_on_clock_beat_four() {
         // Starts on bar beat 3: the half bar is dropped, the next full bar is the first one.
-        let p = DetectorParams::default();
+        let p = DetectorParams {
+            rules: PositionRules::ALL,
+            ..DetectorParams::default()
+        };
         assert_eq!(bars_after(2, 2, p).0.len(), 0);
         assert_eq!(bars_after(5, 2, p).0.len(), 0, "bar not closed yet");
         let (bars, out) = bars_after(6, 2, p);
@@ -745,7 +755,14 @@ mod tests {
     #[test]
     fn partial_first_bar_is_dropped() {
         // Starts on bar beat 2: beat 4 closes a three-beat bar, which is dropped (a plain counter would close one).
-        let (bars, _) = bars_after(4, 1, DetectorParams::default());
+        let (bars, _) = bars_after(
+            4,
+            1,
+            DetectorParams {
+                rules: PositionRules::ALL,
+                ..DetectorParams::default()
+            },
+        );
         assert_eq!(bars.len(), 0);
     }
 
@@ -810,6 +827,15 @@ mod tests {
         assert_eq!((p.approach_calm_beats, p.approach_bars), (32, 8));
         assert_eq!((p.collapse_beats, p.refractory_beats), (16, 16));
         assert_eq!(p.buildup_max_beats, 96);
+        assert_eq!(
+            p.rules,
+            PositionRules {
+                phrase_quick: true,
+                bar_drop: true,
+                aligned_bars: false,
+                late_riser: false
+            }
+        );
         let dbs = [
             (p.learn_db, 16.0),
             (p.calm_kick_db, 16.0),
@@ -1028,7 +1054,11 @@ mod tests {
     #[test]
     fn late_needs_three_bars_after_reset() {
         let late = |i: u64| Some(Position::at(20 + i, false, PhraseBars::Eight));
-        let mut d = MomentDetector::new(DetectorParams::default(), 0.0);
+        let p = DetectorParams {
+            rules: PositionRules::ALL,
+            ..DetectorParams::default()
+        };
+        let mut d = MomentDetector::new(p, 0.0);
         for i in 0..16 {
             d.riser(-30.0, 0.0, late(i)); // old bars, wiped by the reset
         }
