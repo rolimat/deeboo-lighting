@@ -434,10 +434,13 @@ impl MomentDetector {
             if full {
                 return Moment::Rhythm;
             }
-            if up && self.moment == Moment::Calm {
+            if up && self.moment == Moment::Calm && self.since_collapse >= self.p.refractory_beats {
                 return Moment::BuildUp;
             }
-        } else if self.moment == Moment::Rhythm && closed.is_some_and(|c| c.is_phrase_start()) {
+        } else if next == Moment::Rhythm
+            && self.moment == Moment::Rhythm
+            && closed.is_some_and(|c| c.is_phrase_start())
+        {
             let to = if quiet {
                 Moment::Calm
             } else if up {
@@ -455,6 +458,7 @@ impl MomentDetector {
     #[allow(clippy::cast_precision_loss, clippy::similar_names)] // hop counts are tiny
     pub fn on_beat(&mut self, closed: Option<Position>) -> (Moment, Option<BeatFeatures>) {
         if self.hops == 0 {
+            self.quick = false;
             return (self.moment, None);
         }
         let hops = self.hops as f32;
@@ -1339,16 +1343,147 @@ mod tests {
         kick: impl Fn(usize) -> f32,
         hats: impl Fn(usize) -> f32,
     ) -> Vec<Moment> {
-        let lens = beats(128.0, 48);
-        let sig = synth_gain(&lens, kick, |_| true, hats);
         let params = DetectorParams {
             rules,
             ..DetectorParams::default()
         };
+        quick_n(48, off, params, kick, hats, |_| false)
+    }
+
+    /// `quick` with explicit params, length and an `empty(k)` flag for beats that carry no audio frames.
+    fn quick_n(
+        n: usize,
+        off: u64,
+        params: DetectorParams,
+        kick: impl Fn(usize) -> f32,
+        hats: impl Fn(usize) -> f32,
+        empty: impl Fn(usize) -> bool,
+    ) -> Vec<Moment> {
+        let mut lens = beats(128.0, n);
+        for (k, l) in lens.iter_mut().enumerate() {
+            if empty(k) {
+                *l = 0;
+            }
+        }
+        let sig = synth_gain(&lens, kick, |_| true, hats);
         let o = drive_with(&sig, &lens, params, |i| {
             Some(Position::at(i as u64 + off, false, PhraseBars::Eight))
         });
         moments(&o)
+    }
+
+    fn all_rules() -> DetectorParams {
+        DetectorParams {
+            rules: PositionRules::ALL,
+            ..DetectorParams::default()
+        }
+    }
+
+    #[test]
+    fn quick_build_up_leaves_on_a_full_beat_two() {
+        let m = quick(
+            0,
+            PositionRules::ALL,
+            |k| if (32..33).contains(&k) { 0.4 } else { 1.0 },
+            |k| if k == 32 { 10.0 } else { 0.0 },
+        );
+        assert_eq!(m[32], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[33], Moment::Rhythm, "{m:?}");
+    }
+
+    #[test]
+    fn quick_calm_becomes_build_up_on_a_groove_beat_two() {
+        let m = quick(
+            0,
+            PositionRules::ALL,
+            |k| match k {
+                ..=31 => 1.0,
+                32 => 0.0,
+                _ => 0.4,
+            },
+            |k| if k >= 33 { 10.0 } else { 0.0 },
+        );
+        assert_eq!(m[32], Moment::Calm, "{m:?}");
+        assert_eq!(m[33], Moment::BuildUp, "{m:?}");
+    }
+
+    #[test]
+    fn teaser_calm_on_phrase_one_is_not_replaced_by_a_quick_build_up() {
+        // Break 32..48, a full bar 48..52, then a faded kick: the teaser Calm falls on beat 54 (phrase
+        // start with an offset of 10), where the beat also looks like a groove build-up.
+        let m = quick_n(
+            64,
+            10,
+            all_rules(),
+            |k| match k {
+                32..=47 => 0.0,
+                52.. => 0.3,
+                _ => 1.0,
+            },
+            |k| if k >= 54 { 10.0 } else { 0.0 },
+            |_| false,
+        );
+        assert_eq!(m[53], Moment::Rhythm, "{m:?}");
+        assert_eq!(m[54], Moment::Calm, "{m:?}");
+    }
+
+    #[test]
+    fn a_normal_calm_on_phrase_one_is_not_cut_by_a_full_beat_two() {
+        // Two quiet beats make Calm on beat 32 by the normal rule; one full beat must not end it.
+        let m = quick(
+            0,
+            PositionRules::ALL,
+            |k| if (31..=32).contains(&k) { 0.0 } else { 1.0 },
+            |_| 0.0,
+        );
+        assert_eq!(m[32], Moment::Calm, "{m:?}");
+        assert_eq!(m[33], Moment::Calm, "{m:?}");
+    }
+
+    #[test]
+    fn quick_calm_respects_the_refractory_after_a_collapse() {
+        // A Build-up from 41 hits its 12-beat cap (collapse) around 53; the drop returns Rhythm; the
+        // quiet beat 64 is a quick Calm and the groove beat 65 is only 12 beats after the collapse.
+        let params = DetectorParams {
+            buildup_max_beats: 12,
+            ..all_rules()
+        };
+        let m = quick_n(
+            72,
+            0,
+            params,
+            |k| match k {
+                ..=39 | 54..=63 => 1.0,
+                40..=53 => 0.2,
+                64 => 0.0,
+                _ => 0.4,
+            },
+            |k| {
+                if (40..54).contains(&k) || k >= 65 {
+                    10.0
+                } else {
+                    0.0
+                }
+            },
+            |_| false,
+        );
+        assert_eq!(m[63], Moment::Rhythm, "{m:?}");
+        assert_eq!(m[64], Moment::Calm, "{m:?}");
+        assert_eq!(m[65], Moment::Calm, "{m:?}");
+    }
+
+    #[test]
+    fn a_beat_without_frames_ends_the_quick_mark() {
+        let m = quick_n(
+            36,
+            0,
+            all_rules(),
+            |k| if k == 32 { 0.0 } else { 1.0 },
+            |_| 0.0,
+            |k| k == 33,
+        );
+        assert_eq!(m[32], Moment::Calm, "{m:?}");
+        assert_eq!(m[34], Moment::Calm, "{m:?}");
     }
 
     #[test]
