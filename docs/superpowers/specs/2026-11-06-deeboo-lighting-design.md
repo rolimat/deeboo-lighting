@@ -245,8 +245,8 @@ como sin estas reglas.
 - **Resultado de la medición (2026-11-11):**
   - Drop en el 1 de compás: activa (neutra en aciertos, algo más rápida).
   - Calma o Subidón en el 1 de frase: activa (+1 acierto, +1 falsa alarma, más rápida).
-  - Compases alineados con el clock: apagada por defecto (retrasa 20 s un subidón en una canción; pendiente de escucha del usuario).
-  - Riser de 3 compases: apagada por defecto (añade un subidón falso; sin efecto con los compases alineados).
+  - Compases alineados con el clock: activa tras la escucha del usuario (2026-11-11): el subidón que se retrasaba entra en un punto que el usuario da por bueno.
+  - Riser de 3 compases: activa tras la escucha del usuario (2026-11-11): sin efecto medible con los compases alineados.
 
 ### 6.3 Modelo
 

@@ -138,14 +138,7 @@ impl Default for DetectorParams {
             collapse_beats: 16,
             refractory_beats: 16,
             buildup_max_beats: 96,
-            // aligned_bars and late_riser wait for a listening check: they moved a song's
-            // build-up later / added a false one in the measurement.
-            rules: PositionRules {
-                phrase_quick: true,
-                bar_drop: true,
-                late_riser: false,
-                aligned_bars: false,
-            },
+            rules: PositionRules::ALL,
         }
     }
 }
@@ -856,15 +849,7 @@ mod tests {
         assert_eq!((p.approach_calm_beats, p.approach_bars), (32, 8));
         assert_eq!((p.collapse_beats, p.refractory_beats), (16, 16));
         assert_eq!(p.buildup_max_beats, 96);
-        assert_eq!(
-            p.rules,
-            PositionRules {
-                phrase_quick: true,
-                bar_drop: true,
-                aligned_bars: false,
-                late_riser: false
-            }
-        );
+        assert_eq!(p.rules, PositionRules::ALL);
         let dbs = [
             (p.learn_db, 16.0),
             (p.calm_kick_db, 16.0),
