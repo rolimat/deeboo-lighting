@@ -14,15 +14,17 @@ mod live;
 mod tracker;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use light_core::clock::PhraseBars;
 use light_core::detect::bands::BandAnalyzer;
-use light_core::detect::moment::{DetectorParams, Moment};
+use light_core::detect::moment::{DetectorParams, Moment, PositionRules};
 use live::{BLOCK, LiveOrder, Transition};
 use std::fmt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: detect-probe <audio> [--labels file.json] [--min-beats 4] [--timeline] [--bpm 128] [--realtime]";
+const USAGE: &str = "usage: detect-probe <audio> [--labels file.json] [--min-beats 4] [--timeline] [--bpm 128] [--realtime]
+       [--downbeat <s>]... [--phrase 4|8|16] [--rules all|none|calm,drop,riser,bars]";
 const TOLERANCE_S: f64 = 4.0;
 
 #[derive(Debug)]
@@ -59,6 +61,9 @@ struct Args {
     timeline: bool,
     bpm: Option<f64>,
     realtime: bool,
+    downbeats: Vec<f64>,
+    phrase: PhraseBars,
+    rules: PositionRules,
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, CliError> {
@@ -69,6 +74,9 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, CliError> {
         timeline: false,
         bpm: None,
         realtime: false,
+        downbeats: Vec::new(),
+        phrase: PhraseBars::Eight,
+        rules: PositionRules::ALL,
     };
     let mut audio = None;
     let mut it = args;
@@ -91,6 +99,27 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, CliError> {
                     return Err(bad("--bpm"));
                 }
                 a.bpm = Some(b);
+            }
+            "--downbeat" => {
+                let d: f64 = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .ok_or_else(|| bad("--downbeat"))?;
+                if !d.is_finite() || d < 0.0 {
+                    return Err(bad("--downbeat"));
+                }
+                a.downbeats.push(d);
+            }
+            "--phrase" => {
+                a.phrase = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .and_then(PhraseBars::from_bars)
+                    .ok_or_else(|| bad("--phrase"))?;
+            }
+            "--rules" => {
+                let v = it.next().ok_or_else(|| bad("--rules"))?;
+                a.rules = live::parse_rules(&v).map_err(CliError::Usage)?;
             }
             "--timeline" => a.timeline = true,
             "--realtime" => a.realtime = true,
@@ -135,7 +164,12 @@ fn run(args: &Args) -> Result<(), CliError> {
             tracked.bpm()
         );
     }
-    let mut live = LiveOrder::new(rate, tracked.beats.clone(), DetectorParams::default());
+    let positions = live::positions(&tracked.beats, &args.downbeats, args.phrase);
+    let params = DetectorParams {
+        rules: args.rules,
+        ..DetectorParams::default()
+    };
+    let mut live = LiveOrder::new(rate, tracked.beats.clone(), params, positions.clone());
     let mut found: Vec<Transition> = Vec::new();
     if args.realtime {
         play_realtime(&args.audio, &mut live, &mut found)?;
@@ -165,7 +199,7 @@ fn run(args: &Args) -> Result<(), CliError> {
         tracked.bpm()
     );
     if args.timeline {
-        for l in live::timeline(&all, duration) {
+        for l in live::timeline(&all, duration, &positions) {
             println!("{l}");
         }
     } else {
