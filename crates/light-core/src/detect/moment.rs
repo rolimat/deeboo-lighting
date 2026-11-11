@@ -226,6 +226,7 @@ fn shift<const N: usize>(w: &mut [f32; N], v: f32) {
     w[N - 1] = v;
 }
 
+#[allow(clippy::struct_excessive_bools)] // independent flags of the beat state machine
 pub struct MomentDetector {
     p: DetectorParams,
     moment: Moment,
@@ -240,6 +241,8 @@ pub struct MomentDetector {
     bars: Ring,
     bar_sum: f32,
     bar_beats: u32,
+    /// The partial bar began with a clock position (a bar never mixes clocked and unclocked beats).
+    bar_clocked: bool,
     since_return: u32,
     since_collapse: u32,
     collapse_run: u32,
@@ -282,6 +285,7 @@ impl MomentDetector {
             bars: Ring::new(params.riser_bars),
             bar_sum: 0.0,
             bar_beats: 0,
+            bar_clocked: false,
             // The start of the track in Rhythm is not a return.
             since_return: u32::MAX,
             since_collapse: u32::MAX,
@@ -332,10 +336,11 @@ impl MomentDetector {
     #[allow(clippy::cast_precision_loss)]
     fn riser(&mut self, high_db: f32, high_ref_db: f32, closed: Option<Position>) -> bool {
         let clock = closed.filter(|_| self.p.rules.aligned_bars);
-        if clock.is_some_and(|c| c.beat_in_bar == 1) {
+        if clock.is_some_and(|c| c.beat_in_bar == 1) || clock.is_some() != self.bar_clocked {
             // A bar that began before the detector (or after a gap) never counts.
             self.bar_sum = 0.0;
             self.bar_beats = 0;
+            self.bar_clocked = clock.is_some();
         }
         self.bar_sum += high_db;
         self.bar_beats += 1;
@@ -768,6 +773,26 @@ mod tests {
             },
         );
         assert_eq!(bars.len(), 0);
+    }
+
+    #[test]
+    fn a_bar_never_mixes_clocked_and_unclocked_beats() {
+        let p = DetectorParams {
+            rules: PositionRules::ALL,
+            ..DetectorParams::default()
+        };
+        let lens = beats(128.0, 4);
+        let sig = synth(&lens, |_| true, |_| true, |_| 0.0);
+        // Clock beats 1-2 of a bar, then the clock is lost: the 4-beat counter must not close a bar.
+        let mut a = BandAnalyzer::new(FS);
+        let mut d = MomentDetector::new(p, a.hop_len() as f32 / FS as f32);
+        let mut pos = 0;
+        for (i, &len) in lens.iter().enumerate() {
+            a.process(&sig[pos..pos + len], &mut |f| d.push(f));
+            pos += len;
+            d.on_beat((i < 2).then(|| Position::at(i as u64, false, PhraseBars::Eight)));
+        }
+        assert_eq!(d.bars.len(), 0);
     }
 
     #[test]
