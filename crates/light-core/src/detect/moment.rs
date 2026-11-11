@@ -358,7 +358,7 @@ impl MomentDetector {
     }
 
     /// The state after this beat. `evidence`: a riser or an approach (used only from Calm).
-    fn next_moment(&mut self, evidence: bool, high4: f32) -> Moment {
+    fn next_moment(&mut self, evidence: bool, high4: f32, bar_drop: bool) -> Moment {
         let p = self.p;
         self.in_state = self.in_state.saturating_add(1);
         self.since_return = self.since_return.saturating_add(1);
@@ -387,7 +387,7 @@ impl MomentDetector {
             }
             Moment::Calm => Moment::Calm,
             // The drop is exempt from `min_state_beats`.
-            Moment::BuildUp if drop => Moment::Rhythm,
+            Moment::BuildUp if drop || (bar_drop && self.jump_kick) => Moment::Rhythm,
             Moment::BuildUp => {
                 let low = high4 < self.entry_high - p.collapse_db;
                 self.collapse_run = if low { self.collapse_run + 1 } else { 0 };
@@ -481,7 +481,10 @@ impl MomentDetector {
         let groove_up = kd <= -p.groove_buildup_kick_db && hd >= p.groove_buildup_high_db;
         self.groove_run = if groove_up { self.groove_run + 1 } else { 0 };
 
-        let next = self.next_moment(riser || approach, high4);
+        // A full beat with a kick jump on a bar's beat 1 is already the drop (`full_run >= 1` holds
+        // whenever `jump_kick` is set).
+        let bar_drop = p.rules.bar_drop && closed.is_some_and(|c| c.beat_in_bar == 1);
+        let next = self.next_moment(riser || approach, high4, bar_drop);
 
         if self.moment == Moment::Rhythm && kd >= -p.learn_db && hd >= -p.learn_db {
             self.kick_hist.push(kick_db);
@@ -1124,6 +1127,56 @@ mod tests {
             "one full beat is not yet a drop: {m:?}"
         );
         assert_eq!(m[56], Moment::Rhythm, "{:?}", &o[52..58]);
+    }
+
+    /// Break from beat 32 with risers; the kick returns at `back` (sub from `sub_back`).
+    fn return_at(back: usize, sub_back: usize, rules: PositionRules) -> Vec<Moment> {
+        let lens = beats(128.0, 64);
+        // A 115 Hz kick: the sub band sees only the bass tone.
+        let sig = synth_hz(
+            &lens,
+            |k| if (32..back).contains(&k) { 0.0 } else { 1.0 },
+            115.0,
+            |k| !(32..sub_back).contains(&k),
+            |k| if k < back { ramp(k.min(51)) } else { 0.0 },
+        );
+        let params = DetectorParams {
+            rules,
+            ..DetectorParams::default()
+        };
+        let o = drive_with(&sig, &lens, params, |i| {
+            Some(Position::at(i as u64, false, PhraseBars::Eight))
+        });
+        moments(&o)
+    }
+
+    #[test]
+    fn drop_on_bar_one_needs_one_full_beat() {
+        // Beat 56 closes at beat_in_bar 1: one full beat with a kick jump is the drop.
+        let m = return_at(56, 56, PositionRules::ALL);
+        assert_eq!(m[55], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[56], Moment::Rhythm, "{m:?}");
+        // Beat 57 closes at beat_in_bar 2: as before, a second full beat is needed.
+        let m = return_at(57, 57, PositionRules::ALL);
+        assert_eq!(m[57], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[58], Moment::Rhythm, "{m:?}");
+    }
+
+    #[test]
+    fn kick_roll_without_sub_stays_buildup() {
+        let m = return_at(56, 64, PositionRules::ALL);
+        assert_eq!(m[56], Moment::BuildUp, "{m:?}");
+    }
+
+    #[test]
+    fn bar_drop_off_needs_two() {
+        let rules = PositionRules {
+            bar_drop: false,
+            ..PositionRules::ALL
+        };
+        let m = return_at(56, 56, rules);
+        assert_eq!(m[56], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[57], Moment::Rhythm, "{m:?}");
     }
 
     #[test]
