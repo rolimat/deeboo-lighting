@@ -19,9 +19,15 @@ fn process_does_not_allocate() {
 
 #[test]
 fn on_beat_does_not_allocate() {
+    use light_core::clock::{PhraseBars, Position};
+    use light_core::detect::PositionRules;
     use light_core::detect::bands::HopFrame;
     use light_core::detect::moment::{DetectorParams, MomentDetector};
-    let mut d = MomentDetector::new(DetectorParams::default(), 0.0058);
+    let params = DetectorParams {
+        rules: PositionRules::ALL,
+        ..DetectorParams::default()
+    };
+    let mut d = MomentDetector::new(params, 0.0058);
     let frame = |i: u32| {
         let v = 0.01 + f32::from((i % 7) as u8) * 0.01;
         HopFrame {
@@ -37,6 +43,14 @@ fn on_beat_does_not_allocate() {
                 d.push(frame(beat + h));
             }
             let _ = d.on_beat(None);
+            for h in 0..90 {
+                d.push(frame(beat + h));
+            }
+            let _ = d.on_beat(Some(Position::at(
+                u64::from(beat),
+                false,
+                PhraseBars::Eight,
+            )));
         }
     });
 }
