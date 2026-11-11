@@ -347,13 +347,22 @@ impl MomentDetector {
         self.bars.push(self.bar_sum / 4.0);
         self.bar_sum = 0.0;
         self.bar_beats = 0;
-        if !self.bars.is_full() {
+        // Second half of the phrase: three bars are enough.
+        let late =
+            self.p.rules.late_riser && closed.is_some_and(|c| c.bar_in_phrase > c.phrase_bars / 2);
+        let need = if late {
+            self.bars.cap.saturating_sub(1).max(1)
+        } else {
+            self.bars.cap
+        };
+        if self.bars.len() < need {
             return false;
         }
-        let (first, last) = (self.bars.get(0), self.bars.get(self.bars.len() - 1));
+        let from = self.bars.len() - need;
+        let (first, last) = (self.bars.get(from), self.bars.get(self.bars.len() - 1));
         let mut top = first;
         let mut mono = true;
-        for i in 1..self.bars.len() {
+        for i in from + 1..self.bars.len() {
             mono &= self.bars.get(i) >= top - MONO_TOL;
             top = top.max(self.bars.get(i));
         }
@@ -934,6 +943,63 @@ mod tests {
         let m = moments(&o);
         assert!(m[33..59].iter().all(|&m| m == Moment::Calm), "{m:?}");
         assert!(m[59..].iter().all(|&m| m == Moment::BuildUp), "{m:?}");
+    }
+
+    /// Break from beat 32; a spoiler bar (beats 76..80) then three rising bars (80..92) ending on a
+    /// bar that closes at beat 91. Beat `i` closes at clock beat `i + off`.
+    fn three_bar_riser(off: u64, phrase: PhraseBars, rules: PositionRules) -> Vec<Moment> {
+        let lens = beats(128.0, 100);
+        let hats = |k: usize| match k {
+            0..=31 => 0.0,
+            32..=75 => -20.0,
+            76..=79 => -10.0,
+            80..=83 => -16.0,
+            84..=87 => -9.0,
+            _ => -2.0,
+        };
+        let sig = synth(&lens, |k| k < 32, |_| true, hats);
+        let params = DetectorParams {
+            rules,
+            ..DetectorParams::default()
+        };
+        let o = drive_with(&sig, &lens, params, |i| {
+            Some(Position::at(i as u64 + off, false, phrase))
+        });
+        moments(&o)
+    }
+
+    #[test]
+    fn three_rising_bars_late_in_phrase_are_a_riser() {
+        // Beat 91 closes bar 7 of 8.
+        let m = three_bar_riser(0, PhraseBars::Eight, PositionRules::ALL);
+        assert_eq!(m[90], Moment::Calm, "{m:?}");
+        assert_eq!(m[91], Moment::BuildUp, "{m:?}");
+    }
+
+    #[test]
+    fn three_rising_bars_early_are_not() {
+        // Shifted by 16 beats: the bar closes as bar 3 of 8.
+        let m = three_bar_riser(16, PhraseBars::Eight, PositionRules::ALL);
+        assert_eq!(m[91], Moment::Calm, "{m:?}");
+    }
+
+    #[test]
+    fn late_riser_off_needs_four() {
+        let rules = PositionRules {
+            late_riser: false,
+            ..PositionRules::ALL
+        };
+        let m = three_bar_riser(0, PhraseBars::Eight, rules);
+        assert_eq!(m[91], Moment::Calm, "{m:?}");
+        assert_eq!(m[95], Moment::BuildUp, "four bars still count: {m:?}");
+    }
+
+    #[test]
+    fn sixteen_bar_phrase_second_half_starts_at_bar_nine() {
+        let ninth = three_bar_riser(8, PhraseBars::Sixteen, PositionRules::ALL);
+        assert_eq!(ninth[91], Moment::BuildUp, "{ninth:?}");
+        let eighth = three_bar_riser(4, PhraseBars::Sixteen, PositionRules::ALL);
+        assert_eq!(eighth[91], Moment::Calm, "{eighth:?}");
     }
 
     #[test]
