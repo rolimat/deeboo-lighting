@@ -42,7 +42,7 @@ fn analyses_ten_minutes_within_budget() {
         analyzer.process(chunk, &mut |f| detector.push(f));
         done += chunk.len();
         while done >= next_beat {
-            black_box(detector.on_beat());
+            black_box(detector.on_beat(None));
             beats += 1;
             next_beat += BEAT_LEN;
         }

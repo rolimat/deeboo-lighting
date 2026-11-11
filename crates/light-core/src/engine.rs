@@ -264,12 +264,13 @@ impl Engine {
         }
     }
 
-    /// `detect` runs once per beat pulse (never on half pulses or other bytes).
+    /// `detect` runs once per beat pulse (never on half pulses or other bytes), given the position of the
+    /// beat that just ended (`None` on the first).
     pub fn on_midi(
         &mut self,
         now_us: u64,
         status: u8,
-        detect: impl FnOnce() -> Option<Moment>,
+        detect: impl FnOnce(Option<Position>) -> Option<Moment>,
     ) -> Vec<PaintCommand> {
         match self.clock.on_midi(now_us, status) {
             Some(ClockEvent::Pulse { at_us, pos }) => self.pulse(at_us, pos, detect),
@@ -455,13 +456,19 @@ impl Engine {
     /// Plans the scene for the position after `pos`, shown half a pulse-pair later. A moment change
     /// decided now reaches the strip from the next beat: the beat pulse plans its own second half
     /// with the moment already shown, the half pulse plans the next beat with the new one.
-    fn pulse(&mut self, at: u64, pos: Position, detect: impl FnOnce() -> Option<Moment>) {
+    fn pulse(
+        &mut self,
+        at: u64,
+        pos: Position,
+        detect: impl FnOnce(Option<Position>) -> Option<Moment>,
+    ) {
         self.pos = Some(pos);
         let shown = self.control.applied();
         if !pos.half {
             self.last_beat_us = Some(at);
             let next_beat = self.clock.position_after(self.clock.position_after(pos));
-            self.control.next(next_beat, self.cfg.phrase, detect());
+            self.control
+                .next(next_beat, self.cfg.phrase, detect(pos.previous_beat()));
         }
         if self.calibrating {
             // The beat pulse plans the dark half, the half pulse the next beat's flash; a Start flashes now.

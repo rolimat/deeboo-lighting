@@ -39,6 +39,7 @@ Analysing 10 min of synthetic 48 kHz audio must take < 1 s on one thread (spec Â
 ## Details
 - Rust helpers and timing: [references/rust-simulated-time.md](references/rust-simulated-time.md) (read when writing `light-core` tests).
 - UI mocking and events: [references/ui-vitest.md](references/ui-vitest.md) (read when writing UI tests).
+- Detector position rules: pass `Position::at(beat, false, PhraseBars::Eight)` to `on_beat` and set `DetectorParams::rules` explicitly (the default turns all four rules on; tests that need a rule off say so).
 
 ## Checklist
 - [ ] Test failed before the code existed.

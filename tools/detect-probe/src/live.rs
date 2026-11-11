@@ -1,8 +1,10 @@
 //! The event order of the live app: audio arrives in blocks and a beat fires before the block that
 //! ends after it. The detector never sees audio that is later than the beat it is asked about.
 
+use light_core::clock::{PhraseBars, Position};
+use light_core::detect::BeatFeatures;
 use light_core::detect::bands::BandAnalyzer;
-use light_core::detect::moment::{DetectorParams, Moment, MomentDetector};
+use light_core::detect::moment::{DetectorParams, Moment, MomentDetector, PositionRules};
 
 pub const BLOCK: usize = 512;
 
@@ -10,6 +12,50 @@ pub const BLOCK: usize = 512;
 #[must_use]
 pub fn beats_due(beats: &[f64], next: usize, block_end: f64) -> usize {
     next + beats[next.min(beats.len())..].partition_point(|&b| b < block_end)
+}
+
+/// Clock position of every tracked beat: each anchor (seconds) snaps to the nearest tracked beat,
+/// which becomes phrase bar 1 beat 1; beats before the first anchor have none.
+#[must_use]
+pub fn positions(beats: &[f64], anchors: &[f64], phrase: PhraseBars) -> Vec<Option<Position>> {
+    let mut snapped: Vec<usize> = anchors
+        .iter()
+        .filter_map(|&a| {
+            (0..beats.len()).min_by(|&i, &j| (beats[i] - a).abs().total_cmp(&(beats[j] - a).abs()))
+        })
+        .collect();
+    snapped.sort_unstable();
+    (0..beats.len())
+        .map(|i| {
+            let k = snapped.partition_point(|&s| s <= i);
+            let start = *snapped.get(k.checked_sub(1)?)?;
+            Some(Position::at((i - start) as u64, false, phrase))
+        })
+        .collect()
+}
+
+/// `all`, `none` or a comma list of `calm,drop,riser,bars`.
+pub fn parse_rules(s: &str) -> Result<PositionRules, String> {
+    match s {
+        "all" => return Ok(PositionRules::ALL),
+        "none" => return Ok(PositionRules::NONE),
+        _ => {}
+    }
+    let mut r = PositionRules::NONE;
+    for w in s.split(',') {
+        match w {
+            "calm" => r.phrase_quick = true,
+            "drop" => r.bar_drop = true,
+            "riser" => r.late_riser = true,
+            "bars" => r.aligned_bars = true,
+            _ => {
+                return Err(format!(
+                    "unknown rule '{w}' (all, none, calm, drop, riser, bars)"
+                ));
+            }
+        }
+    }
+    Ok(r)
 }
 
 /// A moment change decided at beat `index` (0-based), shown at the beat time `t`.
@@ -28,11 +74,15 @@ impl Transition {
     }
 }
 
+/// One closed beat: its time, clock position, features and the moment after it.
+pub type FeatureRow = (f64, Option<Position>, BeatFeatures, Moment);
+
 pub struct LiveOrder {
     analyzer: BandAnalyzer,
     detector: MomentDetector,
     back_db: f32,
     beats: Vec<f64>,
+    positions: Vec<Option<Position>>,
     next: usize,
     fed: usize,
     sample_rate: f64,
@@ -40,11 +90,17 @@ pub struct LiveOrder {
     pending: Vec<f32>,
     pub beats_seen: usize,
     pub kick_beats: usize,
+    pub features: Vec<FeatureRow>,
 }
 
 impl LiveOrder {
     #[must_use]
-    pub fn new(sample_rate: u32, beats: Vec<f64>, params: DetectorParams) -> LiveOrder {
+    pub fn new(
+        sample_rate: u32,
+        beats: Vec<f64>,
+        params: DetectorParams,
+        positions: Vec<Option<Position>>,
+    ) -> LiveOrder {
         let analyzer = BandAnalyzer::new(sample_rate);
         #[allow(clippy::cast_precision_loss)]
         let hop_s = analyzer.hop_len() as f32 / sample_rate as f32;
@@ -53,6 +109,7 @@ impl LiveOrder {
             detector: MomentDetector::new(params, hop_s),
             back_db: params.back_db,
             beats,
+            positions,
             next: 0,
             fed: 0,
             sample_rate: f64::from(sample_rate),
@@ -60,6 +117,7 @@ impl LiveOrder {
             pending: Vec::new(),
             beats_seen: 0,
             kick_beats: 0,
+            features: Vec::new(),
         }
     }
 
@@ -76,7 +134,15 @@ impl LiveOrder {
         let end = (self.fed + block.len()) as f64 / self.sample_rate;
         let due = beats_due(&self.beats, self.next, end);
         for index in self.next..due {
-            let (m, feat) = self.detector.on_beat();
+            // The call closes beat `index - 1`.
+            let closed = index
+                .checked_sub(1)
+                .and_then(|i| self.positions.get(i).copied().flatten());
+            let closed_t = index.checked_sub(1).map(|i| self.beats[i]);
+            let (m, feat) = self.detector.on_beat(closed);
+            if let (Some(f), Some(t)) = (feat, closed_t) {
+                self.features.push((t, closed, f, m));
+            }
             if let Some(f) = feat {
                 self.beats_seen += 1;
                 if f.kick_db >= f.kick_ref_db - self.back_db {
@@ -123,6 +189,43 @@ pub fn mmss(t: f64) -> String {
     format!("{:02}:{:04.1}", tenths / 600, (tenths % 600) as f64 / 10.0)
 }
 
+/// `P<phrase>.<bar>.<beat>`.
+fn phrase_label(p: Position) -> String {
+    format!(
+        "P{}.{}.{}",
+        p.beat / (4 * u64::from(p.phrase_bars)) + 1,
+        p.bar_in_phrase,
+        p.beat_in_bar
+    )
+}
+
+/// `mm:ss.s  P1.2.3|-  kick dB (vs ref)  sub ..  high ..  MOMENT`.
+#[must_use]
+pub fn feature_line(t: f64, pos: Option<Position>, f: &BeatFeatures, m: Moment) -> String {
+    let band = |n: &str, db: f32, r: f32| format!("{n} {db:.1} ({:+.1})", db - r);
+    format!(
+        "{}  {}  {}  {}  {}  {}",
+        mmss(t),
+        pos.map_or("-".to_string(), phrase_label),
+        band("kick", f.kick_db, f.kick_ref_db),
+        band("sub", f.sub_db, f.sub_ref_db),
+        band("high", f.high_db, f.high_ref_db),
+        name(m)
+    )
+}
+
+/// `from-to` in seconds, `from < to`.
+pub fn parse_range(s: &str) -> Result<(f64, f64), String> {
+    let bad = || format!("bad range '{s}' (use from-to seconds, e.g. 160-215)");
+    let (a, b) = s.split_once('-').ok_or_else(bad)?;
+    let (a, b): (f64, f64) = (a.parse().map_err(|_| bad())?, b.parse().map_err(|_| bad())?);
+    if a.is_finite() && b.is_finite() && 0.0 <= a && a < b {
+        Ok((a, b))
+    } else {
+        Err(bad())
+    }
+}
+
 fn name(m: Moment) -> &'static str {
     match m {
         Moment::Rhythm => "RHYTHM",
@@ -133,14 +236,23 @@ fn name(m: Moment) -> &'static str {
 
 /// Every transition (Rhythm included): `mm:ss.s  bar.beat  MOMENT  (duration s)`.
 #[must_use]
-pub fn timeline(transitions: &[Transition], total_s: f64) -> Vec<String> {
+pub fn timeline(
+    transitions: &[Transition],
+    total_s: f64,
+    positions: &[Option<Position>],
+) -> Vec<String> {
     transitions
         .iter()
         .enumerate()
         .map(|(i, tr)| {
             let end = transitions.get(i + 1).map_or(total_s, |n| n.t);
+            let phrase = positions
+                .get(tr.index)
+                .copied()
+                .flatten()
+                .map_or(String::new(), |p| format!("  {}", phrase_label(p)));
             format!(
-                "{}  {}  {}  ({:.1} s)",
+                "{}  {}{phrase}  {}  ({:.1} s)",
                 mmss(tr.t),
                 tr.bar_beat(),
                 name(tr.moment),
@@ -200,6 +312,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn positions_count_from_the_snapped_anchor() {
+        let beats: Vec<f64> = (0..12).map(|k| f64::from(k) * 0.5).collect();
+        let p = positions(&beats, &[2.1], PhraseBars::Eight);
+        assert_eq!(p.len(), 12);
+        assert_eq!(p[3], None);
+        assert_eq!(p[4], Some(Position::at(0, false, PhraseBars::Eight)));
+        assert_eq!(p[9], Some(Position::at(5, false, PhraseBars::Eight)));
+    }
+
+    #[test]
+    fn second_anchor_restarts_the_count() {
+        let beats: Vec<f64> = (0..12).map(|k| f64::from(k) * 0.5).collect();
+        let p = positions(&beats, &[1.0, 4.0], PhraseBars::Four);
+        assert_eq!(p[0], None);
+        assert_eq!(p[2], Some(Position::at(0, false, PhraseBars::Four)));
+        assert_eq!(p[7], Some(Position::at(5, false, PhraseBars::Four)));
+        assert_eq!(p[8], Some(Position::at(0, false, PhraseBars::Four)));
+        assert_eq!(p[11], Some(Position::at(3, false, PhraseBars::Four)));
+    }
+
+    #[test]
+    fn rules_flag_parses() {
+        assert_eq!(parse_rules("all"), Ok(PositionRules::ALL));
+        assert_eq!(parse_rules("none"), Ok(PositionRules::NONE));
+        let r = parse_rules("calm,riser").unwrap();
+        assert!(r.phrase_quick && r.late_riser && !r.bar_drop && !r.aligned_bars);
+        assert!(parse_rules("calm,nope").is_err());
+    }
+
+    #[test]
+    fn timeline_shows_the_phrase_position_when_known() {
+        let beats: Vec<f64> = (0..40).map(|k| f64::from(k) * 0.5).collect();
+        let pos = positions(&beats, &[2.0], PhraseBars::Four);
+        let lines = timeline(&[tr(0, Moment::Rhythm), tr(6, Moment::Calm)], 20.0, &pos);
+        assert!(!lines[0].contains('P'), "{}", lines[0]);
+        assert!(lines[1].contains("P1.1.3"), "{}", lines[1]);
+    }
+
+    #[test]
     fn mmss_never_shows_sixty_seconds() {
         assert_eq!(mmss(119.96), "02:00.0");
         assert_eq!(mmss(75.25), "01:15.3");
@@ -234,7 +385,7 @@ mod tests {
             tr(32, Moment::Calm),
             tr(64, Moment::Rhythm),
         ];
-        let lines = timeline(&t, 45.0);
+        let lines = timeline(&t, 45.0, &[]);
         assert_eq!(lines[0], "00:00.0  1.1  RHYTHM  (15.0 s)");
         assert_eq!(lines[1], "00:15.0  9.1  CALM  (15.0 s)");
         assert_eq!(lines[2], "00:30.0  17.1  RHYTHM  (15.0 s)");
@@ -276,11 +427,37 @@ mod tests {
             })
             .collect();
         let beats: Vec<f64> = (0..80).map(|k| f64::from(k) * beat).collect();
-        let mut live = LiveOrder::new(fs, beats, DetectorParams::default());
+        let mut live = LiveOrder::new(fs, beats, DetectorParams::default(), Vec::new());
         let mut out = Vec::new();
         live.feed(&audio, &mut |t| out.push(t));
         live.finish(&mut |t| out.push(t));
         let calm = out.iter().find(|t| t.moment == Moment::Calm).unwrap();
         assert!(calm.t > 20.0, "calm shown at {}", calm.t);
+    }
+
+    #[test]
+    fn feature_line_formats_values_and_position() {
+        let f = BeatFeatures {
+            kick_db: -12.34,
+            sub_db: -20.0,
+            high_db: -31.26,
+            kick_ref_db: -10.0,
+            sub_ref_db: -20.0,
+            high_ref_db: -30.0,
+        };
+        let beats: Vec<f64> = (0..40).map(|k| f64::from(k) * 0.5).collect();
+        let pos = positions(&beats, &[2.0], PhraseBars::Four);
+        assert_eq!(
+            feature_line(75.25, pos[6], &f, Moment::BuildUp),
+            "01:15.3  P1.1.3  kick -12.3 (-2.3)  sub -20.0 (+0.0)  high -31.3 (-1.3)  BUILD-UP"
+        );
+        assert!(feature_line(0.0, None, &f, Moment::Rhythm).contains("  -  kick"));
+    }
+
+    #[test]
+    fn parse_range_accepts_from_to() {
+        assert_eq!(parse_range("160-215"), Ok((160.0, 215.0)));
+        assert!(parse_range("215-160").is_err());
+        assert!(parse_range("x").is_err());
     }
 }

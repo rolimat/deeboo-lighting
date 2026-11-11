@@ -80,7 +80,7 @@ fn shown_steps(seq: &Sequence) -> Vec<usize> {
     };
     let c = e.set_library(now, &lib);
     take(&mut strip, c);
-    let c = e.on_midi(now, 0xFA, || None);
+    let c = e.on_midi(now, 0xFA, |_| None);
     take(&mut strip, c);
     let mut out = Vec::new();
     for k in 0..HALF_BEATS * 12 {
@@ -89,7 +89,7 @@ fn shown_steps(seq: &Sequence) -> Vec<usize> {
             take(&mut strip, c);
         }
         if k > 0 {
-            let c = e.on_midi(now, 0xF8, || None);
+            let c = e.on_midi(now, 0xF8, |_| None);
             take(&mut strip, c);
         }
         let next = now + TICK_US;

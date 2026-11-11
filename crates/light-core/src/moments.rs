@@ -43,7 +43,8 @@ impl MomentControl {
         }
         let was_buildup = self.applied == Moment::BuildUp;
         // `detected` lags: it describes the previous beat and a drop needs `rhythm_after_full` (2)
-        // full beats, so a prediction waits 3 calls before the detector may contradict it.
+        // full beats (one with `bar_drop` on a bar's beat 1), so a prediction waits 3 calls before the
+        // detector may contradict it.
         let was_predicted = std::mem::take(&mut self.predicted);
         let holding = was_predicted && self.wait > 1 && detected == Some(Moment::BuildUp);
         self.wait = if holding { self.wait - 1 } else { 0 };

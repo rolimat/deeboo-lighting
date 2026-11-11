@@ -25,6 +25,16 @@ impl PhraseBars {
             Self::Sixteen => 16,
         }
     }
+
+    #[must_use]
+    pub fn from_bars(bars: u8) -> Option<Self> {
+        match bars {
+            4 => Some(Self::Four),
+            8 => Some(Self::Eight),
+            16 => Some(Self::Sixteen),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,7 +52,8 @@ pub struct Position {
 }
 
 impl Position {
-    fn new(beat: u64, half: bool, phrase: PhraseBars) -> Self {
+    #[must_use]
+    pub fn at(beat: u64, half: bool, phrase: PhraseBars) -> Self {
         let bars = phrase.bars();
         // Both remainders are below 16, so the casts cannot truncate.
         Self {
@@ -52,6 +63,13 @@ impl Position {
             bar_in_phrase: (beat / 4 % u64::from(bars)) as u8 + 1,
             phrase_bars: bars,
         }
+    }
+
+    /// The whole beat before this position's beat; `None` on the first beat.
+    #[must_use]
+    pub fn previous_beat(&self) -> Option<Position> {
+        let phrase = PhraseBars::from_bars(self.phrase_bars)?;
+        Some(Position::at(self.beat.checked_sub(1)?, false, phrase))
     }
 
     #[must_use]
@@ -156,9 +174,9 @@ impl ClockTracker {
     #[must_use]
     pub fn position_after(&self, pos: Position) -> Position {
         if pos.half {
-            Position::new(pos.beat + 1, false, self.phrase)
+            Position::at(pos.beat + 1, false, self.phrase)
         } else {
-            Position::new(pos.beat, true, self.phrase)
+            Position::at(pos.beat, true, self.phrase)
         }
     }
 
@@ -200,7 +218,7 @@ impl ClockTracker {
         self.last_us = now_us;
         (self.tick.is_multiple_of(12)).then(|| ClockEvent::Pulse {
             at_us: now_us,
-            pos: Position::new(self.tick / PPQN, self.tick % PPQN == 12, self.phrase),
+            pos: Position::at(self.tick / PPQN, self.tick % PPQN == 12, self.phrase),
         })
     }
 }

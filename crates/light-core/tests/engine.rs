@@ -55,7 +55,7 @@ impl Sim {
         let t = self.now;
         let mut called = 0;
         let calls = self.detect_calls;
-        let c = self.e.on_midi(t, status, || {
+        let c = self.e.on_midi(t, status, |_| {
             called += 1;
             detect(calls)
         });
@@ -370,6 +370,18 @@ fn buildup_detected_on_a_bar_start_waits_for_the_next_bar_start() {
     assert_eq!(at(7), Some(BuildUp));
     let t7 = s.beats.get(7).map(|(t, _)| *t).unwrap();
     assert_eq!(first_bucket_at(&s, 240), Some(t7 + 480_000 - LEAD));
+}
+
+#[test]
+fn quick_buildup_waits_for_next_bar() {
+    // Detected on a phrase's first beat (quick entry): the strip still waits for the next bar start.
+    let mut s = sim125();
+    s.start();
+    s.beats_of(40, &mut |beat| (beat >= 32).then_some(BuildUp));
+    let at = |b: usize| s.beats.get(b).map(|(_, st)| st.moment);
+    assert_eq!(at(32), Some(Rhythm));
+    assert_eq!(at(34), Some(Rhythm));
+    assert_eq!(at(35), Some(BuildUp));
 }
 
 fn apply_all(
@@ -1063,4 +1075,26 @@ fn calibrate_needs_a_clock_and_ends_on_stop() {
     let mark = s.sends.len();
     s.beats_of(6, &mut none);
     assert!(s.sends[mark..].iter().all(|(_, c)| !is_white(c)), "ended");
+}
+
+#[test]
+fn detect_gets_the_closed_beat() {
+    let mut e = Engine::new(EngineConfig {
+        segments: 4,
+        phrase: PhraseBars::Four,
+        lead_us: LEAD,
+        brightness_pct: 100,
+        lights_on: true,
+    });
+    let mut seen = Vec::new();
+    e.on_midi(T0, 0xFA, |_| None);
+    for i in 0..48 {
+        e.on_midi(T0 + i * 20_000, 0xF8, |p| {
+            seen.push(p);
+            None
+        });
+    }
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0], None);
+    assert_eq!(seen[1].map(|p| (p.beat, p.half)), Some((0, false)));
 }
