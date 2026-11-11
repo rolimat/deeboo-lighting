@@ -347,18 +347,17 @@ impl MomentDetector {
         self.bars.push(self.bar_sum / 4.0);
         self.bar_sum = 0.0;
         self.bar_beats = 0;
-        // Second half of the phrase: three bars are enough.
+        // Second half of the phrase: the last three bars may also be a riser, besides the four.
         let late =
             self.p.rules.late_riser && closed.is_some_and(|c| c.bar_in_phrase > c.phrase_bars / 2);
-        let need = if late {
-            self.bars.cap.saturating_sub(1).max(1)
-        } else {
-            self.bars.cap
-        };
-        if self.bars.len() < need {
-            return false;
-        }
-        let from = self.bars.len() - need;
+        let n = self.bars.cap;
+        (self.bars.is_full() && self.rising(n, high_ref_db))
+            || (late && n > 1 && self.bars.len() >= n - 1 && self.rising(n - 1, high_ref_db))
+    }
+
+    /// The last `n` bar means rise monotonically (within `MONO_TOL`) by `riser_db`, ending near the highs reference.
+    fn rising(&self, n: usize, high_ref_db: f32) -> bool {
+        let from = self.bars.len() - n;
         let (first, last) = (self.bars.get(from), self.bars.get(self.bars.len() - 1));
         let mut top = first;
         let mut mono = true;
@@ -948,15 +947,24 @@ mod tests {
     /// Break from beat 32; a spoiler bar (beats 76..80) then three rising bars (80..92) ending on a
     /// bar that closes at beat 91. Beat `i` closes at clock beat `i + off`.
     fn three_bar_riser(off: u64, phrase: PhraseBars, rules: PositionRules) -> Vec<Moment> {
-        let lens = beats(128.0, 100);
-        let hats = |k: usize| match k {
+        riser_run(off, phrase, rules, |k| match k {
             0..=31 => 0.0,
             32..=75 => -20.0,
             76..=79 => -10.0,
             80..=83 => -16.0,
             84..=87 => -9.0,
             _ => -2.0,
-        };
+        })
+    }
+
+    /// Break from beat 32 with the given hats over 100 beats; beat `i` closes at clock beat `i + off`.
+    fn riser_run(
+        off: u64,
+        phrase: PhraseBars,
+        rules: PositionRules,
+        hats: impl Fn(usize) -> f32,
+    ) -> Vec<Moment> {
+        let lens = beats(128.0, 100);
         let sig = synth(&lens, |k| k < 32, |_| true, hats);
         let params = DetectorParams {
             rules,
@@ -1000,6 +1008,37 @@ mod tests {
         assert_eq!(ninth[91], Moment::BuildUp, "{ninth:?}");
         let eighth = three_bar_riser(4, PhraseBars::Sixteen, PositionRules::ALL);
         assert_eq!(eighth[91], Moment::Calm, "{eighth:?}");
+    }
+
+    #[test]
+    fn late_phrase_keeps_four_bar_risers() {
+        // Bars 4..7 of the phrase: -12, -8, -6, -5 dB (bars 3..7 start at -12). The last three rise
+        // 3 dB, all four 7 dB, and no earlier four-bar window reaches 7.
+        let m = riser_run(0, PhraseBars::Eight, PositionRules::ALL, |k| match k {
+            0..=31 => 0.0,
+            32..=79 => -12.0,
+            80..=83 => -8.0,
+            84..=87 => -6.0,
+            _ => -5.0,
+        });
+        assert_eq!(m[90], Moment::Calm, "{m:?}");
+        assert_eq!(m[91], Moment::BuildUp, "{m:?}");
+    }
+
+    #[test]
+    fn late_needs_three_bars_after_reset() {
+        let late = |i: u64| Some(Position::at(20 + i, false, PhraseBars::Eight));
+        let mut d = MomentDetector::new(DetectorParams::default(), 0.0);
+        for i in 0..16 {
+            d.riser(-30.0, 0.0, late(i)); // old bars, wiped by the reset
+        }
+        d.reset();
+        // Bars 6, 7, 8 of the phrase at 0, 5, 10 dB: only the third completes a late riser.
+        let ends: Vec<bool> = (0..12)
+            .map(|i| d.riser([0.0, 5.0, 10.0][i as usize / 4], 10.0, late(i)))
+            .collect();
+        assert!(ends[..11].iter().all(|&r| !r), "{ends:?}");
+        assert!(ends[11], "{ends:?}");
     }
 
     #[test]
