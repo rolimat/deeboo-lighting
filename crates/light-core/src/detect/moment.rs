@@ -320,10 +320,25 @@ impl MomentDetector {
     /// Adds this beat to the current bar of highs; when a bar completes, tells whether the last
     /// `riser_bars` bar means form a riser.
     #[allow(clippy::cast_precision_loss)]
-    fn riser(&mut self, high_db: f32, high_ref_db: f32) -> bool {
+    fn riser(&mut self, high_db: f32, high_ref_db: f32, closed: Option<Position>) -> bool {
+        let clock = closed.filter(|_| self.p.rules.aligned_bars);
+        if clock.is_some_and(|c| c.beat_in_bar == 1) {
+            // A bar that began before the detector (or after a gap) never counts.
+            self.bar_sum = 0.0;
+            self.bar_beats = 0;
+        }
         self.bar_sum += high_db;
         self.bar_beats += 1;
-        if self.bar_beats < 4 {
+        if let Some(c) = clock {
+            if c.beat_in_bar != 4 {
+                return false;
+            }
+            if self.bar_beats != 4 {
+                self.bar_sum = 0.0;
+                self.bar_beats = 0;
+                return false;
+            }
+        } else if self.bar_beats < 4 {
             return false;
         }
         self.bars.push(self.bar_sum / 4.0);
@@ -391,7 +406,7 @@ impl MomentDetector {
 
     /// Closes the beat that started at the previous call.
     #[allow(clippy::cast_precision_loss, clippy::similar_names)] // hop counts are tiny
-    pub fn on_beat(&mut self, _closed: Option<Position>) -> (Moment, Option<BeatFeatures>) {
+    pub fn on_beat(&mut self, closed: Option<Position>) -> (Moment, Option<BeatFeatures>) {
         if self.hops == 0 {
             return (self.moment, None);
         }
@@ -457,7 +472,7 @@ impl MomentDetector {
         self.high4_hist.push(high4);
 
         // Build-up evidence (used only from Calm). Bars are 4-beat blocks from the first beat.
-        let riser = self.riser(high_db, high_ref_db);
+        let riser = self.riser(high_db, high_ref_db, closed);
         let approach = self.moment == Moment::Calm
             && self.in_state >= p.approach_calm_beats
             && self.high4_hist.is_full()
@@ -648,6 +663,57 @@ mod tests {
         let without = drive(&sig, &lens);
         assert_eq!(moments(&with_pos), moments(&without));
         assert!(moments(&without).contains(&Moment::BuildUp));
+    }
+
+    /// Runs `n` flat beats whose highs are `k` dB, closing beat `i` at clock beat `start + i`.
+    fn bars_after(n: usize, start: u64, params: DetectorParams) -> (Vec<f32>, Out) {
+        let lens = beats(128.0, n);
+        let sig = synth(&lens, |_| true, |_| true, |k| k as f32);
+        let mut a = BandAnalyzer::new(FS);
+        let mut d = MomentDetector::new(params, a.hop_len() as f32 / FS as f32);
+        let (mut pos, mut out) = (0, Vec::new());
+        for (i, &len) in lens.iter().enumerate() {
+            a.process(&sig[pos..pos + len], &mut |f| d.push(f));
+            pos += len;
+            out.push(d.on_beat(Some(Position::at(
+                start + i as u64,
+                false,
+                PhraseBars::Eight,
+            ))));
+        }
+        (d.bars.buf.clone(), out)
+    }
+
+    #[test]
+    fn bars_close_on_clock_beat_four() {
+        // Starts on bar beat 3: the half bar is dropped, the next full bar is the first one.
+        let p = DetectorParams::default();
+        assert_eq!(bars_after(2, 2, p).0.len(), 0);
+        assert_eq!(bars_after(5, 2, p).0.len(), 0, "bar not closed yet");
+        let (bars, out) = bars_after(6, 2, p);
+        let want = out[2..6].iter().map(|r| r.1.unwrap().high_db).sum::<f32>() / 4.0;
+        assert_eq!(bars.len(), 1);
+        assert!((bars[0] - want).abs() < 1e-4, "{bars:?} vs {want}");
+    }
+
+    #[test]
+    fn partial_first_bar_is_dropped() {
+        // Starts on bar beat 2: beat 4 closes a three-beat bar, which is dropped (a plain counter would close one).
+        let (bars, _) = bars_after(4, 1, DetectorParams::default());
+        assert_eq!(bars.len(), 0);
+    }
+
+    #[test]
+    fn aligned_bars_off_keeps_the_counter() {
+        let p = DetectorParams {
+            rules: PositionRules {
+                aligned_bars: false,
+                ..PositionRules::ALL
+            },
+            ..DetectorParams::default()
+        };
+        // Four beats from bar beat 3 still close a bar.
+        assert_eq!(bars_after(4, 2, p).0.len(), 1);
     }
 
     #[test]
