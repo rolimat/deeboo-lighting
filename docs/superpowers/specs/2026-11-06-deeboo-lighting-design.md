@@ -230,7 +230,7 @@ como sin estas reglas.
 - **Drop en el 1 de compás:** desde Subidón, si el beat 1 de un compás está lleno (bombo de vuelta con salto y
   sub-bajo), basta ese beat para pasar a **Ritmo**.
 - **Riser en la segunda mitad de la frase:** si el compás que cierra el riser está en la segunda mitad de la frase
-  (compases 5–8 de 8, 9–16 de 16, 3–4 de 4), bastan **3 compases** subiendo en lugar de 4. En la primera mitad, 4.
+  (compases 5–8 de 8, 9–16 de 16, 3–4 de 4), también bastan **3 compases** subiendo (además de los 4 de siempre). En la primera mitad, 4.
 - **Compases del riser alineados con el clock:** las medias por compás de los agudos se cierran en el beat 4 de cada
   compás del clock; un compás incompleto al arrancar no cuenta.
 - **No se hace** (decisión del usuario): exigir más pruebas a mitad de frase (se revisa tras el e2e), cerrar un
