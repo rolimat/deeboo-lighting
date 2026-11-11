@@ -76,7 +76,7 @@ impl LiveOrder {
         let end = (self.fed + block.len()) as f64 / self.sample_rate;
         let due = beats_due(&self.beats, self.next, end);
         for index in self.next..due {
-            let (m, feat) = self.detector.on_beat();
+            let (m, feat) = self.detector.on_beat(None);
             if let Some(f) = feat {
                 self.beats_seen += 1;
                 if f.kick_db >= f.kick_ref_db - self.back_db {

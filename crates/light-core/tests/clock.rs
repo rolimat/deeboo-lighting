@@ -1,4 +1,4 @@
-use light_core::clock::{ClockEvent, ClockTracker, PhraseBars};
+use light_core::clock::{ClockEvent, ClockTracker, PhraseBars, Position};
 use proptest::prelude::*;
 
 fn ticks(start_us: u64, interval_us: u64, n: u64) -> Vec<u64> {
@@ -165,4 +165,18 @@ proptest! {
         }
         prop_assert!(!t.running());
     }
+}
+
+#[test]
+fn previous_beat_of_phrase_start_is_last_beat_of_phrase() {
+    let eight = PhraseBars::Eight;
+    let prev = Position::at(32, false, eight).previous_beat();
+    assert_eq!(prev, Some(Position::at(31, false, eight)));
+    let prev = prev.unwrap();
+    assert_eq!((prev.beat_in_bar, prev.bar_in_phrase), (4, 8));
+    assert_eq!(Position::at(0, false, eight).previous_beat(), None);
+    assert_eq!(
+        Position::at(5, true, eight).previous_beat(),
+        Some(Position::at(4, false, eight))
+    );
 }

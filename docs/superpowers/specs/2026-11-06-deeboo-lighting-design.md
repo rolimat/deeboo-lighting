@@ -216,6 +216,33 @@ elegible en ajustes. Es una sola feature.
 - **Sin audio** (sin permiso o sin dispositivo): se queda en Ritmo y el estado de audio se marca en rojo.
 - **Ajustes:** sensibilidad general en el popover; umbrales y medidores en vivo en el editor (§7.3).
 
+#### 6.2.1 Posición del clock en la detección (decisión del usuario, 2026-11-11)
+
+El detector recibe la posición (beat del compás, compás de la frase, largo de la frase) del beat que acaba de medir.
+La usa solo para pedir menos pruebas donde la música suele cambiar; el resto de reglas y umbrales no cambia. El
+usuario es responsable de arrancar el clock en el 1 de una frase. Sin posición (antes del primer beat), todo funciona
+como sin estas reglas.
+- **Calma o Subidón en el 1 de frase:** desde Ritmo, si el beat 1 de una frase no tiene bombo, se pasa ya a **Calma**
+  (o a **Subidón** si es un beat de subidón con bombo: bombo bajo y agudos altos), sin esperar el segundo beat ni el
+  mínimo de beats por estado. Si en el beat 2 vuelve el bombo, se sale ya, también sin mínimo: a **Ritmo** si el beat
+  está lleno, a **Subidón** si es de subidón. El Subidón se sigue mostrando desde el inicio del compás siguiente (§6.2).
+  Solo desde Ritmo: un Subidón que se queda sin bombo en el 1 de frase sigue como hoy.
+- **Drop en el 1 de compás:** desde Subidón, si el beat 1 de un compás está lleno (bombo de vuelta con salto y
+  sub-bajo), basta ese beat para pasar a **Ritmo**.
+- **Riser en la segunda mitad de la frase:** si el compás que cierra el riser está en la segunda mitad de la frase
+  (compases 5–8 de 8, 9–16 de 16, 3–4 de 4), bastan **3 compases** subiendo en lugar de 4. En la primera mitad, 4.
+- **Compases del riser alineados con el clock:** las medias por compás de los agudos se cierran en el beat 4 de cada
+  compás del clock; un compás incompleto al arrancar no cuenta.
+- **No se hace** (decisión del usuario): exigir más pruebas a mitad de frase (se revisa tras el e2e), cerrar un
+  Subidón en el límite de frase sin drop, prohibir cambios fuera de los límites, adivinar la Calma, recolocar la frase
+  con el audio.
+- **Retraso visible:** el beat medido se decide al empezar el siguiente y se ve desde el beat de después. Una Calma en
+  el 1 de frase se ve desde el beat 3 (antes, el 4); un drop en el 1 de compás fuera de la predicción, desde el beat 3.
+- **Medición antes de aceptar:** `detect-probe --downbeat <s>` marca un 1 de frase en la grabación y cuenta compases
+  y frases desde ahí. Cada regla se mide por separado sobre las canciones etiquetadas frente a la referencia actual;
+  entra si no pierde aciertos, no añade más de una falsa alarma en total y no aumenta el retraso medio. El mix largo
+  se mide solo como información, porque su rejilla de beats deriva entre temas.
+
 ### 6.3 Modelo
 
 > Nota (2026-11-09): donde esta sección entre en conflicto con `2026-11-09-redesign-and-e2e-fixes-design.md`, manda ese documento.

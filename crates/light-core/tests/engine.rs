@@ -55,7 +55,7 @@ impl Sim {
         let t = self.now;
         let mut called = 0;
         let calls = self.detect_calls;
-        let c = self.e.on_midi(t, status, || {
+        let c = self.e.on_midi(t, status, |_| {
             called += 1;
             detect(calls)
         });
@@ -1063,4 +1063,26 @@ fn calibrate_needs_a_clock_and_ends_on_stop() {
     let mark = s.sends.len();
     s.beats_of(6, &mut none);
     assert!(s.sends[mark..].iter().all(|(_, c)| !is_white(c)), "ended");
+}
+
+#[test]
+fn detect_gets_the_closed_beat() {
+    let mut e = Engine::new(EngineConfig {
+        segments: 4,
+        phrase: PhraseBars::Four,
+        lead_us: LEAD,
+        brightness_pct: 100,
+        lights_on: true,
+    });
+    let mut seen = Vec::new();
+    e.on_midi(T0, 0xFA, |_| None);
+    for i in 0..48 {
+        e.on_midi(T0 + i * 20_000, 0xF8, |p| {
+            seen.push(p);
+            None
+        });
+    }
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0], None);
+    assert_eq!(seen[1].map(|p| (p.beat, p.half)), Some((0, false)));
 }

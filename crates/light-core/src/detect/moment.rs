@@ -1,6 +1,7 @@
 //! Per-beat features and the Rhythm / Calm / Build-up state machine.
 
 use super::bands::HopFrame;
+use crate::clock::Position;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -75,6 +76,33 @@ pub struct DetectorParams {
     /// A Build-up is the last bars before a drop: one that lasts this many beats without a drop was the
     /// break itself -> Calm (and the refractory starts, as for a collapse).
     pub buildup_max_beats: u32,
+    /// Which clock-position rules apply (they need a position from `on_beat`).
+    pub rules: PositionRules,
+}
+
+/// Which rules use the clock position of the closed beat.
+#[allow(clippy::struct_excessive_bools)] // independent switches, one per rule
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PositionRules {
+    pub phrase_quick: bool,
+    pub bar_drop: bool,
+    pub late_riser: bool,
+    pub aligned_bars: bool,
+}
+
+impl PositionRules {
+    pub const ALL: Self = Self {
+        phrase_quick: true,
+        bar_drop: true,
+        late_riser: true,
+        aligned_bars: true,
+    };
+    pub const NONE: Self = Self {
+        phrase_quick: false,
+        bar_drop: false,
+        late_riser: false,
+        aligned_bars: false,
+    };
 }
 
 impl Default for DetectorParams {
@@ -110,6 +138,7 @@ impl Default for DetectorParams {
             collapse_beats: 16,
             refractory_beats: 16,
             buildup_max_beats: 96,
+            rules: PositionRules::ALL,
         }
     }
 }
@@ -362,7 +391,7 @@ impl MomentDetector {
 
     /// Closes the beat that started at the previous call.
     #[allow(clippy::cast_precision_loss, clippy::similar_names)] // hop counts are tiny
-    pub fn on_beat(&mut self) -> (Moment, Option<BeatFeatures>) {
+    pub fn on_beat(&mut self, _closed: Option<Position>) -> (Moment, Option<BeatFeatures>) {
         if self.hops == 0 {
             return (self.moment, None);
         }
@@ -482,6 +511,7 @@ fn min_of(w: &[f32]) -> f32 {
 )] // test signal generation
 mod tests {
     use super::*;
+    use crate::clock::PhraseBars;
 
     #[test]
     fn ring_keeps_at_most_its_capacity() {
@@ -557,14 +587,24 @@ mod tests {
 
     /// One result per beat: the call that closes beat `k` is `out[k]`.
     fn drive(sig: &[f32], lens: &[usize]) -> Out {
+        drive_with(sig, lens, DetectorParams::default(), |_| None)
+    }
+
+    fn drive_with(
+        sig: &[f32],
+        lens: &[usize],
+        params: DetectorParams,
+        closed: impl Fn(usize) -> Option<Position>,
+    ) -> Out {
         let mut a = BandAnalyzer::new(FS);
-        let mut d = MomentDetector::new(DetectorParams::default(), a.hop_len() as f32 / FS as f32);
+        let mut d = MomentDetector::new(params, a.hop_len() as f32 / FS as f32);
         let mut pos = 0;
         lens.iter()
-            .map(|&len| {
+            .enumerate()
+            .map(|(i, &len)| {
                 a.process(&sig[pos..pos + len], &mut |f| d.push(f));
                 pos += len;
-                d.on_beat()
+                d.on_beat(closed(i))
             })
             .collect()
     }
@@ -594,6 +634,23 @@ mod tests {
     }
 
     #[test]
+    fn no_position_matches_rules_off() {
+        let lens = beats(128.0, 96);
+        let kick = |k: usize| !(32..72).contains(&k);
+        let sig = synth(&lens, kick, |_| true, riser_hats(0.0));
+        let params = DetectorParams {
+            rules: PositionRules::NONE,
+            ..DetectorParams::default()
+        };
+        let with_pos = drive_with(&sig, &lens, params, |i| {
+            Some(Position::at(i as u64, false, PhraseBars::Eight))
+        });
+        let without = drive(&sig, &lens);
+        assert_eq!(moments(&with_pos), moments(&without));
+        assert!(moments(&without).contains(&Moment::BuildUp));
+    }
+
+    #[test]
     fn set_thresholds_keeps_learned_references() {
         let lens = beats(128.0, 24);
         let sig = synth(&lens, |_| true, |_| true, |_| 0.0);
@@ -603,7 +660,7 @@ mod tests {
         for &len in &lens {
             a.process(&sig[pos..pos + len], &mut |f| d.push(f));
             pos += len;
-            d.on_beat();
+            d.on_beat(None);
         }
         let (learned, moment) = (d.kick_hist.buf.len(), d.moment());
         assert!(learned > 0);
@@ -622,7 +679,7 @@ mod tests {
         for &len in &lens {
             a.process(&sig[pos..pos + len], &mut |f| d.push(f));
             pos += len;
-            d.on_beat();
+            d.on_beat(None);
         }
         let bars = d.bars.buf.clone();
         assert_ne!(bars, Vec::<f32>::new());
@@ -1121,9 +1178,9 @@ mod tests {
         let o = with_silence_after(32, 36);
         assert_eq!(o[35].0, Moment::Calm);
         let mut d = MomentDetector::new(DetectorParams::default(), 0.0058);
-        assert_eq!(d.on_beat(), (Moment::Rhythm, None));
+        assert_eq!(d.on_beat(None), (Moment::Rhythm, None));
         d.moment = Moment::Calm;
-        assert_eq!(d.on_beat(), (Moment::Calm, None));
+        assert_eq!(d.on_beat(None), (Moment::Calm, None));
         assert_eq!(d.moment(), Moment::Calm);
     }
 }

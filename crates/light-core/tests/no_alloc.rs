@@ -36,7 +36,7 @@ fn on_beat_does_not_allocate() {
             for h in 0..90 {
                 d.push(frame(beat + h));
             }
-            let _ = d.on_beat();
+            let _ = d.on_beat(None);
         }
     });
 }

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::time::Duration;
 
-use light_core::clock::PhraseBars;
+use light_core::clock::{PhraseBars, Position};
 use light_core::detect::{BandAnalyzer, BeatFeatures, DetectorParams, Moment, MomentDetector};
 use light_core::engine::{Engine, EngineConfig, EngineStatus, UiCommand};
 use light_core::library::Library;
@@ -116,6 +116,7 @@ fn detect_beat<A: AudioPort>(
     buf: &mut Vec<f32>,
     level_db: &mut Option<f32>,
     features: &mut Option<(BeatFeatures, Moment)>,
+    closed: Option<Position>,
 ) -> Option<Moment> {
     let d = detect.as_mut()?;
     buf.clear();
@@ -126,7 +127,7 @@ fn detect_beat<A: AudioPort>(
     let peak = buf.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
     *level_db = Some((20.0 * peak.max(1e-6).log10()).round());
     d.bands.process(buf, &mut |f| d.moment.push(f));
-    let (moment, f) = d.moment.on_beat();
+    let (moment, f) = d.moment.on_beat(closed);
     *features = f.map(|f| (f, moment));
     Some(moment)
 }
@@ -553,13 +554,14 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         match input {
             Input::Midi(e) => {
                 let mut features = None;
-                let cmds = self.engine.on_midi(e.at_us, e.status, || {
+                let cmds = self.engine.on_midi(e.at_us, e.status, |closed| {
                     detect_beat(
                         &mut self.audio,
                         &mut self.detect,
                         &mut self.buf,
                         &mut self.level_db,
                         &mut features,
+                        closed,
                     )
                 });
                 self.flush(cmds);
@@ -1598,7 +1600,14 @@ mod tests {
         assert_eq!(*opens.borrow(), 1, "no retry storm while playing");
         let mut buf = Vec::new();
         assert_eq!(
-            detect_beat(&mut c.audio, &mut None, &mut buf, &mut None, &mut None),
+            detect_beat(
+                &mut c.audio,
+                &mut None,
+                &mut buf,
+                &mut None,
+                &mut None,
+                None
+            ),
             None
         );
     }
