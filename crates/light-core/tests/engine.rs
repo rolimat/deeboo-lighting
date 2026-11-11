@@ -372,6 +372,18 @@ fn buildup_detected_on_a_bar_start_waits_for_the_next_bar_start() {
     assert_eq!(first_bucket_at(&s, 240), Some(t7 + 480_000 - LEAD));
 }
 
+#[test]
+fn quick_buildup_waits_for_next_bar() {
+    // Detected on a phrase's first beat (quick entry): the strip still waits for the next bar start.
+    let mut s = sim125();
+    s.start();
+    s.beats_of(40, &mut |beat| (beat >= 32).then_some(BuildUp));
+    let at = |b: usize| s.beats.get(b).map(|(_, st)| st.moment);
+    assert_eq!(at(32), Some(Rhythm));
+    assert_eq!(at(34), Some(Rhythm));
+    assert_eq!(at(35), Some(BuildUp));
+}
+
 fn apply_all(
     sends: &[(u64, PaintCommand)],
     mut state: Vec<light_core::model::Colour>,
