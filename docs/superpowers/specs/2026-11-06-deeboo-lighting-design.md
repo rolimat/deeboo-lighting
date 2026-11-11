@@ -242,6 +242,11 @@ como sin estas reglas.
   y frases desde ahí. Cada regla se mide por separado sobre las canciones etiquetadas frente a la referencia actual;
   entra si no pierde aciertos, no añade más de una falsa alarma en total y no aumenta el retraso medio. El mix largo
   se mide solo como información, porque su rejilla de beats deriva entre temas.
+- **Resultado de la medición (2026-11-11):**
+  - Drop en el 1 de compás: activa (neutra en aciertos, algo más rápida).
+  - Calma o Subidón en el 1 de frase: activa (+1 acierto, +1 falsa alarma, más rápida).
+  - Compases alineados con el clock: apagada por defecto (retrasa 20 s un subidón en una canción; pendiente de escucha del usuario).
+  - Riser de 3 compases: apagada por defecto (añade un subidón falso; sin efecto con los compases alineados).
 
 ### 6.3 Modelo
 
