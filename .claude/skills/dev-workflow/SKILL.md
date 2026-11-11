@@ -26,7 +26,7 @@ Spec §10: [docs/superpowers/specs/2026-11-06-deeboo-lighting-design.md](../../.
 | `just dmg` | macOS only: release build, ad-hoc signed DMG in `target/release/bundle/dmg/` |
 | `just dev` | macOS only: `npm --prefix ui run tauri dev` |
 | `just tuya-login` | macOS only: Smart Life QR login, lists devices, saves the strip to `.dev/strip.json` (0600) |
-| `just detect-probe <audio> [--labels f.json] [--timeline] [--bpm N] [--realtime] [--downbeat S]... [--phrase 4\|8\|16] [--rules all\|none\|calm,drop,riser,bars]` | macOS only: runs the detector on an MP3/WAV in the live-app event order (recordings stay in ignored `recordings/`); `--realtime` plays it on the default output; `--downbeat` (seconds, repeatable, snaps to the nearest tracked beat) fixes phrase position, `--rules` switches the position rules |
+| `just detect-probe <audio> [--labels f.json] [--timeline] [--bpm N] [--realtime] [--downbeat S]... [--phrase 4\|8\|16] [--rules all\|none\|calm,drop,riser,bars]` | macOS only: runs the detector on an MP3/WAV in the live-app event order (recordings stay in ignored `recordings/`); `--realtime` plays it on the default output; `--downbeat` (seconds, repeatable, snaps to the nearest tracked beat) fixes phrase position, `--rules` switches the position rules (default: the app's `DetectorParams::default().rules`; `--rules all` turns every rule on) |
 | `just tray-frames` | Docker: regenerates the committed menu bar PNGs in `src-tauri/icons/tray` (deterministic; commit the output) |
 | `just ship` | push and wait for the CI run of this exact commit |
 

@@ -24,7 +24,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "usage: detect-probe <audio> [--labels file.json] [--min-beats 4] [--timeline] [--bpm 128] [--realtime]
-       [--downbeat <s>]... [--phrase 4|8|16] [--rules all|none|calm,drop,riser,bars]";
+       [--downbeat <s>]... [--phrase 4|8|16] [--rules all|none|calm,drop,riser,bars] (default: the app's rules)";
 const TOLERANCE_S: f64 = 4.0;
 
 #[derive(Debug)]
@@ -76,7 +76,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, CliError> {
         realtime: false,
         downbeats: Vec::new(),
         phrase: PhraseBars::Eight,
-        rules: PositionRules::ALL,
+        rules: DetectorParams::default().rules,
     };
     let mut audio = None;
     let mut it = args;
