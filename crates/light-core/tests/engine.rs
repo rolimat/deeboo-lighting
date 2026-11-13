@@ -1098,3 +1098,49 @@ fn detect_gets_the_closed_beat() {
     assert_eq!(seen[0], None);
     assert_eq!(seen[1].map(|p| (p.beat, p.half)), Some((0, false)));
 }
+
+#[test]
+fn brightness_repaints_the_playing_step() {
+    let mut s = sim125();
+    s.start();
+    s.cmd(UiCommand::Force(Calm)); // Calm holds a step for bars: only a resend repaints it
+    s.beats_of(6, &mut none);
+    s.ticks(2, &mut none);
+    let at = s.now;
+    s.cmd(UiCommand::Brightness(50));
+    s.ticks(24, &mut none);
+    let sends = s.sends_in(at, u64::MAX);
+    assert!(
+        sends.iter().any(|(_, c)| matches!(c,
+            PaintCommand::Pencil { color, .. } if color.v == 500)
+            || matches!(c, PaintCommand::Bucket(c) if c.v == 500)),
+        "{sends:?}"
+    );
+}
+
+#[test]
+fn brightness_repaints_the_rest_scene() {
+    let mut s = sim125();
+    s.cmd(UiCommand::Lights(true));
+    let at = s.now;
+    s.cmd(UiCommand::Brightness(50));
+    s.deadlines_until(at + 10_000_000);
+    let sends = s.sends_in(at, u64::MAX);
+    assert!(
+        sends
+            .iter()
+            .any(|(_, c)| matches!(c, PaintCommand::Bucket(h) if h.s == 350 && h.v < 1000)),
+        "{sends:?}"
+    );
+}
+
+#[test]
+fn brightness_with_lights_off_sends_nothing() {
+    let mut s = sim125();
+    s.cmd(UiCommand::Lights(false));
+    s.deadlines_until(s.now + 1_000_000);
+    let at = s.now;
+    s.cmd(UiCommand::Brightness(50));
+    s.deadlines_until(at + 10_000_000);
+    assert_eq!(s.sends_in(at, u64::MAX), vec![]);
+}

@@ -305,7 +305,14 @@ impl Engine {
             }
             UiCommand::Force(m) => self.control.force(m),
             UiCommand::Auto => self.control.set_auto(),
-            UiCommand::Brightness(p) => self.cfg.brightness_pct = p,
+            UiCommand::Brightness(p) => {
+                self.cfg.brightness_pct = p;
+                // Repaint at once: a playing step is resent at the next pulse, a stopped strip now.
+                self.resend = true;
+                if self.cfg.lights_on && !self.clock.running() {
+                    self.rest_or_preview(now_us);
+                }
+            }
             UiCommand::Phrase(p) => {
                 self.cfg.phrase = p;
                 self.clock.set_phrase(p);
