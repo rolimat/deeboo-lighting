@@ -239,6 +239,9 @@ como sin estas reglas.
   agudos se mantienen (no más de 2 dB por debajo), se pasa a **Calma** al acabar ese compás. Es el break en el que el
   bombo no desaparece, solo baja. Mientras dura esa Calma no cuenta la «vuelta lenta» (beats parecidos a la
   referencia), porque es la misma textura: vuelve a **Ritmo** con el drop normal (salto de bombo) o con 2 beats llenos.
+  Límite (2026-11-13): si la textura suave dura más de 2 frases (64 beats sin posición), vuelve a **Ritmo** y las
+  referencias se aprenden de nuevo con el nivel nuevo (p. ej. la siguiente canción es más baja). Un break de verdad
+  (silencio) no termina así.
 - **Drop en el 1 de compás:** desde Subidón, si el beat 1 de un compás está lleno (bombo de vuelta con salto y
   sub-bajo), basta ese beat para pasar a **Ritmo**.
 - **Riser en la segunda mitad de la frase:** si el compás que cierra el riser está en la segunda mitad de la frase
