@@ -226,13 +226,13 @@ fn devices_handler(req: &HttpRequest) -> Result<String, CloudError> {
         if v["homeId"] == "111" {
             Ok(reply(
                 req,
-                r#"[{"id":"d1","name":"Strip","category":"dd","product_name":"JSK","online":true,"local_key":"LK1","extra":1}]"#,
+                r#"[{"id":"d1","name":"Strip","category":"dd","product_name":"JSK","online":true,"local_key":"LK1LK1LK1LK1LK1L","extra":1}]"#,
             ))
         } else {
             assert_eq!(plain.as_str(), r#"{"homeId":"222"}"#);
             Ok(reply(
                 req,
-                r#"[{"id":"d2","name":"Bulb","category":"dj","product_name":"B","online":false,"local_key":"LK2"}]"#,
+                r#"[{"id":"d2","name":"Bulb","category":"dj","product_name":"B","online":false,"local_key":"LK2LK2LK2LK2LK2L"}]"#,
             ))
         }
     } else {
@@ -248,7 +248,10 @@ fn lists_devices_across_homes_and_flags_light_strips() {
     assert_eq!(devs[0].id, "d1");
     assert!(devs[0].is_light_strip());
     assert!(devs[0].online);
-    assert_eq!(devs[0].local_key.expose_secret(), "LK1");
+    assert_eq!(
+        devs[0].local_key.as_ref().unwrap().expose_secret(),
+        "LK1LK1LK1LK1LK1L"
+    );
     assert!(!devs[1].is_light_strip());
     assert!(
         f.urls()
@@ -257,19 +260,68 @@ fn lists_devices_across_homes_and_flags_light_strips() {
     );
 }
 
-#[test]
-fn device_missing_local_key_is_decode_error() {
-    let f = Fake::new(|r| {
+const GOOD_KEY: &str = "0123456789abcdef";
+
+fn list_with(devs: &str) -> Vec<CloudDevice> {
+    let devs = devs.to_owned();
+    let f = Fake::new(move |r| {
         if r.url.contains("/users/homes") {
             Ok(reply(r, r#"[{"ownerId":1}]"#))
         } else {
-            Ok(reply(
-                r,
-                r#"[{"id":"d","name":"n","category":"dd","product_name":"p","online":true}]"#,
-            ))
+            Ok(reply(r, &devs))
         }
     });
-    assert_eq!(list_devices(&f, &session()).err(), Some(CloudError::Decode));
+    list_devices(&f, &session()).unwrap()
+}
+
+#[test]
+fn hub_without_local_key_is_listed_unusable_and_the_strip_stays_usable() {
+    let devs = list_with(&format!(
+        r#"[{{"id":"s","name":"Strip","category":"dd","product_name":"p","online":true,"local_key":"{GOOD_KEY}"}},
+            {{"id":"h","name":"Hub","category":"wg2","product_name":"p","online":true}}]"#
+    ));
+    assert_eq!(devs.len(), 2);
+    assert!(devs[0].local_key.is_some());
+    assert!(devs[1].local_key.is_none());
+    assert!(!format!("{:?}", devs[0]).contains(GOOD_KEY));
+}
+
+#[test]
+fn null_fields_parse_with_defaults_and_null_key_is_unusable() {
+    let devs = list_with(
+        r#"[{"id":"d","name":null,"category":null,"product_name":null,"online":null,"local_key":null}]"#,
+    );
+    assert_eq!(devs.len(), 1);
+    assert_eq!(devs[0].name, "");
+    assert!(!devs[0].online);
+    assert!(!devs[0].is_light_strip());
+    assert!(devs[0].local_key.is_none());
+}
+
+#[test]
+fn key_of_the_wrong_length_is_unusable() {
+    let long = format!("{GOOD_KEY}0");
+    let devs = list_with(&format!(
+        r#"[{{"id":"a","local_key":"short"}},{{"id":"b","local_key":"{long}"}},{{"id":"c","local_key":5}}]"#
+    ));
+    assert_eq!(devs.len(), 3);
+    assert!(devs.iter().all(|d| d.local_key.is_none()));
+}
+
+#[test]
+fn entries_without_an_id_are_skipped_and_lists_are_bounded() {
+    let devs = list_with(r#"[{"name":"x"},"junk",null,{"id":"ok"}]"#);
+    assert_eq!(devs.len(), 1);
+    assert_eq!(devs[0].id, "ok");
+    let many = format!(
+        "[{}]",
+        (0..300)
+            .map(|i| format!(r#"{{"id":"d{i}"}}"#))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let devs = list_with(&many);
+    assert_eq!(devs.len(), 200);
 }
 
 #[test]
@@ -352,7 +404,7 @@ fn debug_output_never_contains_secrets() {
         category: "dd".into(),
         product_name: "p".into(),
         online: true,
-        local_key: "LK-SECRET".to_owned().into(),
+        local_key: Some("LK-SECRET".to_owned().into()),
     };
     let qr = QrLogin::for_token("TKN-SECRET");
     let uc = UserCode::parse("UC-SECRET".replace('-', "").as_str()).unwrap();
@@ -391,12 +443,12 @@ fn ureq_transport_refuses_plain_http_without_connecting() {
 
 #[test]
 fn device_list_parses_key_into_secret() {
-    let devs: Vec<CloudDevice> = serde_json::from_str(
-        r#"[{"id":"d","name":"n","category":"dd","product_name":"p","online":true,"local_key":"LK-PLAIN"}]"#,
-    )
-    .unwrap();
-    assert!(!format!("{devs:?}").contains("LK-PLAIN"));
-    assert_eq!(devs[0].local_key.expose_secret(), "LK-PLAIN");
+    let devs = list_with(&format!(r#"[{{"id":"d","local_key":"{GOOD_KEY}"}}]"#));
+    assert!(!format!("{devs:?}").contains(GOOD_KEY));
+    assert_eq!(
+        devs[0].local_key.as_ref().unwrap().expose_secret(),
+        GOOD_KEY
+    );
 }
 
 #[test]
@@ -504,7 +556,7 @@ mod props {
         }
 
         #[test]
-        fn parsed_device_never_exposes_local_key_in_debug(key in "[A-Za-z0-9]{16,40}") {
+        fn parsed_device_never_exposes_local_key_in_debug(key in "[A-Za-z0-9]{16}") {
             let json = serde_json::json!([{"id":"d","name":"n","category":"dd",
                 "product_name":"p","online":true,"local_key": key}]);
             let f = Fake::new(move |r| {
@@ -517,7 +569,7 @@ mod props {
             let devs = list_devices(&f, &session()).unwrap();
             let shown = format!("{devs:?}");
             prop_assert!(!shown.contains(&key));
-            prop_assert_eq!(devs[0].local_key.expose_secret(), key.as_str());
+            prop_assert_eq!(devs[0].local_key.as_ref().unwrap().expose_secret(), key.as_str());
         }
     }
 }

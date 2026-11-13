@@ -135,6 +135,16 @@ it("renders_qr_step_with_countdown_and_cancel", async () => {
   expect(api.wizardCancel).toHaveBeenCalled();
 });
 
+it("renders_unusable_device_disabled_with_its_reason", async () => {
+  await mount();
+  const hub = { ...dev("h", false), reason: "Not usable: no local key" };
+  await emit({ kind: "chooseStrip", devices: [dev("a"), hub] });
+  const items = [...root.querySelectorAll("li")];
+  const b = items[1]?.querySelector("button") as HTMLButtonElement;
+  expect(b.disabled).toBe(true);
+  expect(items[1]?.textContent).toContain("Not usable: no local key");
+});
+
 it("renders_choose_step_greys_unsupported", async () => {
   await mount();
   await emit({ kind: "chooseStrip", devices: [dev("a"), dev("b", false)] });

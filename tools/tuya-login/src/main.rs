@@ -85,14 +85,18 @@ fn run() -> Result<(), String> {
                 if d.online { "online" } else { "offline" }
             );
         }
-        let strips: Vec<_> = devices.iter().filter(|d| d.is_light_strip()).collect();
+        let strips: Vec<_> = devices
+            .iter()
+            .filter(|d| d.is_light_strip() && d.local_key.is_some())
+            .collect();
         let chosen = match &name {
             Some(n) => strips.iter().find(|d| &d.name == n),
             None if strips.len() == 1 => strips.first(),
             None => None,
         };
-        Ok(chosen.map(|d| {
-            serde_json::json!({ "id": d.id, "name": d.name, "local_key": d.local_key.expose_secret() })
+        Ok(chosen.and_then(|d| {
+            let key = d.local_key.as_ref()?;
+            Some(serde_json::json!({ "id": d.id, "name": d.name, "local_key": key.expose_secret() }))
         }).ok_or_else(|| strips.iter().map(|d| d.name.clone()).collect::<Vec<_>>()))
     });
     match &out {

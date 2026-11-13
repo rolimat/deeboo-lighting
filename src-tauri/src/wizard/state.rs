@@ -25,6 +25,8 @@ pub struct DeviceDto {
     pub online: bool,
     /// Category `dd` (light strip).
     pub supported: bool,
+    /// Why the device can't be chosen, when the cause is its data (no usable local key).
+    pub reason: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
@@ -117,6 +119,7 @@ mod tests {
             product: "P".into(),
             online: true,
             supported,
+            reason: None,
         }
     }
 

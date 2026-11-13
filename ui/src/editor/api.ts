@@ -14,6 +14,8 @@ export interface DeviceDto {
   product: string;
   online: boolean;
   supported: boolean;
+  /** Why it can't be chosen, when its data is the cause. */
+  reason?: string | null;
 }
 
 export type WizardStep = "login" | "devices" | "search" | "segments" | "save";

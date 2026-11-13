@@ -70,7 +70,7 @@ White is `S=0, V=1000`.
 3. Poll `GET .../qrcode/tokens/<token>?clientid=...&usercode=...` (on a timer, with a deadline) until `success`:
    `access_token`, `refresh_token`, `uid`, `expire_time`, `terminal_id`, `endpoint`.
 4. With that session: `GET /v1.0/m/life/users/homes`, then `GET /v1.0/m/life/ha/home/devices?homeId=...`
-   (`id`, `name`, `category`, `product_name`, `local_key`, `online`). These requests are AES-GCM encrypted and
+   (`id`, `name`, `category`, `product_name`, `local_key`, `online`). Parsed per device with optional fields: no id is skipped; a missing, null or non-16-byte `local_key` (hubs, sub-devices) lists the device as unusable (greyed out in the wizard), never an error; max 200 devices. These requests are AES-GCM encrypted and
    HMAC-SHA256 signed (key derived from a `requestId` and the `refresh_token`); port `_secret_generating`,
    `_restful_sign`, `_aes_gcm_encrypt`, `_aex_gcm_decrypt` from `tuya_sharing/customerapi.py` as they are.
 5. Revoke the session (`POST /v1.0/m/token/terminal/expire`) and drop it from memory.

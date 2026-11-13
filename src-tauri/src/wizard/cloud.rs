@@ -222,14 +222,21 @@ async fn flow(
     let mut entries: Vec<(DeviceDto, SecretString)> = listed
         .into_iter()
         .map(|d| {
+            let usable = d.local_key.is_some();
             let dto = DeviceDto {
-                supported: d.is_light_strip(),
+                supported: d.is_light_strip() && usable,
+                reason: (!usable).then(|| "Not usable: no local key".to_owned()),
                 id: d.id,
                 name: d.name,
                 product: d.product_name,
                 online: d.online,
             };
-            (dto, d.local_key)
+            // Unusable devices carry an empty placeholder: they can never be chosen.
+            (
+                dto,
+                d.local_key
+                    .unwrap_or_else(|| SecretString::from(String::new())),
+            )
         })
         .collect();
     events(WizardState::ChooseStrip {

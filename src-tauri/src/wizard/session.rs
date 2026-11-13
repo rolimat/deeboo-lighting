@@ -521,6 +521,7 @@ mod tests {
             product: "P".into(),
             online: true,
             supported: true,
+            reason: None,
         }
     }
 
