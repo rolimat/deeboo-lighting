@@ -21,6 +21,15 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// Measured: the strip announces itself every ~5 s, but wifi drops some (gaps of 15 s seen).
 const DISCOVERY_WINDOW: Duration = Duration::from_secs(30);
 
+/// Automatic redials after a drop or a resume, and the wait before each.
+const REDIAL_BACKOFF: [Duration; 5] = [
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+];
+
 /// Never carries the key, the address or file contents.
 #[derive(Debug)]
 pub enum StripError {
@@ -133,7 +142,10 @@ impl Link for RealLink {
         version: Option<Version>,
     ) -> Result<Device, StripError> {
         let key = cfg.local_key.expose_secret().as_bytes().to_vec();
-        let mut builder = Device::builder(cfg.id.clone(), key).address(ip.to_string());
+        // Only our state machine redials (re-checking the subnet each time); rustuya's own redial races it.
+        let mut builder = Device::builder(cfg.id.clone(), key)
+            .address(ip.to_string())
+            .auto_reconnect(false);
         if let Some(v) = version {
             builder = builder.version(v);
         }
@@ -406,6 +418,7 @@ pub async fn listen_segment_count(
     let key = cfg.local_key.expose_secret().as_bytes().to_vec();
     let device = Device::builder(cfg.id.clone(), key)
         .address(ip.to_string())
+        .auto_reconnect(false)
         .connect()
         .map_err(|_| StripError::Connect)?;
     let mut frames = DeviceFrames(device.listener());
@@ -475,7 +488,9 @@ async fn next_control(rx: &mut UnboundedReceiver<StripMsg>) -> Option<Control> {
     }
 }
 
-/// Connects, then paints each command as it arrives. A failure reports its status
+/// Connects, then paints each command as it arrives. A dropped connection (paint/identify failure) or a
+/// resume redials by itself with the saved config, up to 5 times with backoff, then repaints (the engine
+/// replans on `Connected`). A failed first connection reports its status
 /// (`StripStatus::{Error, NotFound, KeyInvalid}`) and drops commands until a `Connect` retries;
 /// a `Configure` at any moment, even mid-connection, starts over with the new config.
 #[allow(clippy::too_many_lines)] // one reconnect state machine; splitting it hides the flow
@@ -493,12 +508,17 @@ pub async fn run<P, Fut>(
     let mut paused = false;
     // An identify flash on an unwired segment leaves it lit; the next paint switches it off.
     let mut tail_lit = false;
+    // Automatic redials left; 0 for a first connection, a Configure or a manual Connect.
+    let mut retries = 0;
     'connect: loop {
         // Paused: no connection and no reports; only a new config (kept) or the resume matter.
         while paused {
             match next_control(&mut rx).await {
                 Some(Control::Configure(new)) => cfg = Some(Arc::new(new)),
-                Some(Control::Pause(p)) => paused = p,
+                Some(Control::Pause(p)) => {
+                    paused = p;
+                    retries = if p { 0 } else { REDIAL_BACKOFF.len() };
+                }
                 None => return,
             }
         }
@@ -513,6 +533,26 @@ pub async fn run<P, Fut>(
         };
         if painter.is_none() {
             report(StripStatus::Connecting);
+            if retries > 0 {
+                let wait = REDIAL_BACKOFF[REDIAL_BACKOFF.len() - retries];
+                retries -= 1;
+                tokio::select! {
+                    () = tokio::time::sleep(wait) => {}
+                    new = next_control(&mut rx) => match new {
+                        None => return,
+                        Some(Control::Configure(n)) => {
+                            cfg = Some(Arc::new(n));
+                            retries = 0;
+                            continue;
+                        }
+                        Some(Control::Pause(p)) => {
+                            paused = p;
+                            retries = if p { 0 } else { REDIAL_BACKOFF.len() };
+                            continue;
+                        }
+                    },
+                }
+            }
             let attempt = tokio::select! {
                 r = connect(c.clone()) => Ok(r),
                 new = next_control(&mut rx) => Err(new),
@@ -525,6 +565,7 @@ pub async fn run<P, Fut>(
                 }
                 Err(Some(Control::Pause(p))) => {
                     paused = p;
+                    retries = if p { 0 } else { REDIAL_BACKOFF.len() };
                     continue;
                 }
                 Ok(Ok(p)) => {
@@ -548,10 +589,14 @@ pub async fn run<P, Fut>(
                     park_unwired(&p, &c).await;
                     tail_lit = false;
                     painter = Some(p);
+                    retries = 0;
                     report(connected_status(&c));
                 }
                 Ok(Err(e)) => {
                     log::error!("strip connection failed: {e}");
+                    if retries > 0 {
+                        continue; // the next pass waits out its backoff, still `Connecting` for the UI
+                    }
                     report(status_of(&e));
                 }
             }
@@ -569,6 +614,7 @@ pub async fn run<P, Fut>(
                 // Dropping the painter closes the connection.
                 (_, StripMsg::Pause(p)) => {
                     paused = p;
+                    retries = if p { 0 } else { REDIAL_BACKOFF.len() };
                     painter = None;
                     continue 'connect;
                 }
@@ -580,6 +626,8 @@ pub async fn run<P, Fut>(
                         log::warn!("strip paint failed: {e}");
                         report(StripStatus::Error);
                         painter = None;
+                        retries = REDIAL_BACKOFF.len();
+                        continue 'connect;
                     }
                 }
                 (Some(p), StripMsg::Identify(n)) => {
@@ -587,6 +635,8 @@ pub async fn run<P, Fut>(
                         log::warn!("strip identify failed: {e}");
                         report(StripStatus::Error);
                         painter = None;
+                        retries = REDIAL_BACKOFF.len();
+                        continue 'connect;
                     }
                     tail_lit = n > c.segments;
                 }
@@ -617,6 +667,7 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::ExposeSecret;
 
     #[test]
     fn missing_strip_file_is_not_a_warning() {
@@ -646,66 +697,128 @@ mod tests {
         }
     }
 
-    async fn reports_reach(log: &Mutex<Vec<StripStatus>>, n: usize) {
-        for _ in 0..2000 {
-            if log.lock().map_or(0, |l| l.len()) >= n {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
+    type Dial = std::pin::Pin<Box<dyn Future<Output = Result<Fake, StripError>> + Send>>;
+    type Dials = Arc<Mutex<Vec<(String, Arc<AtomicUsize>)>>>;
+
+    /// A connector that counts dials, remembers the key each used and plays `outcomes` in order
+    /// (then connects); every connection is a `Fake` whose counter is kept.
+    fn scripted(
+        outcomes: Vec<Option<StripError>>,
+    ) -> (Dials, impl FnMut(Arc<StripConfig>) -> Dial) {
+        let dials: Dials = Arc::default();
+        let d = Arc::clone(&dials);
+        let mut outcomes = outcomes.into_iter();
+        (dials, move |c| {
+            let n = Arc::new(AtomicUsize::new(0));
+            d.lock()
+                .unwrap()
+                .push((c.local_key.expose_secret().to_string(), Arc::clone(&n)));
+            let r = match outcomes.next().flatten() {
+                Some(e) => Err(e),
+                None => Ok(Fake(n)),
+            };
+            Box::pin(async move { r })
+        })
     }
 
-    #[test]
-    fn paint_error_marks_strip_and_stops_painting_until_reconnect() {
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let (a, l, lg) = (Arc::clone(&attempts), Arc::clone(&log), Arc::clone(&log));
-        let paint = || {
-            StripMsg::Paint(PaintCommand::Bucket(light_core::paint::Hsv {
-                h: 0,
-                s: 0,
-                v: 0,
-            }))
-        };
-        tauri::async_runtime::block_on(async move {
-            let task = tokio::spawn(run(
-                Some(cfg("dj", None)),
-                move |_| {
-                    let a = Arc::clone(&a);
-                    async move { Ok(Fake(a)) }
-                },
-                rx,
-                move |s| l.lock().map(|mut v| v.push(s)).unwrap_or_default(),
-            ));
-            reports_reach(&lg, 2).await; // Connecting, Connected
-            tx.send(paint()).unwrap_or_default(); // ok
-            tx.send(paint()).unwrap_or_default(); // fails
-            reports_reach(&lg, 3).await;
-            tx.send(paint()).unwrap_or_default(); // dropped: no painter
-            tx.send(StripMsg::Connect).unwrap_or_default();
-            reports_reach(&lg, 5).await;
-            tx.send(paint()).unwrap_or_default(); // painted again
-            drop(tx);
-            task.await.unwrap_or_default();
-        });
-        let connected = StripStatus::Connected {
+    fn a_paint() -> StripMsg {
+        StripMsg::Paint(PaintCommand::Bucket(light_core::paint::Hsv {
+            h: 0,
+            s: 0,
+            v: 0,
+        }))
+    }
+
+    async fn a_while() {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }
+
+    fn connected10() -> StripStatus {
+        StripStatus::Connected {
             name: "dj".into(),
             segments: 10,
             reported: 10,
             ip: None,
-        };
+        }
+    }
+
+    #[test]
+    fn lights_off_then_on_reconnects_with_the_saved_key() {
+        // The off scene's paint finds the socket gone; the strip first refuses the redial (its old
+        // session lingers), then accepts: no KeyInvalid, no wizard, the saved key each time.
+        let (dials, connect) = scripted(vec![None, Some(StripError::Auth), None]);
+        let r = drive_task(Some(cfg("dj", None)), connect, async |tx, _| {
+            settle().await;
+            tx.send(a_paint()).unwrap_or_default(); // ok
+            tx.send(a_paint()).unwrap_or_default(); // fails: the lights-off paint
+            a_while().await;
+            tx.send(StripMsg::Connect).unwrap_or_default(); // lights on while connected: ignored
+            tx.send(a_paint()).unwrap_or_default(); // the replan
+            a_while().await;
+        });
+        assert!(!r.contains(&StripStatus::KeyInvalid), "{r:?}");
+        assert_eq!(r.last(), Some(&connected10()));
+        let d = dials.lock().unwrap();
+        assert_eq!(d.len(), 3);
+        assert!(d.iter().all(|(k, _)| k == "0123456789abcdef"));
+        assert_eq!(d[2].1.load(Ordering::SeqCst), 1, "painted again");
+    }
+
+    #[test]
+    fn a_failed_paint_reconnects_and_repaints() {
+        let (dials, connect) = scripted(vec![]);
+        let r = drive_task(Some(cfg("dj", None)), connect, async |tx, _| {
+            settle().await;
+            tx.send(a_paint()).unwrap_or_default();
+            tx.send(a_paint()).unwrap_or_default(); // fails
+            a_while().await;
+            tx.send(a_paint()).unwrap_or_default();
+            settle().await;
+        });
         assert_eq!(
-            *log.lock().unwrap(),
+            r,
             vec![
                 StripStatus::Connecting,
-                connected.clone(),
+                connected10(),
                 StripStatus::Error,
                 StripStatus::Connecting,
-                connected
+                connected10()
             ]
         );
-        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        assert_eq!(dials.lock().unwrap()[1].1.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_closed_socket_is_not_a_rejected_key() {
+        for e in [StripError::Send, StripError::Connect] {
+            assert_eq!(status_of(&e), StripStatus::Error);
+        }
+        let (_, connect) = scripted(vec![None, Some(StripError::Connect)]);
+        let r = drive_task(Some(cfg("dj", None)), connect, async |tx, _| {
+            settle().await;
+            tx.send(a_paint()).unwrap_or_default();
+            tx.send(a_paint()).unwrap_or_default();
+            a_while().await;
+        });
+        assert!(!r.contains(&StripStatus::KeyInvalid), "{r:?}");
+    }
+
+    #[test]
+    fn retries_stop_after_five_attempts() {
+        let mut outcomes = vec![None];
+        outcomes.extend((0..9).map(|_| Some(StripError::Connect)));
+        let (dials, connect) = scripted(outcomes);
+        let r = drive_task(Some(cfg("dj", None)), connect, async |tx, _| {
+            settle().await;
+            tx.send(a_paint()).unwrap_or_default();
+            tx.send(a_paint()).unwrap_or_default();
+            a_while().await;
+            assert_eq!(dials.lock().unwrap().len(), 6, "1 + 5 redials, then stop");
+            tx.send(StripMsg::Connect).unwrap_or_default(); // Reconnect always tries again
+            a_while().await;
+            assert_eq!(dials.lock().unwrap().len(), 7);
+        });
+        assert_eq!(r.last(), Some(&StripStatus::Error));
     }
 
     // --- finding the strip and learning its segments (fakes, simulated time) ---
@@ -1197,7 +1310,8 @@ mod tests {
                     .unwrap_or_default();
                 settle().await;
                 tx.send(StripMsg::Pause(false)).unwrap_or_default();
-                settle().await;
+                // The resume waits out the first backoff (the strip may still hold the old session).
+                tokio::time::sleep(Duration::from_secs(1)).await;
             },
         );
         assert_eq!(*dialled.lock().unwrap(), ["old", "new"]);
@@ -1235,7 +1349,8 @@ mod tests {
                     "no second dial while paused"
                 );
                 tx.send(StripMsg::Pause(false)).unwrap_or_default();
-                settle().await;
+                // The resume waits out the first backoff (the strip may still hold the old session).
+                tokio::time::sleep(Duration::from_secs(1)).await;
             },
         );
         assert!(matches!(r.last(), Some(StripStatus::Connected { .. })));

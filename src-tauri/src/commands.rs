@@ -752,8 +752,9 @@ pub fn preview_palette(
     state.send(Input::PreviewPalette(p))
 }
 
-/// Setup's "Calibrate": while `on` and the clock plays, the strip flashes white on every beat instead of
-/// the show. Never persisted; the UI, a clock Stop and closing the editor all switch it off.
+/// Setup's "Calibrate": while `on`, the strip flashes white on every beat instead of the show (free-running
+/// at 120 BPM without a clock; a clock Stop does not end it). Never persisted; the UI and closing the editor
+/// switch it off.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn calibrate_latency(state: tauri::State<'_, AppState>, on: bool) -> Result<(), String> {

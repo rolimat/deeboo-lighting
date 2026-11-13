@@ -588,10 +588,10 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             }
             Input::SourcesChanged(list) => self.on_sources(&list),
             Input::Ui(cmd) => {
-                // A rejected key is not retried: only pairing again helps.
+                // Turning the lights on retries any failure with the saved pairing (never forces the wizard).
                 if let (
                     UiCommand::Lights(true),
-                    StripStatus::Error | StripStatus::NotFound,
+                    StripStatus::Error | StripStatus::NotFound | StripStatus::KeyInvalid,
                     Some(tx),
                 ) = (cmd, &self.strip, &self.strip_tx)
                 {
@@ -1363,12 +1363,15 @@ mod tests {
     }
 
     #[test]
-    fn key_invalid_and_not_found_show_and_lights_on_retries_only_the_latter() {
+    fn lights_on_retries_a_failed_strip_whatever_the_reason() {
         let (mut c, mut rx, _) = core(true);
         c.handle(Input::StripState(StripStatus::KeyInvalid), 1_000);
         assert_eq!(c.status().strip, StripStatus::KeyInvalid);
         c.handle(Input::Ui(UiCommand::Lights(true)), 2_000);
-        assert!(rx.try_recv().is_err(), "a rejected key is not retried");
+        assert!(
+            matches!(rx.try_recv(), Ok(StripMsg::Connect)),
+            "the saved key is tried again; nothing deletes the pairing"
+        );
         c.handle(Input::StripState(StripStatus::NotFound), 3_000);
         c.handle(Input::Ui(UiCommand::Lights(true)), 4_000);
         assert!(matches!(rx.try_recv(), Ok(StripMsg::Connect)));
