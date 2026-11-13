@@ -174,6 +174,8 @@ struct Publisher {
     visible: bool,
     dirty: bool,
     last_us: Option<u64>,
+    /// The "update held back, nothing visible" debug line is logged once per hidden period.
+    skip_logged: bool,
 }
 
 impl Publisher {
@@ -185,11 +187,18 @@ impl Publisher {
         if visible && !self.visible {
             self.dirty = true;
         }
+        if visible != self.visible {
+            self.skip_logged = false;
+        }
         self.visible = visible;
     }
 
     /// True once per publish: the caller must send the status now.
     fn due(&mut self, now_us: u64) -> bool {
+        if !self.visible && self.dirty && !self.skip_logged {
+            self.skip_logged = true;
+            log::debug!("status update held back: no window is visible");
+        }
         if !self.visible || !self.dirty || self.deadline().is_some_and(|d| d > now_us) {
             return false;
         }

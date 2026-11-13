@@ -80,6 +80,8 @@ export const api = {
   /** Steps the active set by -1 or 1 (wraps); resolves to the new selection. */
   selectSet: (delta: -1 | 1): Promise<Selection> => invoke("select_set", { delta }),
   selectPalette: (delta: -1 | 1): Promise<Selection> => invoke("select_palette", { delta }),
+  /** Tells the backend whether the popover is on screen: the engine publishes status only then. */
+  popoverVisible: (visible: boolean): Promise<void> => invoke("popover_visible", { visible }),
   quit: (): Promise<void> => invoke("quit"),
   /** Opens (or focuses) the editor window on a section. */
   openEditor: (

@@ -39,6 +39,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(commands::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::popover_visible,
             commands::get_settings,
             commands::get_library,
             commands::save_library,

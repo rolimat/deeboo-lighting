@@ -474,7 +474,18 @@ impl AppState {
 
     /// Called by the tray when the popover shows or hides.
     pub fn set_popover_visible(&self, visible: bool) {
-        self.popover_shown.store(visible, Ordering::Relaxed);
+        self.set_popover(visible, "tray");
+    }
+
+    /// The popover's own report (document visibility): it knows best whether it is on screen.
+    pub fn popover_reports_visible(&self, visible: bool) {
+        self.set_popover(visible, "webview");
+    }
+
+    fn set_popover(&self, visible: bool, who: &str) {
+        if self.popover_shown.swap(visible, Ordering::Relaxed) != visible {
+            log::debug!("popover visible={visible} (set by {who})");
+        }
         self.refresh_visible();
     }
 
@@ -989,6 +1000,13 @@ pub fn set_wired_segments(state: tauri::State<'_, AppState>, n: u8) -> Result<Li
     Ok(lib)
 }
 
+/// The popover reports whether it is on screen (the engine publishes status only then).
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri::State is passed by value by the macro
+pub fn popover_visible(visible: bool, state: tauri::State<'_, AppState>) {
+    state.popover_reports_visible(visible);
+}
+
 /// The settings view's Quit button; `RunEvent::Exit` then stops the engine.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri passes the handle by value
@@ -1048,6 +1066,27 @@ mod tests {
             .collect();
         assert!(got.iter().any(|i| matches!(i, Input::PreviewPalette(None))));
         assert!(got.iter().any(|i| matches!(i, Input::Calibrate(false))));
+    }
+
+    #[test]
+    fn popover_report_sets_the_flag_and_wakes_the_engine() {
+        let state = AppState::default();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        state.set_runtime(RuntimeHandle { tx });
+        let flag = state.visible_flag();
+        state.popover_reports_visible(true);
+        assert!(flag.load(Ordering::Relaxed));
+        assert!(matches!(rx.recv(), Ok(Input::PopoverShown)));
+        state.popover_reports_visible(false);
+        assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn popover_capability_grants_its_visibility_command_only_to_it() {
+        let popover = include_str!("../capabilities/popover.json");
+        let editor = include_str!("../capabilities/editor.json");
+        assert!(popover.contains("allow-popover-visible"));
+        assert!(!editor.contains("allow-popover-visible"));
     }
 
     #[test]
@@ -1131,7 +1170,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 29);
+        assert_eq!(commands.len(), 30);
         assert_eq!(granted, commands);
         // The popover calls none of these; only the editor may.
         let popover = include_str!("../capabilities/popover.json");

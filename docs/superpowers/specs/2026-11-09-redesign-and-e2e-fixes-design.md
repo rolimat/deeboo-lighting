@@ -318,3 +318,25 @@ Bloques con título, icono y una explicación corta a la izquierda:
 - Estructura de componentes del editor y de la pila de deshacer.
 - Qué SVG concretos usar, con licencia compatible.
 - Cómo pintar las gráficas de Detection (SVG o canvas) con un búfer fijo de 32 beats.
+
+## 12. Segunda ronda del e2e (2026-11-13, decisiones del usuario)
+
+Donde esta sección contradiga a las anteriores, manda esta.
+
+- **Popover en vivo:** la cabecera (BPM, beat, compás, chip del momento) sigue al motor mientras el popover está
+  abierto. Al abrirse, muestra el estado actual al momento.
+- **Brillo:** mover el deslizador cambia la tira al instante, sonando o parada.
+- **Calibrar latencia:** funciona con el reloj MIDI en marcha y la tira sonando (flash blanco en cada beat). Sin reloj,
+  parpadea a 120 BPM. Si falta la tira o las luces están apagadas, Setup dice qué hacer en lugar de no hacer nada.
+- **Tira:** parar y volver a encender las luces, o un corte de la conexión, nunca obliga a repetir el asistente. La app
+  reconecta sola con la clave guardada (varios intentos con espera creciente) y repinta la escena. Solo una clave
+  rechazada por la tira pide emparejar de nuevo.
+- **Barra de menú (sustituye §7.1 en esto):** el glifo no parpadea. Verde con las luces encendidas, negro (plantilla
+  de macOS, se adapta a barra clara u oscura) con las luces apagadas. El icono del momento y el BPM se quedan como hoy.
+- **Dock:** el icono aparece en el Dock mientras la ventana del editor está abierta y se va al cerrarla. En Setup,
+  «Show in Dock: While the editor is open | Always».
+- **Detection:** los indicadores de dB de cada carril van en una columna fija a la derecha, fuera de la forma de onda.
+- **Ayuda al pasar el ratón:** con «?» activo, todos los botones, controles y opciones de las seis pestañas muestran una
+  explicación corta en inglés, en un globo con el estilo de la app que aparece al momento.
+- **Longitud de una secuencia:** botones **×2** (dobla la longitud repitiendo el contenido, hasta 16 compases) y **÷2**
+  (la reduce a la mitad, mínimo 1 compás) junto al clip. La rejilla deja hueco a la derecha para alargar arrastrando.

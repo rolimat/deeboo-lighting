@@ -120,6 +120,7 @@ export function installMock(api: typeof realApi): void {
       return Promise.resolve();
     },
     setWindowHeight: () => Promise.resolve(),
+    popoverVisible: () => Promise.resolve(),
     onStatus: (cb: (s: Status) => void) => {
       listeners.add(cb);
       return Promise.resolve(() => listeners.delete(cb));
