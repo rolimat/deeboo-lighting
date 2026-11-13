@@ -94,6 +94,8 @@ pub fn run() -> tauri::Result<()> {
             let dir = app.path().app_config_dir()?;
             let state = app.state::<commands::AppState>();
             state.init_settings(dir.join("settings.json"));
+            // `tray::setup` made the app Accessory before the setting was known.
+            editor_window::apply_dock(app.handle(), false);
             let strip = strip::load(&dir);
             if editor_window::first_launch_section(strip.is_some()).is_some() {
                 editor_window::open_at_launch(app.handle());

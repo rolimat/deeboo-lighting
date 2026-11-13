@@ -302,7 +302,7 @@ export function SetupTab() {
             value={s.showInDock}
             onChange={(e) => apply({ showInDock: e.currentTarget.value as Settings["showInDock"] })}
           >
-            <option value="editor">Only while the editor is open</option>
+            <option value="editor">While the editor is open</option>
             <option value="always">Always</option>
           </select>
         </Row>

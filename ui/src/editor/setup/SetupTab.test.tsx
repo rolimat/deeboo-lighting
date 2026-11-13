@@ -216,7 +216,7 @@ it("show_in_dock_offers_editor_or_always_and_saves", async () => {
   await mount();
   const sel = q<HTMLSelectElement>("select[aria-label='Show in Dock']");
   expect([...sel.options].map((o) => o.textContent)).toEqual([
-    "Only while the editor is open",
+    "While the editor is open",
     "Always",
   ]);
   expect(sel.value).toBe("editor");
