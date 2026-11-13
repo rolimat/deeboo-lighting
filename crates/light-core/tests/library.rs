@@ -484,3 +484,36 @@ fn angles_in_15_degree_steps_validate() {
         assert_eq!(l.validate(), Ok(()), "angle {a}");
     }
 }
+
+#[test]
+fn a_set_cannot_use_another_moments_sequence() {
+    let mut l = Library::builtin(4);
+    let rhythm_id = l
+        .sequences
+        .iter()
+        .find(|(_, s)| s.moment == Moment::Rhythm)
+        .expect("one")
+        .0;
+    l.sets[0].calm.sequences = vec![SeqRef::Id(rhythm_id)];
+    assert_eq!(fields(&l), "sets[0].calm.sequences");
+}
+
+#[test]
+fn dropping_foreign_refs_keeps_the_rest_and_leaves_a_track_never_empty() {
+    let mut l = Library::builtin(4);
+    let rhythm_id = l
+        .sequences
+        .iter()
+        .find(|(_, s)| s.moment == Moment::Rhythm)
+        .expect("one")
+        .0;
+    l.sets[0].calm.sequences = vec![SeqRef::Id(rhythm_id)];
+    l.sets[0].rhythm.sequences = vec![SeqRef::Id(rhythm_id), SeqRef::Generated];
+    l.drop_foreign_refs();
+    assert_eq!(l.sets[0].calm.sequences, [SeqRef::Generated]);
+    assert_eq!(
+        l.sets[0].rhythm.sequences,
+        [SeqRef::Id(rhythm_id), SeqRef::Generated]
+    );
+    assert_eq!(l.validate(), Ok(()));
+}

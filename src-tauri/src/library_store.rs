@@ -84,7 +84,10 @@ fn parse(path: &Path, text: &str, phrase_bars: u8) -> Result<Library, String> {
     }
     serde_json::from_str::<Library>(text)
         .map_err(|e| describe(&e))
-        .and_then(|l| l.validate().map(|()| l).map_err(|e| e.to_string()))
+        .and_then(|mut l| {
+            l.drop_foreign_refs(); // older files may reference another moment's sequence
+            l.validate().map(|()| l).map_err(|e| e.to_string())
+        })
 }
 
 /// Built-ins for `segments` on a missing, corrupt or invalid file. A valid library built for a
@@ -288,6 +291,32 @@ mod tests {
     }
 
     #[test]
+    fn a_reference_to_another_moments_sequence_is_dropped_on_load() {
+        let (_d, p) = tmp();
+        let text = with(|v| {
+            let calm = v["sequences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s[1]["moment"] == "calm")
+                .unwrap()[0]
+                .clone();
+            v["sets"][0]["rhythm"]["sequences"] = json!([{ "id": calm }]);
+        });
+        std::fs::write(&p, text).unwrap();
+        let lib = load(&p, 10, 8);
+        assert_eq!(
+            lib.sets[0].rhythm.sequences,
+            [light_core::library::SeqRef::Generated]
+        );
+        assert_eq!(
+            lib.sequences,
+            Library::builtin(10).sequences,
+            "the rest is kept"
+        );
+    }
+
+    #[test]
     fn invalid_library_is_kept_aside_and_defaults_load() {
         let steps: Vec<Value> = (0..10_000)
             .map(|_| json!({"len":"one","roles":vec!["principal";10]}))
@@ -323,8 +352,6 @@ mod tests {
         big.steps = vec![half; light_core::library::MAX_STEPS];
         lib.sequences = (1..=64).map(|i| (i, big.clone())).collect();
         lib.sets[0].rhythm.sequences = vec![SeqRef::Id(1)];
-        lib.sets[0].calm.sequences = vec![SeqRef::Id(1)];
-        lib.sets[0].buildup.sequences = vec![SeqRef::Id(1)];
         assert_eq!(lib.validate(), Ok(()));
         let (_d, p) = tmp();
         save(&p, &lib).unwrap();
