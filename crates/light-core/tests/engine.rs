@@ -975,6 +975,23 @@ fn preview_free_runs_without_a_clock_then_restores_the_rest_scene() {
 }
 
 #[test]
+fn brightness_repaints_the_preview_without_advancing_it() {
+    let mut s = sim125();
+    let out = s.e.set_preview(s.now, Some(preview_pair()));
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 600_000); // a step lasts two pulses: 222 is current
+    let due = s.e.next_deadline_us();
+    s.now = T0 + 600_000;
+    let mark = s.sends.len();
+    s.cmd(UiCommand::Brightness(50));
+    s.deadlines_until(s.now + 100_000);
+    assert_eq!(hues(&s.sends[mark..]), vec![222], "same step, not the next");
+    assert!(s.sends[mark..].iter().all(|(_, c)| matches!(c,
+        PaintCommand::Pencil { color, .. } | PaintCommand::Bucket(color) if color.v == 500)));
+    assert_eq!(s.e.next_deadline_us(), due, "cadence untouched");
+}
+
+#[test]
 fn preview_follows_the_clock_when_it_runs() {
     let mut s = sim125();
     s.start();

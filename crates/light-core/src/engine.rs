@@ -310,7 +310,7 @@ impl Engine {
                 // Repaint at once: a playing step is resent at the next pulse, a stopped strip now.
                 self.resend = true;
                 if self.cfg.lights_on && !self.clock.running() {
-                    self.rest_or_preview(now_us);
+                    self.repaint_still(now_us);
                 }
             }
             UiCommand::Phrase(p) => {
@@ -372,6 +372,19 @@ impl Engine {
             self.preview_step(now_us);
         } else {
             self.plan_rest(now_us);
+        }
+    }
+
+    /// Repaints what a stopped strip shows at the current brightness. A running preview keeps its
+    /// step and its cadence (`free_at`); only the colours change.
+    fn repaint_still(&mut self, now_us: u64) {
+        let Some(Playing { idx, .. }) = self.playing.filter(|_| self.preview.is_some()) else {
+            return self.rest_or_preview(now_us);
+        };
+        let step = self.preview.as_ref().and_then(|p| p.seq.steps.get(idx));
+        if let Some(step) = step {
+            let desired = self.scene(step.roles.iter().copied());
+            self.plan_now(now_us, &desired);
         }
     }
 
