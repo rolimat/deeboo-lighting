@@ -48,7 +48,7 @@ pub struct DetectorParams {
     pub thin_kick_db: f32,
     pub thin_high_db: f32,
     /// No change within this many beats of the last one (except Build-up -> Rhythm and a quick move on a
-    /// phrase's beat 1, which `phrase_quick` makes at once).
+    /// phrase's beat 1 and its beat-2 confirm/undo, which `phrase_quick` makes at once).
     pub min_state_beats: u32,
     /// A full or near beat also needs the sub band within this of its reference: a drop brings the
     /// bass back, a filtered kick inside a break without bass is not the groove.
@@ -57,7 +57,7 @@ pub struct DetectorParams {
     pub teaser_beats: u32,
     /// ...when the 4-beat mean kick deficit reaches this.
     pub teaser_kick_db: f32,
-    /// Riser: the last `riser_bars` bar means (4 beats; clock bars when positions exist) of highs rise monotonically...
+    /// Riser: the last `riser_bars` bar means (4 beats; clock bars with positions and `aligned_bars`) of highs rise monotonically...
     pub riser_bars: usize,
     /// ...by at least this from first to last...
     pub riser_db: f32,
@@ -330,8 +330,8 @@ impl MomentDetector {
     }
 
     /// Adds this beat to the current bar of highs; when a bar completes, tells whether the last
-    /// `riser_bars` bar means form a riser. With positions a bar closes on the clock's beat 4 (so a riser
-    /// can be up to 3 bars late within a phrase); without, every 4 beats. `late_riser` alone (`--rules riser`)
+    /// `riser_bars` bar means form a riser. With positions and `aligned_bars` a bar closes on the clock's
+    /// beat 4; without, every 4 beats. In a phrase's second half 3 rising bars also suffice. `late_riser` alone (`--rules riser`)
     /// depends on the phase of the 4-beat counter, since bars are then not clock-aligned.
     #[allow(clippy::cast_precision_loss)]
     fn riser(&mut self, high_db: f32, high_ref_db: f32, closed: Option<Position>) -> bool {
@@ -546,7 +546,7 @@ impl MomentDetector {
         let high4 = mean(&self.high_prev[16 - valid..]);
         self.high4_hist.push(high4);
 
-        // Build-up evidence (used only from Calm). Bars close on clock beat 4 when positions exist, else every 4 beats from the first beat.
+        // Build-up evidence (used only from Calm). Bars close on clock beat 4 with positions and `aligned_bars`, else every 4 beats from the first beat.
         let riser = self.riser(high_db, high_ref_db, closed);
         let approach = self.moment == Moment::Calm
             && self.in_state >= p.approach_calm_beats
