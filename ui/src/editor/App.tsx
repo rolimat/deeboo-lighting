@@ -132,13 +132,16 @@ export function App() {
               <>
                 <p class="mb-4 text-dim">{wizardLine(wizard) ?? describe(strip)}</p>
                 <Wizard
-                  onState={setWizard}
+                  onState={(s) => {
+                    setWizard(s);
+                    // Rust rebuilt the library for the new strip: the editor's copy (and undo) is stale.
+                    if (s.kind === "saved") void api.getLibrary().then(store.reset, () => {});
+                  }}
+                  beforeSave={store.flushNow}
                   onDone={() => {
                     setRepair(false);
                     setWizard({ kind: "idle" });
                     void refresh();
-                    // The wizard rebuilt the library for the new strip.
-                    void api.getLibrary().then(store.reset, () => {});
                   }}
                 />
                 {repair && strip?.kind === "connected" && wizard.kind === "idle" && (

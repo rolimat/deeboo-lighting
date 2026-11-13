@@ -60,7 +60,15 @@ export function wizardLine(state: WizardState): string | null {
   }
 }
 
-function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
+function Step({
+  state,
+  onDone,
+  beforeSave,
+}: {
+  state: WizardState;
+  onDone: () => void;
+  beforeSave?: () => Promise<void>;
+}) {
   switch (state.kind) {
     case "idle":
       return <StepUserCode onSubmit={api.wizardStart} />;
@@ -103,7 +111,10 @@ function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
           <StepIdentify
             detected={state.segments}
             onPiece={(n) => void api.stripIdentify(n).catch(swallow)}
-            onSave={(wired) => api.wizardSave(wired)}
+            onSave={async (wired) => {
+              await beforeSave?.(); // a pending edit must not land after the library is rebuilt
+              return api.wizardSave(wired);
+            }}
           />
           <CancelButton />
         </div>
@@ -147,11 +158,14 @@ function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
 export function Wizard({
   onState,
   onDone,
+  beforeSave,
 }: {
   /** Every wizard state, so the header can show it instead of the runtime's. */
   onState?: (s: WizardState) => void;
   /** After the strip is saved: leave the wizard for the shape. */
   onDone?: () => void;
+  /** Saves an edit still on its timer, before the wizard replaces the library. */
+  beforeSave?: () => Promise<void>;
 }) {
   const [state, setState] = useState<WizardState>({ kind: "idle" });
   useEffect(() => onState?.(state), [state]);
@@ -186,5 +200,5 @@ export function Wizard({
       window.removeEventListener("beforeunload", cancel);
     };
   }, []);
-  return <Step state={state} onDone={onDone ?? swallow} />;
+  return <Step state={state} onDone={onDone ?? swallow} beforeSave={beforeSave} />;
 }

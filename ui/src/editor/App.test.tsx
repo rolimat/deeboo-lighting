@@ -209,3 +209,54 @@ it("a_sequence_opened_from_sets_follows_its_renumbered_id", async () => {
   await goto("Sequences");
   expect(root.querySelector<HTMLInputElement>("input#seq-name")?.value).toBe("Fresh");
 });
+
+it("a_library_edit_after_a_re_pair_keeps_the_new_segment_count", async () => {
+  let push: (s: WizardState) => void = () => {};
+  vi.mocked(api.onWizard).mockImplementation(async (cb) => {
+    push = cb;
+    return () => {};
+  });
+  const piece = { x: 0, y: 0, angle: 0, len: 1 };
+  const ms = {
+    sequences: ["generated"],
+    order: "inOrder" as const,
+    interval: { bars: 4 },
+  };
+  const set = {
+    id: 1,
+    name: "Main",
+    rhythm: ms,
+    calm: ms,
+    buildup: ms,
+    palettes: [],
+    paletteOrder: "inOrder",
+    paletteChange: "atDrop",
+  };
+  const lib = (n: number) =>
+    ({
+      schemaVersion: 2,
+      shape: { pieces: Array.from({ length: n }, () => piece) },
+      palettes: [],
+      sequences: [],
+      sets: [set],
+      activeSet: 1,
+      activePalette: null,
+    }) as unknown as Library;
+  vi.mocked(api.getLibrary).mockResolvedValue(lib(1));
+  vi.mocked(api.saveLibrary).mockImplementation(async (l) => l);
+  vi.mocked(api.getStatus).mockResolvedValue({ kind: "notConfigured" });
+  const root = document.createElement("div");
+  document.body.append(root);
+  await mount(root);
+  vi.mocked(api.getLibrary).mockResolvedValue(lib(3)); // Rust rebuilt it for the new strip
+  const device = { id: "a", name: "dj", product: "P", online: true, supported: true };
+  await act(async () => push({ kind: "saved", device, segments: 3 }));
+  const click = (el?: Element) => act(async () => void (el as HTMLElement).click());
+  await click([...root.querySelectorAll("[role=tab]")].find((b) => b.textContent === "Sets"));
+  await click(
+    [...root.querySelectorAll("nav button")].find((b) => b.textContent?.includes("New set")),
+  );
+  await act(async () => void (await new Promise((r) => setTimeout(r, 600))));
+  const sent = vi.mocked(api.saveLibrary).mock.calls.at(-1)?.[0] as Library;
+  expect(sent.shape.pieces).toHaveLength(3);
+});
