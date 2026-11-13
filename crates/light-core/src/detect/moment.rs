@@ -703,6 +703,19 @@ mod tests {
             .collect()
     }
 
+    /// Like `drive`, but each closed beat `i` carries its clock position (phrase start at beat 0, rules on),
+    /// as the engine passes it.
+    fn drive_at(sig: &[f32], lens: &[usize]) -> Out {
+        drive_with(sig, lens, DetectorParams::default(), |i| {
+            Some(Position::at(i as u64, false, PhraseBars::Eight))
+        })
+    }
+
+    fn groove_at(n: usize, kick: impl Fn(usize) -> bool, high: impl Fn(usize) -> f32) -> Out {
+        let lens = beats(128.0, n);
+        drive_at(&synth(&lens, kick, |_| true, high), &lens)
+    }
+
     fn moments(o: &Out) -> Vec<Moment> {
         o.iter().map(|r| r.0).collect()
     }
@@ -1461,8 +1474,7 @@ mod tests {
             |k| if k < 32 { 1.0 } else { 0.0 },
             |k| if k >= 33 { 10.0 } else { 0.0 },
         );
-        assert_eq!(m[32], Moment::Calm, "{m:?}");
-        assert_eq!(m[33], Moment::Calm, "{m:?}");
+        assert!(m[32..=35].iter().all(|&x| x == Moment::Calm), "{m:?}");
     }
 
     #[test]
@@ -1494,7 +1506,7 @@ mod tests {
             |_| 0.0,
         );
         assert_eq!(m[32], Moment::Calm, "{m:?}");
-        assert_eq!(m[33], Moment::Rhythm, "{m:?}");
+        assert!(m[33..48].iter().all(|&x| x == Moment::Rhythm), "{m:?}");
     }
 
     #[test]
@@ -1596,8 +1608,9 @@ mod tests {
 
     #[test]
     fn quick_calm_respects_the_refractory_after_a_collapse() {
-        // A Build-up from 41 hits its 12-beat cap (collapse) around 53; the drop returns Rhythm; the
-        // quiet beat 64 is a quick Calm and the groove beat 65 is only 12 beats after the collapse.
+        // A Build-up from 41 hits its 12-beat cap (collapse) around 53; the drop returns Rhythm; beat 64
+        // (phrase start) has the hats gone over a weak kick: a quick Calm. Beat 65 is a groove, not
+        // quiet, only 12 beats after the collapse: no Build-up, the Calm is undone.
         let params = DetectorParams {
             buildup_max_beats: 12,
             ..all_rules()
@@ -1609,21 +1622,138 @@ mod tests {
             |k| match k {
                 ..=39 | 54..=63 => 1.0,
                 40..=53 => 0.2,
-                64 => 0.0,
                 _ => 0.4,
             },
-            |k| {
-                if (40..54).contains(&k) || k >= 65 {
-                    10.0
-                } else {
-                    0.0
-                }
+            |k| match k {
+                40..=53 | 65.. => 10.0,
+                64 => -20.0,
+                _ => 0.0,
             },
             |_| false,
         );
         assert_eq!(m[63], Moment::Rhythm, "{m:?}");
         assert_eq!(m[64], Moment::Calm, "{m:?}");
-        assert_eq!(m[65], Moment::Calm, "{m:?}");
+        assert_eq!(m[65], Moment::Rhythm, "{m:?}");
+    }
+
+    #[test]
+    fn quick_build_up_with_an_unclear_beat_two_returns_to_rhythm_without_a_teaser() {
+        // Beat 32 is a groove build-up (weak kick, loud hats); beat 33 is not full, not quiet and not a
+        // groove (medium kick, normal hats): undone to Rhythm, and that undo is not a return, so the
+        // weak kicks after it (a teaser if armed) stay Rhythm.
+        let m = quick(
+            0,
+            PositionRules::ALL,
+            |k| match k {
+                ..=31 => 1.0,
+                32 => 0.4,
+                _ => 0.3,
+            },
+            |k| if k == 32 { 10.0 } else { 0.0 },
+        );
+        assert_eq!(m[32], Moment::BuildUp, "{m:?}");
+        assert!(m[33..48].iter().all(|&x| x == Moment::Rhythm), "{m:?}");
+    }
+
+    // The tuned scenarios again with clock positions (the app always passes them).
+
+    #[test]
+    fn at_steady_four_on_the_floor_stays_rhythm() {
+        let o = groove_at(64, |_| true, |_| 0.0);
+        assert!(moments(&o).iter().all(|&m| m == Moment::Rhythm));
+    }
+
+    #[test]
+    fn at_two_missing_kicks_enter_calm_on_the_phrase_start() {
+        let m = moments(&groove_at(48, |k| k < 32, |_| 0.0));
+        assert!(m[..32].iter().all(|&m| m == Moment::Rhythm), "{m:?}");
+        assert!(m[32..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
+    fn at_drop_without_hats_stays_rhythm() {
+        let o = groove_at(48, |_| true, |k| if k < 32 { 0.0 } else { -20.0 });
+        assert!(moments(&o).iter().all(|&m| m == Moment::Rhythm));
+    }
+
+    #[test]
+    fn at_hats_dropping_with_the_kick_band_weaker_enter_calm() {
+        let lens = beats(128.0, 48);
+        let sig = synth_gain(
+            &lens,
+            |k| if k < 32 { 1.0 } else { 0.3 },
+            |_| true,
+            |k| if k < 32 { 0.0 } else { -20.0 },
+        );
+        let m = moments(&drive_at(&sig, &lens));
+        assert!(m[..32].iter().all(|&m| m == Moment::Rhythm), "{m:?}");
+        assert!(m[32..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
+    fn at_one_bar_teaser_returns_to_calm() {
+        let lens = beats(128.0, 72);
+        let sig = synth_gain(
+            &lens,
+            |k| match k {
+                32..=47 => 0.0,
+                52.. => 0.3,
+                _ => 1.0,
+            },
+            |_| true,
+            |_| 0.0,
+        );
+        let m = moments(&drive_at(&sig, &lens));
+        assert_eq!(m[49], Moment::Rhythm, "{m:?}");
+        assert_eq!(m[53], Moment::Rhythm, "{m:?}");
+        assert!(m[54..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
+    fn at_riser_in_a_break_enters_buildup() {
+        let m = moments(&groove_at(72, |k| k < 32, riser_hats(0.0)));
+        assert!(m[33..59].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        assert!(m[59..].iter().all(|&m| m == Moment::BuildUp), "{m:?}");
+    }
+
+    #[test]
+    fn at_a_riser_with_a_dip_is_a_late_buildup() {
+        let o = groove_at(
+            66,
+            |k| k < 32,
+            |k| match k {
+                0..=31 => 0.0,
+                32..=47 => -20.0,
+                48..=51 => -8.0,
+                52..=55 => -14.0,
+                _ => -4.0,
+            },
+        );
+        let m = moments(&o);
+        // Contradicts the no-position test: late in the phrase three bars are enough, and the dip bar
+        // (-14) followed by two bars at -4 is a 10 dB rise ending near the groove, so it is a riser.
+        assert!(m[33..63].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        assert!(m[63..].iter().all(|&m| m == Moment::BuildUp), "{m:?}");
+    }
+
+    #[test]
+    fn at_sudden_kick_return_after_risers_is_a_drop() {
+        let o = groove_at(
+            64,
+            |k| !(32..55).contains(&k),
+            |k| if k < 55 { ramp(k.min(51)) } else { 0.0 },
+        );
+        let m = moments(&o);
+        assert_eq!(m[55], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[56], Moment::Rhythm, "{m:?}");
+    }
+
+    #[test]
+    fn at_full_beats_return_to_rhythm_after_two() {
+        let m = moments(&groove_at(48, |k| !(32..36).contains(&k), |_| 0.0));
+        assert!(m[32..36].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        assert_eq!(m[36], Moment::Calm, "{m:?}");
+        assert_eq!(m[37], Moment::Rhythm, "{m:?}");
     }
 
     #[test]

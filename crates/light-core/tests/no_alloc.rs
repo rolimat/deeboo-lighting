@@ -22,7 +22,7 @@ fn on_beat_does_not_allocate() {
     use light_core::clock::{PhraseBars, Position};
     use light_core::detect::PositionRules;
     use light_core::detect::bands::HopFrame;
-    use light_core::detect::moment::{DetectorParams, MomentDetector};
+    use light_core::detect::moment::{DetectorParams, Moment, MomentDetector};
     let params = DetectorParams {
         rules: PositionRules::ALL,
         ..DetectorParams::default()
@@ -41,6 +41,7 @@ fn on_beat_does_not_allocate() {
         }
     };
     let mut seen = [false; 3];
+    let mut at = [Moment::Rhythm; 200];
     assert_no_alloc(|| {
         // Without a clock position.
         for beat in 0..200 {
@@ -75,7 +76,12 @@ fn on_beat_does_not_allocate() {
                 PhraseBars::Eight,
             )));
             seen[m as usize] = true;
+            at[beat as usize] = m;
         }
     });
     assert!(seen.iter().all(|&s| s), "all moments reached: {seen:?}");
+    // The branches under guard: the quick Calm on phrase beat 1, the riser, the bar-1 drop.
+    assert_eq!(at[33], Moment::Calm);
+    assert_eq!(at[95], Moment::BuildUp);
+    assert_eq!(at[96], Moment::Rhythm);
 }
