@@ -10,6 +10,8 @@ import { Level } from "../detection/DetectionTab";
 import { help } from "../shell/Help";
 import { H } from "../help-texts";
 
+// Rust `midi::VIRTUAL_PORT`: saved as the choice "Virtual port" (null means nothing chosen yet).
+const VIRTUAL_PORT = "Deeboo Lighting In";
 const LEAD_MAX = 500; // Rust `Settings::validate`
 const LEAD_STEP = 10;
 const field = "rounded-card border border-border bg-card px-3 py-1.5";
@@ -123,7 +125,10 @@ export function SetupTab() {
     setTyped(null);
     apply({ leadMs: clampLead(n) });
   };
-  const sources = s.midiSource && !midi.includes(s.midiSource) ? [s.midiSource, ...midi] : midi;
+  const sources =
+    s.midiSource && s.midiSource !== VIRTUAL_PORT && !midi.includes(s.midiSource)
+      ? [s.midiSource, ...midi]
+      : midi;
   const level = st?.audio.ok ? st.audio.levelDb : undefined;
 
   return (
@@ -137,11 +142,11 @@ export function SetupTab() {
           <select
             aria-label="MIDI input"
             class={`${field} min-w-60`}
-            value={s.midiSource ?? ""}
-            onChange={(e) => apply({ midiSource: e.currentTarget.value || null })}
+            value={s.midiSource ?? VIRTUAL_PORT}
+            onChange={(e) => apply({ midiSource: e.currentTarget.value })}
             {...help(H.midiInput)}
           >
-            <option value="">Virtual port (Deeboo Lighting In)</option>
+            <option value={VIRTUAL_PORT}>Virtual port (Deeboo Lighting In)</option>
             {sources.map((m) => (
               <option key={m} value={m}>
                 {m}

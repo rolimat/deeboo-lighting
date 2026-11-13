@@ -180,3 +180,13 @@ fn previous_beat_of_phrase_start_is_last_beat_of_phrase() {
         Some(Position::at(4, false, eight))
     );
 }
+
+#[test]
+fn a_tick_with_the_same_timestamp_is_counted() {
+    let mut t = ClockTracker::new(PhraseBars::Eight);
+    let times = ticks(1_000, 20_000, 12);
+    feed(&mut t, &times);
+    // Two ticks in one microsecond (a coarse clock, or a burst): the 13th still counts.
+    let same = *times.last().unwrap();
+    assert!(t.on_midi(same, 0xF8).is_some(), "tick 12 is the half beat");
+}

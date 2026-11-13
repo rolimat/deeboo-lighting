@@ -278,3 +278,15 @@ it("a_save_keeps_settings_changed_elsewhere_since_mount", async () => {
   expect(saved()?.midiSource).toBe("Clock A");
   expect(saved()?.brightnessPct).toBe(40);
 });
+
+it("virtual_port_is_saved_as_an_explicit_choice", async () => {
+  await mount();
+  q<HTMLSelectElement>("select[aria-label='MIDI input']").value = "Deeboo Lighting In";
+  await act(
+    async () =>
+      void q("select[aria-label='MIDI input']").dispatchEvent(
+        new Event("change", { bubbles: true }),
+      ),
+  );
+  expect(saved()?.midiSource).toBe("Deeboo Lighting In");
+});

@@ -219,6 +219,11 @@ fn timeout(deadline_us: Option<u64>, now_us: u64) -> Option<Duration> {
 }
 
 /// A configured source that is not connected (it appeared after launch) needs another try.
+/// The virtual port is a choice of its own (it is never in the OS list): nothing external to connect.
+fn external(source: Option<&str>) -> Option<&str> {
+    source.filter(|n| *n != crate::midi::VIRTUAL_PORT)
+}
+
 fn needs_reconnect(wanted: Option<&str>, connected: Option<&str>) -> bool {
     wanted.is_some() && wanted != connected
 }
@@ -331,7 +336,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         let source_present = settings
             .midi_source
             .as_deref()
-            .is_none_or(|n| midi.source_available(n));
+            .is_none_or(|n| external(Some(n)).is_none_or(|n| midi.source_available(n)));
         let mut core = Self {
             engine,
             segments,
@@ -388,6 +393,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                     self.source_present = true;
                 }
             }
+            Some(wanted) if external(Some(&wanted)).is_none() => {}
             Some(wanted) => {
                 let present = list.contains(&wanted);
                 let stale = !self.source_present
@@ -562,7 +568,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     }
 
     fn midi_ok(&self) -> bool {
-        self.settings.midi_source.is_none()
+        external(self.settings.midi_source.as_deref()).is_none()
             || (self.source_present && self.settings.midi_source == self.midi.connected_source())
     }
 
@@ -592,6 +598,11 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
 
     /// False once the thread should stop.
     pub fn handle(&mut self, input: Input, now_us: u64) -> bool {
+        // A queued tick is judged at its own time: a stall of this thread is not a silent clock.
+        let now_us = match &input {
+            Input::Midi(e) => now_us.min(e.at_us),
+            _ => now_us,
+        };
         match input {
             Input::Midi(e) => {
                 let mut features = None;
@@ -699,7 +710,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 cfg.segments
             );
             self.segments = cfg.segments;
-            self.engine = engine_for(&self.settings, cfg.segments, self.last.lights_on);
+            self.engine.resegment(cfg.segments);
             if let Some(lib) = &self.library {
                 // A fresh engine is not playing: the library (or its fallback) applies at once.
                 let cmds = self.engine.set_library(now_us, lib);
@@ -716,7 +727,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     /// midir keeps its connection object after the `CoreMIDI` endpoint vanishes, so ask the OS.
     /// A stopped clock reconnects anyway: a recreated endpoint leaves a connection that is silent.
     fn check_midi_source(&mut self) {
-        let Some(wanted) = self.settings.midi_source.clone() else {
+        let Some(wanted) = external(self.settings.midi_source.as_deref()).map(String::from) else {
             return;
         };
         self.source_present = self.midi.source_available(&wanted);
@@ -743,11 +754,9 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         }
         let source_changed = new.midi_source != self.settings.midi_source;
         if source_changed {
-            self.midi.reconnect(new.midi_source.as_deref());
-            self.source_present = new
-                .midi_source
-                .as_deref()
-                .is_none_or(|n| self.midi.source_available(n));
+            self.midi.reconnect(external(new.midi_source.as_deref()));
+            self.source_present =
+                external(new.midi_source.as_deref()).is_none_or(|n| self.midi.source_available(n));
         }
         if new.audio_input != self.settings.audio_input && self.capture != Capture::Closed {
             // Reopened on the new input by `sync_capture`.
@@ -893,7 +902,7 @@ pub fn spawn(
     let spawned = std::thread::Builder::new()
         .name("engine".into())
         .spawn(move || {
-            let midi = MidiIn::start(settings.midi_source.as_deref(), midi_tx, clock);
+            let midi = MidiIn::start(external(settings.midi_source.as_deref()), midi_tx, clock);
             let emit = {
                 let app = app.clone();
                 move |s: &Status| {
@@ -1884,5 +1893,97 @@ mod tests {
             Moment::Rhythm,
             "no position for a partial beat"
         );
+    }
+
+    fn clock_ticks(c: &mut TestCore, from: u64, n: u64) -> u64 {
+        let mut at = from;
+        for _ in 0..n {
+            c.handle(
+                Input::Midi(MidiEvent {
+                    at_us: at,
+                    status: 0xF8,
+                }),
+                at,
+            );
+            at += 20_000;
+        }
+        at
+    }
+
+    #[test]
+    fn an_engine_stall_with_queued_ticks_is_not_a_stop() {
+        let (mut c, _rx, _) = core(false);
+        c.handle(
+            Input::Midi(MidiEvent {
+                at_us: 0,
+                status: 0xFA,
+            }),
+            0,
+        );
+        let at = clock_ticks(&mut c, 10_000, 30);
+        let before = c.status().beat_in_bar;
+        // The thread was stuck 700 ms: the next tick (stamped by the MIDI callback) is handled late.
+        let late = at + 700_000;
+        c.handle(
+            Input::Midi(MidiEvent {
+                at_us: at,
+                status: 0xF8,
+            }),
+            late,
+        );
+        assert!(c.status().playing, "a stall is not a Stop");
+        assert!(before.is_some());
+        let at = clock_ticks(&mut c, at + 20_000, 5);
+        assert!(c.status().playing);
+        assert!(at > 0);
+        // Beat count continued from tick 31, not from beat 1.
+        assert_eq!(c.status().beat_in_bar, Some(2));
+    }
+
+    #[test]
+    fn a_wired_count_change_keeps_the_running_clock_and_the_forced_moment() {
+        let (mut c, _rx, _) = core(true);
+        c.handle(Input::StripState(connected()), 1_000);
+        c.handle(Input::Ui(UiCommand::Force(Moment::Calm)), 2_000);
+        c.handle(
+            Input::Midi(MidiEvent {
+                at_us: 3_000,
+                status: 0xFA,
+            }),
+            3_000,
+        );
+        let at = clock_ticks(&mut c, 10_000, 40);
+        assert_eq!(c.status().beat_in_bar, Some(2));
+        c.handle(Input::StripChanged(new_cfg("short", 4)), at);
+        clock_ticks(&mut c, at, 1);
+        let s = c.status();
+        assert!(s.playing);
+        assert_eq!(s.beat_in_bar, Some(2), "beat 1 was not restarted");
+        assert!(!s.auto, "the forced moment survives");
+        assert_eq!(s.moment, crate::commands::MomentDto::Calm);
+    }
+
+    #[test]
+    fn virtual_port_is_a_choice_that_survives_a_relaunch() {
+        let (mut c, _rx, _) = core(false);
+        c.settings.midi_source = Some(crate::midi::VIRTUAL_PORT.into());
+        c.midi.ports.borrow_mut().push("Mixer".into());
+        let chosen = Rc::new(RefCell::new(Vec::new()));
+        let ch = Rc::clone(&chosen);
+        c.set_midi_sinks(
+            Box::new(|_| {}),
+            Box::new(move |n| ch.borrow_mut().push(n.to_string())),
+        );
+        c.handle(sources(&["Mixer"]), 0);
+        assert!(
+            chosen.borrow().is_empty(),
+            "one OS source must not replace the virtual port"
+        );
+        assert_eq!(
+            c.settings.midi_source.as_deref(),
+            Some(crate::midi::VIRTUAL_PORT)
+        );
+        assert!(c.status().midi.ok, "the virtual port is always there");
+        assert!(c.midi.connected_source().is_none());
     }
 }

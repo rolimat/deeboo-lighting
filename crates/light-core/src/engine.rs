@@ -505,6 +505,18 @@ impl Engine {
         self.sched.due(now_us)
     }
 
+    /// The strip has another segment count: the plan restarts but the clock (beat count) and the
+    /// forced moment go on. The new library arrives through `set_library` as usual.
+    pub fn resegment(&mut self, segments: u8) {
+        self.cfg.segments = segments;
+        self.sched = Scheduler::new(segments);
+        self.look = Look::builtin(segments);
+        self.pending = None;
+        self.playing = None;
+        self.rot_moment = None;
+        self.resend = true;
+    }
+
     pub fn strip_reconnected(&mut self) {
         self.sched.forget_sent();
         self.resend = true;
