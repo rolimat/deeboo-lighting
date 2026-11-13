@@ -15,9 +15,23 @@ pub fn beats_due(beats: &[f64], next: usize, block_end: f64) -> usize {
 }
 
 /// Clock position of every tracked beat: each anchor (seconds) snaps to the nearest tracked beat,
-/// which becomes phrase bar 1 beat 1; beats before the first anchor have none.
-#[must_use]
-pub fn positions(beats: &[f64], anchors: &[f64], phrase: PhraseBars) -> Vec<Option<Position>> {
+/// which becomes phrase bar 1 beat 1. No anchor means the first beat. Like a Start in the app, a
+/// re-anchor leaves the beat just before it without a position. An anchor past the last beat is an error.
+pub fn positions(
+    beats: &[f64],
+    anchors: &[f64],
+    phrase: PhraseBars,
+) -> Result<Vec<Option<Position>>, String> {
+    let Some(&last) = beats.last() else {
+        return Ok(Vec::new());
+    };
+    if let Some(a) = anchors.iter().find(|&&a| a > last) {
+        return Err(format!(
+            "--downbeat {a} is past the last tracked beat ({last:.1} s)"
+        ));
+    }
+    let first = [beats[0]];
+    let anchors = if anchors.is_empty() { &first } else { anchors };
     let mut snapped: Vec<usize> = anchors
         .iter()
         .filter_map(|&a| {
@@ -25,16 +39,30 @@ pub fn positions(beats: &[f64], anchors: &[f64], phrase: PhraseBars) -> Vec<Opti
         })
         .collect();
     snapped.sort_unstable();
-    (0..beats.len())
+    snapped.dedup();
+    Ok((0..beats.len())
         .map(|i| {
+            if snapped.iter().skip(1).any(|&s| s == i + 1) {
+                return None;
+            }
             let k = snapped.partition_point(|&s| s <= i);
             let start = *snapped.get(k.checked_sub(1)?)?;
             Some(Position::at((i - start) as u64, false, phrase))
         })
-        .collect()
+        .collect())
 }
 
-/// `all`, `none` or a comma list of `calm,drop,riser,bars`.
+/// True for `^\d+(\.\d+)?-\d+(\.\d+)?$`: what `--features` accepts as its optional range.
+#[must_use]
+pub fn looks_like_range(s: &str) -> bool {
+    let num = |n: &str| {
+        let (i, f) = n.split_once('.').map_or((n, None), |(i, f)| (i, Some(f)));
+        let digits = |d: &str| !d.is_empty() && d.bytes().all(|c| c.is_ascii_digit());
+        digits(i) && f.is_none_or(digits)
+    };
+    s.split_once('-').is_some_and(|(a, b)| num(a) && num(b))
+}
+
 pub fn parse_rules(s: &str) -> Result<PositionRules, String> {
     match s {
         "all" => return Ok(PositionRules::ALL),
@@ -246,8 +274,11 @@ pub fn timeline(
         .enumerate()
         .map(|(i, tr)| {
             let end = transitions.get(i + 1).map_or(total_s, |n| n.t);
-            let phrase = positions
-                .get(tr.index)
+            // The closed beat's position, as `--features` shows it.
+            let phrase = tr
+                .index
+                .checked_sub(1)
+                .and_then(|c| positions.get(c))
                 .copied()
                 .flatten()
                 .map_or(String::new(), |p| format!("  {}", phrase_label(p)));
@@ -314,7 +345,7 @@ mod tests {
     #[test]
     fn positions_count_from_the_snapped_anchor() {
         let beats: Vec<f64> = (0..12).map(|k| f64::from(k) * 0.5).collect();
-        let p = positions(&beats, &[2.1], PhraseBars::Eight);
+        let p = positions(&beats, &[2.1], PhraseBars::Eight).unwrap();
         assert_eq!(p.len(), 12);
         assert_eq!(p[3], None);
         assert_eq!(p[4], Some(Position::at(0, false, PhraseBars::Eight)));
@@ -324,10 +355,10 @@ mod tests {
     #[test]
     fn second_anchor_restarts_the_count() {
         let beats: Vec<f64> = (0..12).map(|k| f64::from(k) * 0.5).collect();
-        let p = positions(&beats, &[1.0, 4.0], PhraseBars::Four);
+        let p = positions(&beats, &[1.0, 4.0], PhraseBars::Four).unwrap();
         assert_eq!(p[0], None);
         assert_eq!(p[2], Some(Position::at(0, false, PhraseBars::Four)));
-        assert_eq!(p[7], Some(Position::at(5, false, PhraseBars::Four)));
+        assert_eq!(p[6], Some(Position::at(4, false, PhraseBars::Four)));
         assert_eq!(p[8], Some(Position::at(0, false, PhraseBars::Four)));
         assert_eq!(p[11], Some(Position::at(3, false, PhraseBars::Four)));
     }
@@ -344,10 +375,51 @@ mod tests {
     #[test]
     fn timeline_shows_the_phrase_position_when_known() {
         let beats: Vec<f64> = (0..40).map(|k| f64::from(k) * 0.5).collect();
-        let pos = positions(&beats, &[2.0], PhraseBars::Four);
+        let pos = positions(&beats, &[2.0], PhraseBars::Four).unwrap();
         let lines = timeline(&[tr(0, Moment::Rhythm), tr(6, Moment::Calm)], 20.0, &pos);
         assert!(!lines[0].contains('P'), "{}", lines[0]);
-        assert!(lines[1].contains("P1.1.3"), "{}", lines[1]);
+        assert!(lines[1].contains("P1.1.2"), "{}", lines[1]);
+    }
+
+    #[test]
+    fn timeline_uses_the_closed_beat() {
+        let beats: Vec<f64> = (0..40).map(|k| f64::from(k) * 0.5).collect();
+        let mut pos = positions(&beats, &[2.0], PhraseBars::Four).unwrap();
+        pos[5] = None; // the closed beat has none, the transition beat does
+        let lines = timeline(&[tr(6, Moment::Calm)], 20.0, &pos);
+        assert!(!lines[0].contains('P'), "{}", lines[0]);
+    }
+
+    #[test]
+    fn no_anchor_starts_at_first_beat() {
+        let beats: Vec<f64> = (0..8).map(|k| 1.0 + f64::from(k) * 0.5).collect();
+        let p = positions(&beats, &[], PhraseBars::Four).unwrap();
+        assert_eq!(p[0], Some(Position::at(0, false, PhraseBars::Four)));
+        assert_eq!(p[3], Some(Position::at(3, false, PhraseBars::Four)));
+    }
+
+    #[test]
+    fn anchor_past_end_is_an_error() {
+        let beats: Vec<f64> = (0..8).map(|k| f64::from(k) * 0.5).collect();
+        assert!(positions(&beats, &[99.0], PhraseBars::Four).is_err());
+        assert!(positions(&beats, &[3.5], PhraseBars::Four).is_ok());
+    }
+
+    #[test]
+    fn beat_before_second_anchor_has_no_position() {
+        let beats: Vec<f64> = (0..12).map(|k| f64::from(k) * 0.5).collect();
+        let p = positions(&beats, &[1.0, 4.0], PhraseBars::Four).unwrap();
+        assert_eq!(p[7], None);
+        assert_eq!(p[8], Some(Position::at(0, false, PhraseBars::Four)));
+        assert!(p[6].is_some() && p[1].is_none());
+    }
+
+    #[test]
+    fn range_shape_is_strict() {
+        assert!(looks_like_range("160-215") && looks_like_range("1.5-20.25"));
+        for s in ["160", "song-3.mp3", "1-", "-5", "1.-2", "1-2-3", "3-4.mp3"] {
+            assert!(!looks_like_range(s), "{s}");
+        }
     }
 
     #[test]
@@ -436,6 +508,20 @@ mod tests {
     }
 
     #[test]
+    fn live_order_hands_the_closed_beats_position_to_on_beat() {
+        let fs = 8_000u32;
+        let beats: Vec<f64> = (0..12).map(|k| 0.5 + f64::from(k) * 0.5).collect();
+        let pos = positions(&beats, &[], PhraseBars::Four).unwrap();
+        let mut live = LiveOrder::new(fs, beats.clone(), DetectorParams::default(), pos.clone());
+        live.feed(&vec![0.1f32; fs as usize * 8], &mut |_| {});
+        assert!(live.features.len() > 4);
+        for (t, p, _, _) in &live.features {
+            let i = beats.iter().position(|b| (b - t).abs() < 1e-9).unwrap();
+            assert_eq!(*p, pos[i]);
+        }
+    }
+
+    #[test]
     fn feature_line_formats_values_and_position() {
         let f = BeatFeatures {
             kick_db: -12.34,
@@ -446,7 +532,7 @@ mod tests {
             high_ref_db: -30.0,
         };
         let beats: Vec<f64> = (0..40).map(|k| f64::from(k) * 0.5).collect();
-        let pos = positions(&beats, &[2.0], PhraseBars::Four);
+        let pos = positions(&beats, &[2.0], PhraseBars::Four).unwrap();
         assert_eq!(
             feature_line(75.25, pos[6], &f, Moment::BuildUp),
             "01:15.3  P1.1.3  kick -12.3 (-2.3)  sub -20.0 (+0.0)  high -31.3 (-1.3)  BUILD-UP"
