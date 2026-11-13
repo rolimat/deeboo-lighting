@@ -1,3 +1,4 @@
+import { COLOUR_TYPE, ROLE_TYPE } from "../drag";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, type Hsv, type Palette } from "../api";
 import { Icon } from "../../icons/Icon";
@@ -38,8 +39,6 @@ const QUICK = [
   "#FFFFFF",
   "#FFE0B2",
 ];
-const COLOUR_TYPE = "application/x-deeboo-colour";
-const ROLE_TYPE = "application/x-deeboo-role";
 const NEW_PALETTE: Palette = {
   name: "New palette",
   principal: { h: 340, s: 830, v: 1000 },

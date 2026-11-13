@@ -16,6 +16,7 @@ vi.mock("../api", () => ({
 import { api } from "../api";
 import { useLibrary } from "../state/library";
 import { SetsTab } from "./SetsTab";
+import { installDropGuard } from "../drag";
 import type { BarActions } from "../sequences/SequencesTab";
 
 const hsv = (h: number) => ({ h, s: 1000, v: 1000 });
@@ -370,4 +371,16 @@ it("internal_drags_carry_no_plain_text_for_inputs_to_swallow", async () => {
   });
   expect(data.size).toBeGreaterThan(0);
   expect([...data.keys()]).not.toContain("text/plain");
+});
+
+it("a_drop_on_the_set_name_input_is_cancelled_and_the_name_is_unchanged", async () => {
+  const off = installDropGuard();
+  const input = q<HTMLInputElement>("#set-name");
+  const before = input?.value;
+  const e = new Event("drop", { bubbles: true, cancelable: true });
+  Object.assign(e, { dataTransfer: { types: ["text/plain"], getData: () => "Dropped" } });
+  await act(() => void input?.dispatchEvent(e));
+  off();
+  expect(e.defaultPrevented).toBe(true);
+  expect(q<HTMLInputElement>("#set-name")?.value).toBe(before);
 });

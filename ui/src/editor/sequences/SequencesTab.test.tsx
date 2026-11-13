@@ -333,6 +333,23 @@ it("dropping_a_palette_changes_the_preview", async () => {
   expect(store.canUndo).toBe(false); // UI-only
 });
 
+it("an_external_drop_on_the_grid_leaves_the_preview_palette_alone", async () => {
+  await mount();
+  const dt = { types: ["Files"], getData: () => "" };
+  const over = new Event("dragover", { bubbles: true, cancelable: true });
+  await act(() => {
+    Object.assign(over, { dataTransfer: dt });
+    q("[data-grid]")?.dispatchEvent(over);
+  });
+  expect(over.defaultPrevented).toBe(false);
+  await act(() => {
+    const e = new Event("drop", { bubbles: true, cancelable: true });
+    Object.assign(e, { dataTransfer: dt });
+    q("[data-grid]")?.dispatchEvent(e);
+  });
+  expect(q<HTMLSelectElement>("select#seq-palette")?.value).toBe("2");
+});
+
 const bw = (sel: string) => q<HTMLButtonElement>(`button[aria-label='${sel}']`);
 
 it("double_and_halve_buttons_undoable_with_limits", async () => {

@@ -46,6 +46,20 @@ fn navigation_allowed(url: &tauri::Url) -> bool {
     app || dev
 }
 
+/// Plugin that applies [`navigation_allowed`] to every webview (editor and the config-defined popover).
+#[must_use]
+pub fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("navigation")
+        .on_navigation(|_webview, url| {
+            let ok = navigation_allowed(url);
+            if !ok {
+                log::debug!("navigation refused: {}://", url.scheme());
+            }
+            ok
+        })
+        .build()
+}
+
 /// The window manager behind a trait so "open twice" is testable without a display.
 trait Windows {
     /// Focuses the editor on `section` if it exists; false when there is none.
@@ -116,13 +130,6 @@ impl Windows for AppHandle {
             .focused(true)
             // The native file-drop handler swallows `WKWebView` drops, so HTML5 drag and drop never fires.
             .disable_drag_drop_handler()
-            .on_navigation(|url| {
-                let ok = navigation_allowed(url);
-                if !ok {
-                    log::debug!("editor navigation refused: {}://", url.scheme());
-                }
-                ok
-            })
             .build()
             .map(|_| apply_dock(self, true))
             .map_err(|e| {
@@ -267,14 +274,9 @@ mod tests {
     }
 
     #[test]
-    fn editor_window_refuses_foreign_navigation() {
-        let src = include_str!("editor_window.rs");
-        let builder = src
-            .split("WebviewWindowBuilder::new")
-            .nth(1)
-            .unwrap_or_default();
-        let builder = builder.split(".build()").next().unwrap_or_default();
-        assert!(builder.contains(".on_navigation("));
+    fn the_navigation_guard_plugin_is_registered_for_every_webview() {
+        let lib = include_str!("lib.rs");
+        assert!(lib.contains(".plugin(editor_window::navigation_guard())"));
     }
 
     /// The editor uses HTML5 drag and drop (Sets, Palettes, Sequences); on macOS the native

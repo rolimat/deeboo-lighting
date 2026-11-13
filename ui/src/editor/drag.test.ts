@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { DRAG_TYPE, installDropGuard } from "./drag";
+import { installDropGuard } from "./drag";
 
 let off: (() => void) | undefined;
 afterEach(() => off?.());
@@ -34,8 +34,4 @@ it("an_internal_drop_zone_keeps_its_own_dragover_effect", () => {
 it("the_guard_is_removed_on_cleanup", () => {
   installDropGuard()();
   expect(fire(document.body, "drop").defaultPrevented).toBe(false);
-});
-
-it("internal_drags_use_a_custom_type_inputs_ignore", () => {
-  expect(DRAG_TYPE).not.toBe("text/plain");
 });

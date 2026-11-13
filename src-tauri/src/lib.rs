@@ -36,6 +36,7 @@ pub fn run() -> tauri::Result<()> {
     logger().init();
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
+        .plugin(editor_window::navigation_guard())
         .manage(commands::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
