@@ -134,3 +134,16 @@ it("undo_after_a_save_resends_saved_ids_not_temporary_ones", async () => {
       .palettes.map(([i]) => i),
   ).toEqual([1, 2]);
 });
+
+it("a_save_that_loses_an_entry_is_not_adopted", async () => {
+  const pal = {
+    name: "N",
+    principal: { h: 0, s: 0, v: 0 },
+    contraste: { h: 0, s: 0, v: 0 },
+    suave: { h: 0, s: 0, v: 0 },
+  };
+  vi.mocked(api.saveLibrary).mockImplementation(async (l) => ({ ...l, palettes: [] }));
+  await act(async () => h.edit((l) => ({ ...l, palettes: [[1_000_001, pal]] })));
+  await tick(400);
+  expect(h.lib?.palettes.map(([i]) => i)).toEqual([1_000_001]); // temp id kept, never swapped away
+});

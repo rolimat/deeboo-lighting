@@ -45,6 +45,13 @@ export function App() {
   const store = useLibrary();
   const [actions, setActions] = useState<BarActions | null>(null);
   const [openSeq, setOpenSeq] = useState<Sel | null>(null);
+  useEffect(
+    () =>
+      store.onRemap((m) =>
+        setOpenSeq((s) => (s?.k === "seq" ? { k: "seq", id: m.sequences.get(s.id) ?? s.id } : s)),
+      ),
+    [store.onRemap],
+  );
   useEffect(installDropGuard, []);
   useEffect(() => {
     let off: (() => void) | undefined;

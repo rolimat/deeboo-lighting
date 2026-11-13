@@ -204,6 +204,51 @@ mod tests {
 
     const V1: &str = include_str!("../../crates/light-core/tests/fixtures/library-v1.json");
 
+    /// The editor pairs sent and saved entries by index: renumbering never reorders, adds or drops.
+    #[test]
+    fn assign_ids_keeps_order_and_count_and_changes_only_new_ids() {
+        let prev = Library::builtin(10);
+        let mut new = prev.clone();
+        let (pal, seq, set) = (
+            new.palettes[0].clone(),
+            new.sequences[0].clone(),
+            new.sets[0].clone(),
+        );
+        new.palettes.insert(1, (7_000_001, pal.1));
+        new.sequences.push((7_000_002, seq.1));
+        let mut s = set;
+        s.id = 7_000_003;
+        s.palettes = vec![7_000_001];
+        new.sets.insert(0, s);
+        let before = new.clone();
+        assign_ids(&prev, &mut new).unwrap();
+        let ids = |l: &Library| {
+            (
+                l.palettes.iter().map(|p| p.0).collect::<Vec<_>>(),
+                l.sequences.iter().map(|p| p.0).collect::<Vec<_>>(),
+                l.sets.iter().map(|p| p.id).collect::<Vec<_>>(),
+            )
+        };
+        let (sent_p, sent_q, sent_s) = ids(&before);
+        let (new_p, new_q, new_s) = ids(&new);
+        assert_eq!(
+            (sent_p.len(), sent_q.len(), sent_s.len()),
+            (new_p.len(), new_q.len(), new_s.len())
+        );
+        let known = ids(&prev);
+        for (a, b) in sent_p
+            .iter()
+            .zip(&new_p)
+            .chain(sent_q.iter().zip(&new_q))
+            .chain(sent_s.iter().zip(&new_s))
+        {
+            let temp = *a >= 7_000_000;
+            assert_eq!(a == b, !temp, "only temporary ids change: {a} -> {b}");
+        }
+        assert!(!known.0.contains(&new_p[1]) && !known.2.contains(&new_s[0]));
+        assert_eq!(new.sets[0].palettes, vec![new_p[1]], "references follow");
+    }
+
     #[test]
     fn load_v1_writes_backup_once_and_saves_v2() {
         use std::os::unix::fs::PermissionsExt;

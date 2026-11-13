@@ -17,10 +17,18 @@ vi.mock("./api", () => ({
     onSection: vi.fn(async () => () => {}),
     onWizard: vi.fn(async () => () => {}),
     wizardCancel: vi.fn(),
+    saveLibrary: vi.fn(),
+    setLiveSet: vi.fn(),
+    previewSequence: vi.fn(),
+    messageCounts: vi.fn(async () => [1]),
+    previewGenerated: vi.fn(),
+    patternSequence: vi.fn(),
   },
 }));
 import { api, type WizardState } from "./api";
 import { App } from "./App";
+import { renumbering } from "./state/renumber-mock";
+import type { Library } from "./api";
 
 async function mount(root: HTMLElement) {
   await act(async () => {
@@ -116,4 +124,57 @@ it("setup_tab_undo_hint_does_not_mention_reset", async () => {
   await mount(root);
   const undo = root.querySelector("button[aria-label=Undo]");
   expect(undo?.getAttribute("data-help")).toBe("Settings apply at once.");
+});
+
+it("a_sequence_opened_from_sets_follows_its_renumbered_id", async () => {
+  const color = { h: 0, s: 1000, v: 1000 };
+  const ms = (sequences: Library["sets"][number]["rhythm"]["sequences"]) => ({
+    sequences,
+    order: "inOrder" as const,
+    interval: { bars: 4 },
+  });
+  const seq = { name: "Fresh", moment: "rhythm", steps: [{ len: "four", roles: ["principal"] }] };
+  const set = {
+    id: 1,
+    name: "Main",
+    rhythm: ms([{ id: 1_000_001 }]),
+    calm: ms(["generated"]),
+    buildup: ms(["generated"]),
+    palettes: [1],
+    paletteOrder: "inOrder",
+    paletteChange: "atDrop",
+  };
+  const lib = {
+    schemaVersion: 2,
+    shape: { pieces: [{ x: 0, y: 0, angle: 0, len: 1 }] },
+    palettes: [[1, { name: "P", principal: color, contraste: color, suave: color }]],
+    sequences: [[1_000_001, seq]],
+    sets: [set],
+    activeSet: 1,
+    activePalette: null,
+  } as unknown as Library;
+  vi.mocked(api.getLibrary).mockResolvedValue(lib);
+  vi.mocked(api.saveLibrary).mockImplementation(renumbering({ ...lib, sequences: [] }));
+  vi.mocked(api.getStatus).mockResolvedValue({ kind: "notConfigured" });
+  history.replaceState(null, "", "/?section=sets");
+  const root = document.createElement("div");
+  document.body.append(root);
+  await mount(root);
+  const click = (el?: Element) => act(async () => void (el as HTMLElement).click());
+  await act(
+    async () =>
+      void root
+        .querySelector("[data-clip='rhythm-0']")
+        ?.dispatchEvent(new Event("dblclick", { bubbles: true })),
+  );
+  const goto = (name: string) =>
+    click([...root.querySelectorAll("[role=tab]")].find((b) => b.textContent === name));
+  await goto("Sets");
+  const newSet = [...root.querySelectorAll("nav button")].find((b) =>
+    b.textContent?.includes("New set"),
+  );
+  await click(newSet); // the save renumbers 1_000_001 to 1
+  await act(async () => void (await new Promise((r) => setTimeout(r, 600))));
+  await goto("Sequences");
+  expect(root.querySelector<HTMLInputElement>("input#seq-name")?.value).toBe("Fresh");
 });

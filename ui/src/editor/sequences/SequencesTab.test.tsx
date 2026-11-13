@@ -461,4 +461,12 @@ it("a_duplicate_stays_selected_after_renumbering", async () => {
   expect(store.lib?.sequences.map(([i]) => i)).toEqual([7, 8, 9]);
   expect(q<HTMLInputElement>("input#seq-name")?.value).toBe("Pulse copy");
   expect(actions?.deleteLabel).toBe("Pulse copy");
+  // An edit after renumbering lands on the copy, not on the first sequence.
+  const input = q<HTMLInputElement>("input#seq-name");
+  await act(async () => {
+    if (input) input.value = "Renamed";
+    input?.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+  });
+  expect(store.lib?.sequences.map(([, x]) => x.name)).toEqual(["Pulse", "Drift", "Renamed"]);
 });

@@ -39,7 +39,12 @@ export function useLibrary() {
       const saved = await api.saveLibrary(sentLib);
       live.current = { activeSet: saved.activeSet, activePalette: saved.activePalette };
       // Adopt server-assigned ids unless the user edited meanwhile.
-      if (rev.current === sent) {
+      // Entries are paired by index: a save that lost or added any is not adopted (keeps the temp ids).
+      const sameShape =
+        sentLib.sets.length === saved.sets.length &&
+        sentLib.palettes.length === saved.palettes.length &&
+        sentLib.sequences.length === saved.sequences.length;
+      if (rev.current === sent && sameShape) {
         // Temporary client ids became Rust's: undo/redo states and tab selections follow.
         const map = diffIds(sentLib, saved);
         if (!isEmpty(map)) {
@@ -48,7 +53,7 @@ export function useLibrary() {
         }
         h.replace(saved);
       }
-      if (rev.current === sent) setSave({ state: "saved" });
+      if (rev.current === sent && sameShape) setSave({ state: "saved" });
       bump();
     } catch (e) {
       setSave({ state: "error", reason: String(e) });
