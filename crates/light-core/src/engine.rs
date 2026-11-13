@@ -208,6 +208,7 @@ struct Preview {
 /// Half a beat at 120 BPM: the pace of a preview while no clock runs.
 const PREVIEW_HALF_US: u64 = 250_000;
 
+#[allow(clippy::struct_excessive_bools)] // independent flags of the beat state machine
 pub struct Engine {
     cfg: EngineConfig,
     preview: Option<Preview>,
@@ -229,6 +230,8 @@ pub struct Engine {
     rebuilds: u64,
     /// The moment the last step was planned for, to see entries and drops.
     rot_moment: Option<Moment>,
+    /// A predicted drop already advanced the at-drop palette; its real drop must not.
+    drop_counted: bool,
     playing: Option<Playing>,
     pos: Option<Position>,
     last_beat_us: Option<u64>,
@@ -254,6 +257,7 @@ impl Engine {
             seed,
             rebuilds: 0,
             rot_moment: None,
+            drop_counted: false,
             cfg,
             clock: ClockTracker::new(cfg.phrase),
             sched: Scheduler::new(cfg.segments),
@@ -499,7 +503,10 @@ impl Engine {
             self.look = look;
             self.pending = None;
             if self.cfg.lights_on {
-                self.plan_rest(now_us);
+                // A preview or calibration keeps the strip; only the rest scene changes.
+                if self.preview.is_none() && !self.calibrating {
+                    self.plan_rest(now_us);
+                }
             }
         }
         self.sched.due(now_us)
@@ -578,10 +585,22 @@ impl Engine {
         if start {
             // A Start (also while running) begins a fresh show: rotation counts from here.
             self.rot_moment = None;
+            self.drop_counted = false;
         }
         let entered = self.rot_moment != Some(moment);
-        let dropped =
+        let mut dropped =
             entered && self.rot_moment == Some(Moment::BuildUp) && moment == Moment::Rhythm;
+        if dropped && self.drop_counted {
+            (dropped, self.drop_counted) = (false, false);
+        } else if dropped {
+            self.drop_counted = self.control.predicted();
+        } else if moment != Moment::BuildUp
+            && self.control.applied() != Moment::BuildUp
+            && !self.control.predicted()
+        {
+            // Confirmed (Rhythm stays) or left for Calm: the next build-up starts a new drop.
+            self.drop_counted = false;
+        }
         self.rot_moment = Some(moment);
         let bar = start || (pos.half && pos.beat_in_bar == 4);
         if entered || bar {

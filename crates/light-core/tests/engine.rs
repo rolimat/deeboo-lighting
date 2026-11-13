@@ -1209,3 +1209,59 @@ fn brightness_with_lights_off_sends_nothing() {
     s.deadlines_until(at + 10_000_000);
     assert_eq!(s.sends_in(at, u64::MAX), vec![]);
 }
+
+#[test]
+fn a_reverted_predicted_drop_and_the_real_drop_advance_the_palette_once() {
+    use light_core::library::PaletteChange::AtDrop;
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_pal_lib(AtDrop));
+    s.start();
+    // Build-up from beat 4; the phrase-start prediction (beat 15) is contradicted at beat 18,
+    // and the real drop is reported from beat 28.
+    s.beats_of(40, &mut |beat| match beat {
+        4..=27 => Some(BuildUp),
+        _ => Some(Rhythm),
+    });
+    assert_eq!(s.e.status().moment, Rhythm);
+    assert_eq!(
+        s.e.status().palette,
+        Some(2),
+        "one drop is one palette change"
+    );
+}
+
+#[test]
+fn a_confirmed_predicted_drop_does_not_swallow_the_next_drop() {
+    use light_core::library::PaletteChange::AtDrop;
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_pal_lib(AtDrop));
+    s.start();
+    s.beats_of(22, &mut |beat| match beat {
+        4..=17 => Some(BuildUp),
+        _ => Some(Rhythm),
+    });
+    assert_eq!(s.e.status().palette, Some(2));
+    // A second build-up and drop: the palette changes again.
+    s.beats_of(24, &mut |beat| match beat {
+        22..=37 => Some(BuildUp),
+        _ => Some(Rhythm),
+    });
+    assert_eq!(s.e.status().palette, Some(1));
+}
+
+#[test]
+fn saving_the_library_while_stopped_does_not_paint_over_a_preview() {
+    let mut s = sim125();
+    let out = s.e.set_preview(s.now, Some(preview_pair()));
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 600_000);
+    let mark = s.sends.len();
+    let out = s.e.set_library(s.now, &plain(4));
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 700_000);
+    let after = hues(&s.sends[mark..]);
+    assert!(
+        after.iter().all(|h| *h == 111 || *h == 222),
+        "rest scene painted over the preview: {after:?}"
+    );
+}
