@@ -14,7 +14,7 @@ test-support = []
 
 [dependencies]
 aes-gcm = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 getrandom = "0.3"
 hmac = "0.12"
 md-5 = "0.10"

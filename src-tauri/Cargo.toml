@@ -28,7 +28,7 @@ rustuya = { version = "0.4", features = ["tokio"] }
 if-addrs = "0.15"
 secrecy = { version = "0.10", features = ["serde"] }
 zeroize = { version = "1", features = ["serde"] }
-base64 = "0.22"
+base64 = "0.23"
 serde_json = "1"
 tokio = { version = "1", features = ["time", "sync", "rt", "net"] }
 midir = "0.10"
