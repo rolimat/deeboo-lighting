@@ -1763,4 +1763,48 @@ mod tests {
         assert_eq!(tone_beats(&mut d, &[0.0005], Some(start)), Moment::Rhythm);
         assert!(!d.unwrap().fresh, "only that one beat");
     }
+
+    /// One MIDI message at `at` with `amp` of an 80 Hz tone waiting for the beat that may close.
+    #[allow(clippy::cast_precision_loss)] // sample index below 2^24
+    fn tone_midi(c: &mut TestCore, at: u64, status: u8, amp: f32) {
+        c.audio.samples = (0..24_000)
+            .map(|n| amp * (n as f32 * 80.0 * std::f32::consts::TAU / 48_000.0).sin())
+            .collect();
+        c.handle(Input::Midi(MidiEvent { at_us: at, status }), at);
+    }
+
+    #[test]
+    fn a_start_marks_the_first_beat_as_partial() {
+        let (mut c, _rx, _) = core(false);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let s = Rc::clone(&seen);
+        c.set_meters(Box::new(move |e| s.borrow_mut().push(e.clone())));
+        c.handle(Input::DetectionWatch(true), 0);
+        tone_midi(&mut c, 0, 0xFA, 0.5);
+        for i in 1..=24 * 12u64 {
+            tone_midi(&mut c, i * 20_000, 0xF8, 0.5);
+        }
+        tone_midi(&mut c, 6_000_000, 0xFC, 0.5);
+        tone_midi(&mut c, 6_100_000, 0xFA, 0.5);
+        seen.borrow_mut().clear();
+        // The first tick opens capture: no audio yet, as in the app.
+        c.audio.samples.clear();
+        c.handle(
+            Input::Midi(MidiEvent {
+                at_us: 6_120_000,
+                status: 0xF8,
+            }),
+            6_120_000,
+        );
+        for i in 2..=25u64 {
+            tone_midi(&mut c, 6_100_000 + i * 20_000, 0xF8, 0.0005);
+        }
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 1, "one beat closed");
+        assert_eq!(
+            seen[0].moment,
+            Moment::Rhythm,
+            "no position for a partial beat"
+        );
+    }
 }
