@@ -31,6 +31,7 @@ Cloud and secrets
       UI shows the key masked.
 - [ ] No log contains key, tokens, User Code or QR token; a test checks this.
 - [ ] `local_key` file is 0600 and separate from the library; the key never enters the JSON config.
+- [ ] Settings file: `detectorByInput` (other audio inputs' detector values, at most 16, names checked like device names, `""` = System default) is rewritten by Rust on every save (`Settings::switch_input`); the UI's copy is ignored. Invalid files are kept as `.bad`.
 Local network
 - [ ] Connect only to RFC 1918 IPv4 in the Mac's own subnet.
 - [ ] Discovery announcements count only when the ID matches the chosen strip.

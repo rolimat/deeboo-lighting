@@ -208,6 +208,15 @@ it("arrow_keys_move_a_threshold_by_one_db", async () => {
   });
 });
 
+it("shows_the_active_inputs_values", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(
+    settings({ audioInput: "Mic B", sensitivity: 9, calmKickDb: 22 }),
+  );
+  await mount();
+  expect(root.querySelector<HTMLInputElement>("input[type=range]")?.value).toBe("4");
+  expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("22");
+});
+
 it("reset_to_defaults_is_one_call", async () => {
   await mount();
   const reset = [...root.querySelectorAll("button")].find(

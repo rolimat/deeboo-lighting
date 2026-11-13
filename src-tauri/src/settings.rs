@@ -1,6 +1,7 @@
 //! Non-secret user settings: one JSON file in the app config dir, written atomically.
 //! The strip's `local_key` never goes through here (spec §12).
 
+use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::ops::RangeInclusive;
 use std::path::Path;
@@ -41,6 +42,51 @@ pub const fn dock_visible(mode: ShowInDock, editor_open: bool) -> bool {
     matches!(mode, ShowInDock::Always) || editor_open
 }
 
+/// Most audio inputs whose detector settings are remembered besides the active one.
+pub const MAX_INPUTS: usize = 16;
+/// Key of "System default" in `detector_by_input` (never a valid device name: it is empty).
+pub const SYSTEM_DEFAULT: &str = "";
+
+/// The detector settings that belong to one audio input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DetectorConfig {
+    pub sensitivity: u8,
+    pub calm_kick_db: u8,
+    pub calm_high_db: u8,
+    pub riser_db: u8,
+}
+
+impl Default for DetectorConfig {
+    /// The "Reset to defaults" values.
+    fn default() -> Self {
+        Self {
+            sensitivity: 5,
+            calm_kick_db: 16,
+            calm_high_db: 12,
+            riser_db: 7,
+        }
+    }
+}
+
+impl DetectorConfig {
+    fn validate(self) -> Result<(), String> {
+        if !(1..=10).contains(&self.sensitivity) {
+            return Err("sensitivity must be 1 to 10".into());
+        }
+        if !CALM_KICK_DB.contains(&self.calm_kick_db) {
+            return Err("kick threshold must be 8 to 30 dB".into());
+        }
+        if !CALM_HIGH_DB.contains(&self.calm_high_db) {
+            return Err("highs threshold must be 6 to 24 dB".into());
+        }
+        if !RISER_DB.contains(&self.riser_db) {
+            return Err("riser threshold must be 3 to 15 dB".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Settings {
@@ -64,6 +110,9 @@ pub struct Settings {
     /// Show the `?` help tooltips in the editor.
     pub help_tooltips: bool,
     pub show_in_dock: ShowInDock,
+    /// Detector settings of the inputs that are not active (the active input's live in the
+    /// top-level fields above). Owned by Rust: `switch_input` rewrites it on every save.
+    pub detector_by_input: BTreeMap<String, DetectorConfig>,
 }
 
 pub const CALM_KICK_DB: RangeInclusive<u8> = 8..=30;
@@ -85,6 +134,7 @@ impl Default for Settings {
             riser_db: 7,
             help_tooltips: true,
             show_in_dock: ShowInDock::Editor,
+            detector_by_input: BTreeMap::new(),
         }
     }
 }
@@ -110,8 +160,15 @@ impl Settings {
         if ![4, 8, 16].contains(&self.phrase_bars) {
             return Err("phrase must be 4, 8 or 16 bars".into());
         }
-        if !(1..=10).contains(&self.sensitivity) {
-            return Err("sensitivity must be 1 to 10".into());
+        self.detector().validate()?;
+        if self.detector_by_input.len() > MAX_INPUTS {
+            return Err("too many audio inputs".into());
+        }
+        for (name, cfg) in &self.detector_by_input {
+            if !name.is_empty() {
+                check_name("audio input", Some(name))?;
+            }
+            cfg.validate()?;
         }
         if !(10..=100).contains(&self.brightness_pct) {
             return Err("brightness must be 10 to 100".into());
@@ -119,16 +176,52 @@ impl Settings {
         if self.lead_ms > 500 {
             return Err("lead must be 0 to 500 ms".into());
         }
-        if !CALM_KICK_DB.contains(&self.calm_kick_db) {
-            return Err("kick threshold must be 8 to 30 dB".into());
-        }
-        if !CALM_HIGH_DB.contains(&self.calm_high_db) {
-            return Err("highs threshold must be 6 to 24 dB".into());
-        }
-        if !RISER_DB.contains(&self.riser_db) {
-            return Err("riser threshold must be 3 to 15 dB".into());
-        }
         Ok(())
+    }
+
+    /// The active input's detector settings.
+    #[must_use]
+    pub const fn detector(&self) -> DetectorConfig {
+        DetectorConfig {
+            sensitivity: self.sensitivity,
+            calm_kick_db: self.calm_kick_db,
+            calm_high_db: self.calm_high_db,
+            riser_db: self.riser_db,
+        }
+    }
+
+    fn input_key(input: Option<&String>) -> String {
+        input.cloned().unwrap_or_else(|| SYSTEM_DEFAULT.to_string())
+    }
+
+    /// Call on a settings value about to replace `prev`. The map always comes from `prev` (the
+    /// UI never edits it). If the audio input changed, the outgoing input's values are kept and
+    /// the incoming input's come back, or the defaults if it is new. Old files need no migration:
+    /// their top-level values are the current input's.
+    pub fn switch_input(&mut self, prev: &Settings) {
+        self.detector_by_input = prev.detector_by_input.clone();
+        if self.audio_input == prev.audio_input {
+            return;
+        }
+        let map = &mut self.detector_by_input;
+        map.insert(Self::input_key(prev.audio_input.as_ref()), prev.detector());
+        let cfg = map
+            .remove(&Self::input_key(self.audio_input.as_ref()))
+            .unwrap_or_default();
+        while map.len() > MAX_INPUTS {
+            map.pop_first();
+        }
+        (
+            self.sensitivity,
+            self.calm_kick_db,
+            self.calm_high_db,
+            self.riser_db,
+        ) = (
+            cfg.sensitivity,
+            cfg.calm_kick_db,
+            cfg.calm_high_db,
+            cfg.riser_db,
+        );
     }
 }
 
@@ -318,6 +411,142 @@ mod tests {
         assert!(with(" padded").validate().is_err());
         assert!(with(&"a".repeat(64)).validate().is_err());
         assert!(with(&"a".repeat(63)).validate().is_ok());
+    }
+
+    fn on(input: Option<&str>) -> Settings {
+        Settings {
+            audio_input: input.map(String::from),
+            ..Settings::default()
+        }
+    }
+
+    /// What the app does on a save: the UI's value, then the switch against the stored one.
+    fn saved(prev: &Settings, mut new: Settings) -> Settings {
+        new.switch_input(prev);
+        new
+    }
+
+    #[test]
+    fn old_file_keeps_its_values_for_the_current_input() {
+        let old: Settings =
+            serde_json::from_str(r#"{"audioInput":"USB","sensitivity":8,"calmKickDb":20}"#)
+                .unwrap();
+        assert!(old.detector_by_input.is_empty());
+        let away = saved(
+            &old,
+            Settings {
+                audio_input: None,
+                ..old.clone()
+            },
+        );
+        assert_eq!(
+            away.detector(),
+            DetectorConfig::default(),
+            "new input: defaults"
+        );
+        let back = saved(
+            &away,
+            Settings {
+                audio_input: Some("USB".into()),
+                ..away.clone()
+            },
+        );
+        assert_eq!((back.sensitivity, back.calm_kick_db), (8, 20));
+    }
+
+    #[test]
+    fn each_input_keeps_its_thresholds() {
+        let a = Settings {
+            sensitivity: 9,
+            riser_db: 4,
+            ..on(Some("Mic A"))
+        };
+        let b = saved(&a, on(Some("Mic B")));
+        assert_eq!(b.detector(), DetectorConfig::default());
+        let b = Settings {
+            calm_high_db: 20,
+            ..b
+        };
+        let a2 = saved(
+            &b,
+            Settings {
+                audio_input: Some("Mic A".into()),
+                ..b.clone()
+            },
+        );
+        assert_eq!((a2.sensitivity, a2.riser_db, a2.calm_high_db), (9, 4, 12));
+        let b2 = saved(
+            &a2,
+            Settings {
+                audio_input: Some("Mic B".into()),
+                ..a2.clone()
+            },
+        );
+        assert_eq!((b2.sensitivity, b2.calm_high_db), (5, 20));
+        let sys = saved(
+            &b2,
+            Settings {
+                audio_input: None,
+                ..b2.clone()
+            },
+        );
+        assert!(!sys.detector_by_input.contains_key(SYSTEM_DEFAULT));
+        let back = saved(
+            &sys,
+            Settings {
+                audio_input: Some("Mic B".into()),
+                ..sys.clone()
+            },
+        );
+        assert!(back.detector_by_input.contains_key(SYSTEM_DEFAULT));
+        assert!(back.validate().is_ok());
+    }
+
+    #[test]
+    fn the_ui_cannot_edit_the_map_and_it_stays_bounded() {
+        let mut cur = on(Some("in0"));
+        let mut forged = cur.clone();
+        forged.detector_by_input.insert(
+            "x".into(),
+            DetectorConfig {
+                sensitivity: 9,
+                ..Default::default()
+            },
+        );
+        assert!(saved(&cur, forged).detector_by_input.is_empty());
+        for i in 1..40 {
+            let next = Settings {
+                audio_input: Some(format!("in{i}")),
+                ..cur.clone()
+            };
+            cur = saved(&cur, next);
+            assert!(cur.detector_by_input.len() <= MAX_INPUTS);
+            assert!(cur.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn the_map_is_validated() {
+        let with = |k: &str, c: DetectorConfig| {
+            let mut s = Settings::default();
+            s.detector_by_input.insert(k.into(), c);
+            s
+        };
+        let ok = DetectorConfig::default();
+        assert!(with("USB", ok).validate().is_ok());
+        assert!(with(SYSTEM_DEFAULT, ok).validate().is_ok());
+        assert!(with("bad\nname", ok).validate().is_err());
+        assert!(with(" x", ok).validate().is_err());
+        assert!(
+            with("USB", DetectorConfig { riser_db: 99, ..ok })
+                .validate()
+                .is_err()
+        );
+        let mut many = Settings::default();
+        for i in 0..=MAX_INPUTS {
+            many.detector_by_input.insert(format!("in{i}"), ok);
+        }
+        assert!(many.validate().is_err());
     }
 
     #[test]

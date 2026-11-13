@@ -411,8 +411,9 @@ impl AppState {
         lock(&self.settings).clone()
     }
 
-    fn save_settings(&self, new: Settings) -> Result<Settings, String> {
+    fn save_settings(&self, mut new: Settings) -> Result<Settings, String> {
         new.validate()?;
+        new.switch_input(&lock(&self.settings));
         let path = lock(&self.settings_path)
             .clone()
             .ok_or("settings unavailable")?;
@@ -1265,6 +1266,43 @@ mod tests {
         for unused in ["set-live-set", "list-midi-sources", "list-audio-inputs"] {
             assert!(!popover.contains(unused), "{unused}");
         }
+    }
+
+    #[test]
+    fn saving_another_input_swaps_the_detector_settings_and_persists_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let state = AppState::default();
+        state.init_settings(path.clone());
+        let a = state
+            .save_settings(Settings {
+                audio_input: Some("A".into()),
+                sensitivity: 9,
+                ..state.settings()
+            })
+            .unwrap();
+        assert_eq!(a.sensitivity, 5, "A is new: defaults");
+        state
+            .save_settings(Settings {
+                sensitivity: 9,
+                ..a
+            })
+            .unwrap();
+        let sys = state
+            .save_settings(Settings {
+                audio_input: None,
+                ..state.settings()
+            })
+            .unwrap();
+        assert_eq!(sys.sensitivity, 5);
+        let back = state
+            .save_settings(Settings {
+                audio_input: Some("A".into()),
+                ..state.settings()
+            })
+            .unwrap();
+        assert_eq!(back.sensitivity, 9);
+        assert_eq!(settings::load(&path), back, "persisted");
     }
 
     #[test]

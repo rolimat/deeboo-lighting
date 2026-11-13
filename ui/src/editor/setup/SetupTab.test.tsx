@@ -233,6 +233,17 @@ it("moment_changes_slider_saves_sensitivity", async () => {
   expect(saved()?.sensitivity).toBe(9);
 });
 
+it("picking_another_input_shows_that_inputs_sensitivity", async () => {
+  await mount();
+  // Like the backend: another input brings its own stored detector values.
+  vi.mocked(api.saveSettings).mockImplementation(async (v) => ({ ...v, sensitivity: 9 }));
+  const sel = q<HTMLSelectElement>("select[aria-label='Audio input']");
+  sel.value = "Mic B";
+  await act(async () => void sel.dispatchEvent(new Event("change", { bubbles: true })));
+  await settle();
+  expect(q<HTMLInputElement>("input[aria-label='Moment changes']").value).toBe("4");
+});
+
 it("quit_button_calls_quit", async () => {
   await mount();
   await click(q("button[aria-label='Quit Deeboo Lighting']"));

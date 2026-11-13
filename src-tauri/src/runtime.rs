@@ -265,6 +265,9 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     audio: A,
     capture: Capture,
     detect: Option<Detect>,
+    /// The audio input `detect` belongs to, and the detectors of the inputs left for now.
+    detect_key: Option<String>,
+    parked: std::collections::HashMap<Option<String>, Detect>,
     buf: Vec<f32>,
     level_db: Option<f32>,
     settings: Settings,
@@ -336,6 +339,8 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             audio,
             capture: Capture::Closed,
             detect: None,
+            detect_key: None,
+            parked: std::collections::HashMap::new(),
             buf: Vec::new(),
             level_db: None,
             settings,
@@ -452,6 +457,27 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     }
 
     /// Opens or closes the microphone to match the state; runs after every input.
+    /// Each audio input has its own detector: its learned references belong to that input's
+    /// sound. Switching parks the old one (in memory, this session only) and brings back the
+    /// new input's, or leaves none so a fresh one is made. Runs on the engine thread.
+    fn swap_detector_for_input(&mut self) {
+        let key = self.settings.audio_input.clone();
+        if self.detect_key != key {
+            if let Some(d) = self.detect.take()
+                && self.parked.len() < crate::settings::MAX_INPUTS
+            {
+                self.parked.insert(self.detect_key.clone(), d);
+            }
+            self.detect = self.parked.remove(&key);
+            self.detect_key = key;
+        }
+        if let Some(d) = self.detect.as_mut() {
+            let p = detector_params(&self.settings);
+            d.moment
+                .set_thresholds(p.calm_kick_db, p.calm_high_db, p.riser_db);
+        }
+    }
+
     fn sync_capture(&mut self) {
         let s = &self.last;
         if capture_wanted(s.playing, s.auto, s.lights_on) {
@@ -460,6 +486,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             }
             match self.audio.open(self.settings.audio_input.as_deref()) {
                 Ok(info) => {
+                    self.swap_detector_for_input();
                     if self.detect.as_ref().is_none_or(|d| d.rate != info.rate) {
                         self.detect = Some(Detect::new(info.rate, detector_params(&self.settings)));
                     }
@@ -1713,6 +1740,46 @@ mod tests {
         };
         c.handle(Input::Settings(new), 3_000_000);
         assert!(c.detect.is_some());
+    }
+
+    fn switch_input(c: &mut TestCore, input: Option<&str>, at: u64) {
+        let mut new = Settings {
+            audio_input: input.map(String::from),
+            ..c.settings.clone()
+        };
+        new.switch_input(&c.settings);
+        c.handle(Input::Settings(new), at);
+        // The next tick reopens capture on the new input.
+        c.handle(
+            Input::Midi(MidiEvent {
+                at_us: at + 20_000,
+                status: 0xF8,
+            }),
+            at + 20_000,
+        );
+    }
+
+    #[test]
+    fn each_input_has_its_own_detector_and_gets_its_references_back() {
+        let (mut c, _rx, _) = core(false);
+        start(&mut c);
+        tone_beats(&mut c.detect, &[0.5; 12], None);
+        let start_pos = Position::at(0, false, PhraseBars::Four);
+        switch_input(&mut c, Some("Mic B"), 3_000_000);
+        assert_eq!(c.detect_key.as_deref(), Some("Mic B"));
+        // Mic B learned nothing: the quiet beat is no Calm.
+        tone_beats(&mut c.detect, &[0.0005], None);
+        assert_eq!(
+            tone_beats(&mut c.detect, &[0.0005], Some(start_pos)),
+            Moment::Rhythm
+        );
+        switch_input(&mut c, None, 4_000_000);
+        tone_beats(&mut c.detect, &[0.0005], None);
+        assert_eq!(
+            tone_beats(&mut c.detect, &[0.0005], Some(start_pos)),
+            Moment::Calm,
+            "the first input still knows its loud level"
+        );
     }
 
     #[test]
