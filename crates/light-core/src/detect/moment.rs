@@ -77,6 +77,11 @@ pub struct DetectorParams {
     /// A Build-up is the last bars before a drop: one that lasts this many beats without a drop was the
     /// break itself -> Calm (and the refractory starts, as for a collapse).
     pub buildup_max_beats: u32,
+    /// Soft break (`rules.soft_break`): the bar's mean kick deficit is at least `soft_kick_db`, sub at least
+    /// `soft_sub_db`, while the highs stay within `soft_high_db` of their reference.
+    pub soft_kick_db: f32,
+    pub soft_sub_db: f32,
+    pub soft_high_db: f32,
     /// Which clock-position rules apply (they need a position from `on_beat`).
     pub rules: PositionRules,
 }
@@ -89,6 +94,8 @@ pub struct PositionRules {
     pub bar_drop: bool,
     pub late_riser: bool,
     pub aligned_bars: bool,
+    /// A phrase's first bar with the kick and sub down but the highs up is a Calm (no slow return).
+    pub soft_break: bool,
 }
 
 impl PositionRules {
@@ -97,12 +104,14 @@ impl PositionRules {
         bar_drop: true,
         late_riser: true,
         aligned_bars: true,
+        soft_break: true,
     };
     pub const NONE: Self = Self {
         phrase_quick: false,
         bar_drop: false,
         late_riser: false,
         aligned_bars: false,
+        soft_break: false,
     };
 }
 
@@ -139,6 +148,9 @@ impl Default for DetectorParams {
             collapse_beats: 16,
             refractory_beats: 16,
             buildup_max_beats: 96,
+            soft_kick_db: 5.0,
+            soft_sub_db: 3.0,
+            soft_high_db: 2.0,
             rules: PositionRules::ALL,
         }
     }
@@ -262,6 +274,12 @@ pub struct MomentDetector {
     /// Clock beat and state of a quick entry on a phrase's first beat (`phrase_quick`): the very next
     /// clock beat confirms it or undoes it.
     quick: Option<(u64, Moment)>,
+    /// Deficit sums (kick, sub, highs) of the beats of the phrase's bar 1, the count and the last clock beat.
+    soft_sum: [f32; 3],
+    soft_beats: u32,
+    soft_last: u64,
+    /// The Calm began as a soft break: no slow return, two full beats bring Rhythm back.
+    soft: bool,
 }
 
 impl MomentDetector {
@@ -303,6 +321,10 @@ impl MomentDetector {
             entry_high: 0.0,
             in_state: params.min_state_beats,
             quick: None,
+            soft_sum: [0.0; 3],
+            soft_beats: 0,
+            soft_last: 0,
+            soft: false,
         }
     }
 
@@ -392,7 +414,8 @@ impl MomentDetector {
         let may = self.in_state >= p.min_state_beats;
         let drop = (self.jump_kick && self.full_run >= p.rhythm_after_full)
             || (self.jump_high && self.full_run >= p.hats_after_full)
-            || self.near_run >= p.slow_return_beats;
+            || (!self.soft && self.near_run >= p.slow_return_beats)
+            || (self.soft && self.full_run >= p.rhythm_after_full);
         match self.moment {
             Moment::Rhythm => {
                 // A one-bar tease: the return does not hold.
@@ -479,8 +502,41 @@ impl MomentDetector {
         (next, false)
     }
 
+    /// Adds this beat's deficits to the phrase's bar 1; on its beat 4, with all four beats clocked and
+    /// consecutive, tells whether the bar is a soft break (kick and sub down, highs not).
+    #[allow(clippy::cast_precision_loss)]
+    fn soft_bar(&mut self, closed: Option<Position>, [kd, sd, hd]: [f32; 3]) -> bool {
+        let Some(c) = closed.filter(|c| c.bar_in_phrase == 1) else {
+            self.soft_beats = 0;
+            return false;
+        };
+        if c.beat_in_bar == 1 || c.beat != self.soft_last.wrapping_add(1) {
+            self.soft_sum = [0.0; 3];
+            self.soft_beats = 0;
+        }
+        self.soft_last = c.beat;
+        if self.soft_beats != u32::from(c.beat_in_bar) - 1 {
+            self.soft_beats = 0; // began mid-bar: never counts
+            return false;
+        }
+        for (acc, v) in self.soft_sum.iter_mut().zip([kd, sd, hd]) {
+            *acc += v;
+        }
+        self.soft_beats += 1;
+        if c.beat_in_bar != 4 {
+            return false;
+        }
+        let [kick, sub, high] = self.soft_sum.map(|x| x / 4.0);
+        let p = &self.p;
+        kick <= -p.soft_kick_db && sub <= -p.soft_sub_db && high >= -p.soft_high_db
+    }
+
     /// Closes the beat that started at the previous call.
-    #[allow(clippy::cast_precision_loss, clippy::similar_names)] // hop counts are tiny
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::similar_names,
+        clippy::too_many_lines
+    )] // hop counts are tiny; one pass over the beat's rules
     pub fn on_beat(&mut self, closed: Option<Position>) -> (Moment, Option<BeatFeatures>) {
         if self.hops == 0 {
             self.quick = None;
@@ -567,6 +623,14 @@ impl MomentDetector {
             (next, undo) = self.quick_move(next, closed, [quiet, full, groove_up]);
         }
 
+        let soft = p.rules.soft_break
+            && self.soft_bar(closed, [kd, sd, hd])
+            && self.moment == Moment::Rhythm
+            && next == Moment::Rhythm;
+        if soft {
+            next = Moment::Calm;
+        }
+
         if self.moment == Moment::Rhythm && kd >= -p.learn_db && hd >= -p.learn_db {
             self.kick_hist.push(kick_db);
             self.sub_hist.push(sub_db);
@@ -581,6 +645,7 @@ impl MomentDetector {
                 self.since_return = 0;
             }
             self.moment = next;
+            self.soft = soft;
             self.in_state = 0;
             self.near_run = 0;
         }
@@ -892,7 +957,11 @@ mod tests {
         assert_eq!((p.collapse_beats, p.refractory_beats), (16, 16));
         assert_eq!(p.buildup_max_beats, 96);
         assert_eq!(p.rules, PositionRules::ALL);
+        assert!(p.rules.soft_break && !PositionRules::NONE.soft_break);
         let dbs = [
+            (p.soft_kick_db, 5.0),
+            (p.soft_sub_db, 3.0),
+            (p.soft_high_db, 2.0),
             (p.learn_db, 16.0),
             (p.calm_kick_db, 16.0),
             (p.calm_high_db, 12.0),
@@ -1435,6 +1504,73 @@ mod tests {
         moments(&o)
     }
 
+    /// 32 groove beats, then beats `from..to` have a soft texture (kick down, sub down, `hats` dB highs).
+    fn soft_run(from: usize, to: usize, hats: f32, params: DetectorParams) -> Vec<Moment> {
+        let lens = beats(128.0, 80);
+        let soft = |k: usize| (from..to).contains(&k);
+        let sig = synth_gain(
+            &lens,
+            |k| if soft(k) { 0.4 } else { 1.0 },
+            |k| !soft(k),
+            |k| if soft(k) { hats } else { 0.0 },
+        );
+        let o = drive_with(&sig, &lens, params, |i| {
+            Some(Position::at(i as u64, false, PhraseBars::Eight))
+        });
+        moments(&o)
+    }
+
+    #[test]
+    fn soft_break_on_phrase_bar_one_is_calm() {
+        let m = soft_run(32, 36, 3.0, all_rules());
+        assert!(m[..35].iter().all(|&x| x == Moment::Rhythm), "{m:?}");
+        assert_eq!(m[35], Moment::Calm, "{m:?}");
+    }
+
+    #[test]
+    fn soft_bar_mid_phrase_stays_rhythm() {
+        let m = soft_run(40, 44, 3.0, all_rules());
+        assert!(m.iter().all(|&x| x == Moment::Rhythm), "{m:?}");
+    }
+
+    #[test]
+    fn quieter_mix_is_not_a_soft_break() {
+        let m = soft_run(32, 36, -6.0, all_rules());
+        assert!(m.iter().all(|&x| x == Moment::Rhythm), "{m:?}");
+    }
+
+    #[test]
+    fn soft_break_off_matches_today() {
+        let params = DetectorParams {
+            rules: PositionRules {
+                soft_break: false,
+                ..PositionRules::ALL
+            },
+            ..DetectorParams::default()
+        };
+        let m = soft_run(32, 36, 3.0, params);
+        assert!(m.iter().all(|&x| x == Moment::Rhythm), "{m:?}");
+    }
+
+    #[test]
+    fn soft_calm_ignores_the_slow_return() {
+        let m = soft_run(32, 72, 3.0, all_rules());
+        assert!(m[35..72].iter().all(|&x| x == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
+    fn soft_calm_returns_on_two_full_beats() {
+        let m = soft_run(32, 40, 3.0, all_rules());
+        assert_eq!(m[40], Moment::Calm, "{m:?}");
+        assert_eq!(m[41], Moment::Rhythm, "{m:?}");
+    }
+
+    /// Weak-kick scenarios that are not about the soft break (their highs stay at the groove level).
+    const NO_SOFT: PositionRules = PositionRules {
+        soft_break: false,
+        ..PositionRules::ALL
+    };
+
     fn all_rules() -> DetectorParams {
         DetectorParams {
             rules: PositionRules::ALL,
@@ -1502,7 +1638,7 @@ mod tests {
     fn low_eq_kill_then_weak_kick_returns_to_rhythm() {
         let m = quick(
             0,
-            PositionRules::ALL,
+            NO_SOFT,
             |k| match k {
                 ..=31 => 1.0,
                 32 => 0.0,
@@ -1648,7 +1784,7 @@ mod tests {
         // weak kicks after it (a teaser if armed) stay Rhythm.
         let m = quick(
             0,
-            PositionRules::ALL,
+            NO_SOFT,
             |k| match k {
                 ..=31 => 1.0,
                 32 => 0.4,
