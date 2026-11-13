@@ -54,6 +54,10 @@ export function SetsTab({
 }) {
   const { lib, edit } = store;
   const [sel, setSel] = useState<number | null>(null);
+  useEffect(
+    () => store.onRemap((m) => setSel((s) => (s === null ? s : (m.sets.get(s) ?? s)))),
+    [store.onRemap],
+  );
   const [q, setQ] = useState("");
   const [draft, setDraft] = useState<string | null>(null);
   const [notice, setNotice] = useState("");

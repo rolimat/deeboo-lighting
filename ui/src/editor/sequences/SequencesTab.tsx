@@ -115,7 +115,18 @@ export function SequencesTab({
 }) {
   const { lib, edit } = store;
   const [sel, setSel] = useState<Sel | null>(initial ?? null);
+  useEffect(
+    () =>
+      store.onRemap((m) =>
+        setSel((s) => (s?.k === "seq" ? { k: "seq", id: m.sequences.get(s.id) ?? s.id } : s)),
+      ),
+    [store.onRemap],
+  );
   const [previewId, setPreviewId] = useState<number | null>(null); // UI only, never saved
+  useEffect(
+    () => store.onRemap((m) => setPreviewId((p) => (p === null ? p : (m.palettes.get(p) ?? p)))),
+    [store.onRemap],
+  );
   const [role, setRole] = useState<string>("principal");
   const [zoom, setZoom] = useState(1);
   const [q, setQ] = useState("");

@@ -16,6 +16,7 @@ vi.mock("../api", () => ({
 }));
 import { api } from "../api";
 import { useLibrary } from "../state/library";
+import { renumbering } from "../state/renumber-mock";
 import { SequencesTab, type BarActions } from "./SequencesTab";
 
 const hsv = (h: number) => ({ h, s: 1000, v: 1000 });
@@ -450,4 +451,14 @@ it("unchanged_length_is_not_an_edit", async () => {
   );
   await act(() => store.undo());
   expect(q("[data-clip]")?.textContent).toContain("8 bars"); // one undo undid the last real edit, not a no-op
+});
+
+it("a_duplicate_stays_selected_after_renumbering", async () => {
+  vi.mocked(api.saveLibrary).mockImplementation(renumbering(lib()));
+  await mount();
+  actions?.onDuplicate?.();
+  await tick(600);
+  expect(store.lib?.sequences.map(([i]) => i)).toEqual([7, 8, 9]);
+  expect(q<HTMLInputElement>("input#seq-name")?.value).toBe("Pulse copy");
+  expect(actions?.deleteLabel).toBe("Pulse copy");
 });

@@ -75,6 +75,14 @@ export function PalettesTab({
   const [notice, setNotice] = useState("");
   const [drag, setDrag] = useState<Drag>(null);
   const [seqId, setSeqId] = useState<number | null>(null);
+  useEffect(
+    () =>
+      store.onRemap((m) => {
+        setSel((s) => (s === null ? s : (m.palettes.get(s) ?? s)));
+        setSeqId((s) => (s === null ? s : (m.sequences.get(s) ?? s)));
+      }),
+    [store.onRemap],
+  );
   const [onStrip, setOnStrip] = useState(false);
   const live = useRef<{ dup: () => void; del: () => void; guard: () => boolean }>({
     dup: () => {},

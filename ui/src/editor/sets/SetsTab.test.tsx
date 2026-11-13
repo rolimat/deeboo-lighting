@@ -16,6 +16,7 @@ vi.mock("../api", () => ({
 import { api } from "../api";
 import { useLibrary } from "../state/library";
 import { SetsTab } from "./SetsTab";
+import { renumbering } from "../state/renumber-mock";
 import { installDropGuard } from "../drag";
 import type { BarActions } from "../sequences/SequencesTab";
 
@@ -383,4 +384,31 @@ it("a_drop_on_the_set_name_input_is_cancelled_and_the_name_is_unchanged", async 
   off();
   expect(e.defaultPrevented).toBe(true);
   expect(q<HTMLInputElement>("#set-name")?.value).toBe(before);
+});
+
+it("a_new_set_stays_open_after_its_id_is_renumbered_and_edits_it_not_the_live_set", async () => {
+  vi.mocked(api.saveLibrary).mockImplementation(renumbering(lib()));
+  await click(qa("nav button").find((b) => b.textContent?.includes("New set")));
+  await act(async () => void (await settle(600)));
+  expect(store.lib?.sets.map((s) => s.id)).toEqual([1, 2, 3]);
+  const input = q<HTMLInputElement>("input[aria-label='Set name']");
+  expect(input?.value).toBe("New set");
+  await act(async () => {
+    if (input) input.value = "Renamed";
+    input?.dispatchEvent(new Event("input", { bubbles: true }));
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+    input?.dispatchEvent(new Event("blur", { bubbles: true }));
+    await settle();
+  });
+  expect(store.lib?.sets.map((s) => s.name)).toEqual(["Main", "Club", "Renamed"]);
+  // Undo after the save, then redo: ids stay stable and the live set never moves.
+  await act(async () => void store.undo());
+  await act(async () => void (await settle(600)));
+  expect(store.lib?.sets.map((s) => s.id)).toEqual([1, 2, 3]);
+  expect(store.lib?.activeSet).toBe(1);
+  await act(async () => void store.redo());
+  await act(async () => void (await settle(600)));
+  expect(store.lib?.sets.map((s) => s.name)).toEqual(["Main", "Club", "Renamed"]);
+  expect(store.lib?.sets.map((s) => s.id)).toEqual([1, 2, 3]);
+  expect(store.lib?.activeSet).toBe(1);
 });
