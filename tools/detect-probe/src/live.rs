@@ -63,7 +63,7 @@ pub fn looks_like_range(s: &str) -> bool {
     s.split_once('-').is_some_and(|(a, b)| num(a) && num(b))
 }
 
-/// all, none or a comma list of calm,drop,riser,bars.
+/// `all`, `none` or a comma list of `calm,drop,riser,bars`.
 pub fn parse_rules(s: &str) -> Result<PositionRules, String> {
     match s {
         "all" => return Ok(PositionRules::ALL),

@@ -331,7 +331,8 @@ impl MomentDetector {
 
     /// Adds this beat to the current bar of highs; when a bar completes, tells whether the last
     /// `riser_bars` bar means form a riser. With positions and `aligned_bars` a bar closes on the clock's
-    /// beat 4; without, every 4 beats. In a phrase's second half 3 rising bars also suffice. `late_riser` alone (`--rules riser`)
+    /// beat 4; without, every 4 beats. In a phrase's second half 3 rising bars also suffice.
+    /// `late_riser` alone (`--rules riser`)
     /// depends on the phase of the 4-beat counter, since bars are then not clock-aligned.
     #[allow(clippy::cast_precision_loss)]
     fn riser(&mut self, high_db: f32, high_ref_db: f32, closed: Option<Position>) -> bool {
@@ -546,7 +547,8 @@ impl MomentDetector {
         let high4 = mean(&self.high_prev[16 - valid..]);
         self.high4_hist.push(high4);
 
-        // Build-up evidence (used only from Calm). Bars close on clock beat 4 with positions and `aligned_bars`, else every 4 beats from the first beat.
+        // Build-up evidence (used only from Calm). Bars close on clock beat 4 with positions and
+        // `aligned_bars`, else every 4 beats from the first beat.
         let riser = self.riser(high_db, high_ref_db, closed);
         let approach = self.moment == Moment::Calm
             && self.in_state >= p.approach_calm_beats
@@ -1667,7 +1669,7 @@ mod tests {
     }
 
     #[test]
-    fn at_two_missing_kicks_enter_calm_on_the_phrase_start() {
+    fn at_kick_gone_enters_calm_on_the_phrase_start() {
         let m = moments(&groove_at(48, |k| k < 32, |_| 0.0));
         assert!(m[..32].iter().all(|&m| m == Moment::Rhythm), "{m:?}");
         assert!(m[32..].iter().all(|&m| m == Moment::Calm), "{m:?}");
