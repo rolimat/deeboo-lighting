@@ -16,7 +16,7 @@ interface Props {
   hint: string;
 }
 
-/** A dashed line over a lane: drag it, or focus it and use the arrow keys (1 dB per press). */
+/** A dashed line over a lane (its dB label lives in the lane's right column): drag it, or focus it and use the arrow keys (1 dB per press). */
 export function ThresholdLine(p: Props) {
   const stop = useRef<(() => void) | null>(null);
   useEffect(() => () => stop.current?.(), []);
@@ -60,9 +60,6 @@ export function ThresholdLine(p: Props) {
       {...useHelp(p.hint)}
     >
       <div class="absolute inset-x-0 top-2 border-t-2 border-dashed border-accent group-focus-visible:border-solid" />
-      <span class="absolute right-1.5 -top-1 select-none rounded border border-accent bg-card px-1.5 text-small text-accent">
-        {p.words}
-      </span>
     </div>
   );
 }

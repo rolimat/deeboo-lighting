@@ -14,7 +14,7 @@ const MOMENTS: Record<MomentName, [IconName, string]> = {
 /** Lanes span -60 dB (bottom) to 0 dB (top). */
 const FLOOR_DB = 60;
 const yPct = (db: number) => Math.min(100, Math.max(0, (-db / FLOOR_DB) * 100));
-const COL = "grid grid-cols-[120px_1fr]";
+const COL = "grid grid-cols-[120px_1fr_11rem]";
 const HEAD = "border-b border-r border-border bg-card p-2 text-small";
 const BAR_LABELS = ["8 bars ago", "7", "6", "5", "4", "3", "2", "1"];
 
@@ -159,6 +159,17 @@ function Lane(props: {
           );
         })}
       </div>
+      <div data-readouts class="relative h-20 border-b border-l border-border bg-card">
+        {def.lines.map((l) => (
+          <span
+            key={l.key}
+            style={{ top: `${yPct(ref + (l.above ? t[l.key] : -t[l.key]))}%` }}
+            class="absolute left-1.5 -translate-y-1/2 select-none whitespace-nowrap rounded border border-accent bg-card px-1.5 text-small text-accent"
+          >
+            {l.label} when {t[l.key]} dB {l.above ? "above" : "below"}
+          </span>
+        ))}
+      </div>
     </>
   );
 }
@@ -192,6 +203,7 @@ export function Timeline(props: {
           </span>
         ))}
       </div>
+      <div class="border-b border-l border-border bg-card" />
       <div class={HEAD}>
         <b class="t-head">Moment</b>
         <small class="mt-0.5 block text-dim">What the show used</small>
@@ -215,6 +227,7 @@ export function Timeline(props: {
           );
         })}
       </div>
+      <div class="border-b border-l border-border bg-card" />
       {LANES.map((def) => (
         <Lane key={def.id} def={def} ring={props.ring} t={props.t} onChange={props.onChange} />
       ))}
