@@ -642,8 +642,9 @@ impl MomentDetector {
         // with fresh references (a real quiet break resets the run and never ends this way).
         let mut relearn = false;
         if self.soft && self.moment == Moment::Calm && next == Moment::Calm {
-            let texture = kd <= -p.soft_kick_db && sd <= -p.soft_sub_db && hd >= -p.soft_high_db;
-            self.soft_run = if texture { self.soft_run + 1 } else { 0 };
+            // Only a beat that really breaks the texture resets the run: quiet, highs down, or full.
+            let broken = quiet || hd < -p.soft_high_db || full;
+            self.soft_run = if broken { 0 } else { self.soft_run + 1 };
             let limit = closed.map_or(64, |c| 8 * u32::from(c.phrase_bars));
             if self.soft_run >= limit {
                 (next, relearn) = (Moment::Rhythm, true);
@@ -749,6 +750,23 @@ mod tests {
         sub: impl Fn(usize) -> bool,
         high_db: impl Fn(usize) -> f32,
     ) -> Vec<f32> {
+        synth_sub(
+            lens,
+            kick,
+            kick_hz,
+            |k| if sub(k) { 1.0 } else { 0.0 },
+            high_db,
+        )
+    }
+
+    /// Like `synth_hz` with a linear sub gain per beat (1 = the usual sub, 0 = none).
+    fn synth_sub(
+        lens: &[usize],
+        kick: impl Fn(usize) -> f32,
+        kick_hz: f32,
+        sub: impl Fn(usize) -> f32,
+        high_db: impl Fn(usize) -> f32,
+    ) -> Vec<f32> {
         let (fs, tau) = (FS as f32, std::f32::consts::TAU);
         let (mut seed, mut g, mut out) = (1_u32, 0_usize, Vec::new());
         for (k, &len) in lens.iter().enumerate() {
@@ -762,8 +780,8 @@ mod tests {
                 if kick(k) > 0.0 {
                     x += kick(k) * 0.8 * (0.1 + 0.9 * (-t / 0.1).exp()) * (tau * kick_hz * t).sin();
                 }
-                if sub(k) {
-                    x += 0.05 * (tau * 25.0 * g as f32 / fs).sin();
+                if sub(k) > 0.0 {
+                    x += sub(k) * 0.05 * (tau * 25.0 * g as f32 / fs).sin();
                 }
                 g += 1;
                 out.push(x);
@@ -1705,6 +1723,51 @@ mod tests {
             + enter;
         assert!(back - enter <= 64, "{enter} {back}");
         assert!(m[back..].iter().all(|&x| x == Moment::Rhythm), "{m:?}");
+    }
+
+    #[test]
+    fn quieter_track_with_jittery_kick_still_returns() {
+        let lens = beats(128.0, 632);
+        let sig = synth_sub(
+            &lens,
+            |k| match k {
+                ..32 => 1.0,
+                _ if k % 2 == 0 => 0.53,
+                _ => 0.6,
+            },
+            80.0,
+            |k| if k < 32 { 1.0 } else { 0.53 },
+            |_| 0.0,
+        );
+        let m = moments(&drive_with(&sig, &lens, all_rules(), |i| Some(at(i))));
+        let enter = m
+            .iter()
+            .position(|&x| x == Moment::Calm)
+            .expect("soft Calm");
+        let back = m[enter..]
+            .iter()
+            .position(|&x| x == Moment::Rhythm)
+            .expect("returns")
+            + enter;
+        assert!(back - enter <= 70, "{enter} {back}");
+    }
+
+    #[test]
+    fn long_break_that_starts_soft_stays_calm() {
+        let lens = beats(128.0, 120);
+        let sig = synth_sub(
+            &lens,
+            |k| match k {
+                ..32 => 1.0,
+                32..36 => 0.4,
+                _ => 0.0,
+            },
+            80.0,
+            |k| if k < 32 { 1.0 } else { 0.0 },
+            |_| 0.0,
+        );
+        let m = moments(&drive_with(&sig, &lens, all_rules(), |i| Some(at(i))));
+        assert!(m[40..120].iter().all(|&x| x == Moment::Calm), "{m:?}");
     }
 
     #[test]
