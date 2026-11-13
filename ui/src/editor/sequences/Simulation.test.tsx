@@ -146,10 +146,44 @@ it("follows_the_clock_when_it_plays_else_120", async () => {
     });
   await tick(0);
   // The clock says: bar 1, beat 2 (half-beat 2) at 60 BPM. Steps are 2 half-beats: step 1 shows.
-  await act(() => push({ playing: true, bpm: 60, beatInBar: 2, barInPhrase: 1 }));
+  await act(() => push({ playing: true, bpm: 60, beatInBar: 2, barInPhrase: 1, phraseBars: 8 }));
   await tick(10);
   expect(fills()[1]).toBe(roleColour("principal", pal(0)));
   // 60 BPM: half a second per half-beat, so 1.2 s later we are at half-beat 4 -> step 0 again.
   await tick(1300);
   expect(fills()[0]).toBe(roleColour("principal", pal(0)));
+});
+
+it("a_16_bar_sequence_reaches_bars_9_to_16_while_the_clock_wraps_at_the_phrase", async () => {
+  let push: (s: Partial<Status>) => void = () => {};
+  vi.mocked(api.onStatus).mockImplementation(async (cb) => {
+    push = (s) => cb(s as Status);
+    return () => {};
+  });
+  const bar = (second: boolean) => ({
+    len: "four" as const,
+    roles: second ? (["off", "principal"] as const) : (["principal", "off"] as const),
+  });
+  const long: Sequence = {
+    name: "L",
+    moment: "rhythm",
+    steps: [...Array(8).fill(bar(false)), ...Array(8).fill(bar(true))],
+  };
+  await mount(pal(0), long);
+  await play();
+  const t0 = performance.now();
+  const tick = (ms: number) =>
+    act(() => {
+      const cbs = [...frames.values()];
+      frames.clear();
+      cbs.forEach((cb) => cb(t0 + ms));
+    });
+  const clock = { playing: true, bpm: 120, beatInBar: 1, barInPhrase: 1, phraseBars: 8 };
+  await act(() => push(clock));
+  await tick(0);
+  expect(fills()[0]).toBe(roleColour("principal", pal(0)));
+  // 8 bars later (16 s at 120 BPM) the clock is at bar 1 of the phrase again: this is bar 9.
+  await act(() => push(clock));
+  await tick(16_020);
+  expect(fills()[1]).toBe(roleColour("principal", pal(0)));
 });

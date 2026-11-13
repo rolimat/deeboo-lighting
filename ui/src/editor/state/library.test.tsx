@@ -27,14 +27,19 @@ function Probe() {
 }
 const tick = (ms: number) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
 
+let roots: HTMLElement[] = [];
 beforeEach(async () => {
   vi.useFakeTimers();
   vi.mocked(api.getLibrary).mockResolvedValue(lib0);
   vi.mocked(api.saveLibrary).mockImplementation(async (l) => l);
-  await act(async () => render(<Probe />, document.createElement("div")));
+  const root = document.createElement("div");
+  roots.push(root);
+  await act(async () => render(<Probe />, root));
   await tick(0);
 });
-afterEach(() => {
+afterEach(async () => {
+  await act(async () => roots.forEach((r) => render(null, r)));
+  roots = [];
   vi.useRealTimers();
   vi.resetAllMocks();
 });
@@ -146,4 +151,20 @@ it("a_save_that_loses_an_entry_is_not_adopted", async () => {
   await act(async () => h.edit((l) => ({ ...l, palettes: [[1_000_001, pal]] })));
   await tick(400);
   expect(h.lib?.palettes.map(([i]) => i)).toEqual([1_000_001]); // temp id kept, never swapped away
+});
+
+it("pending_edit_is_saved_on_beforeunload", async () => {
+  await act(async () => addPiece(1)());
+  expect(api.saveLibrary).not.toHaveBeenCalled();
+  await act(async () => void window.dispatchEvent(new Event("beforeunload")));
+  expect(api.saveLibrary).toHaveBeenCalledTimes(1);
+});
+
+it("pending_edit_is_saved_on_unmount", async () => {
+  const root = document.createElement("div");
+  await act(async () => render(<Probe />, root));
+  await tick(0);
+  await act(async () => addPiece(1)());
+  await act(async () => render(null, root));
+  expect(api.saveLibrary).toHaveBeenCalledTimes(1);
 });

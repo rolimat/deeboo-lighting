@@ -86,11 +86,15 @@ export function useLibrary() {
       },
       (e) => alive && setSave({ state: "error", reason: String(e) }),
     );
+    // An edit still on the 400 ms timer is saved when the window or the component goes away.
+    const onUnload = () => void flushNow();
+    window.addEventListener("beforeunload", onUnload);
     return () => {
       alive = false;
-      clearTimeout(timer.current);
+      window.removeEventListener("beforeunload", onUnload);
+      void flushNow();
     };
-  }, []);
+  }, [flushNow]);
 
   const edit = useCallback(
     (fn: (l: Library) => Library, opts?: { coalesce?: string }) => {

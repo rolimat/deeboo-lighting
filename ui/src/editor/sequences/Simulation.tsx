@@ -32,7 +32,8 @@ export function Simulation({
   const [visible, setVisible] = useState(document.visibilityState === "visible");
   const [half, setHalf] = useState(0);
   const bpm = useRef(FREE_BPM);
-  const sync = useRef<number | null>(null); // half-beat the clock just reported
+  const sync = useRef<number | null>(null); // half-beat in the phrase the clock just reported
+  const phrase = useRef(64); // half-beats in a phrase
 
   useEffect(() => {
     const onVis = () => setVisible(document.visibilityState === "visible");
@@ -46,6 +47,7 @@ export function Simulation({
     const apply = (st: Status) => {
       if (st.playing && st.bpm && st.beatInBar && st.barInPhrase) {
         bpm.current = st.bpm;
+        phrase.current = st.phraseBars * 8;
         sync.current = ((st.barInPhrase - 1) * 4 + (st.beatInBar - 1)) * 2;
       } else bpm.current = FREE_BPM;
     };
@@ -70,10 +72,16 @@ export function Simulation({
     let last: number | null = null;
     let pos = half;
     const frame = (ts: number) => {
+      if (last !== null) pos += ((ts - last) * bpm.current) / 30_000;
       if (sync.current !== null) {
-        pos = sync.current;
+        // The clock only knows the phrase position: keep the free-running bar (a sequence can
+        // be longer than a phrase) and move to the nearest point with that phase.
+        const P = phrase.current;
+        let d = (((sync.current - pos) % P) + P) % P;
+        if (d > P / 2) d -= P;
+        pos = pos + d < 0 ? pos + d + P : pos + d;
         sync.current = null;
-      } else if (last !== null) pos += ((ts - last) * bpm.current) / 30_000;
+      }
       last = ts;
       setHalf((h) => (Math.floor(pos) === h ? h : Math.floor(pos)));
       id = requestAnimationFrame(frame);

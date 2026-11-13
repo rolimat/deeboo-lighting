@@ -52,11 +52,15 @@ function StatusBar({ s }: { s: Status | null }) {
       <span class="h-3.5 w-px bg-border" />
       <span
         data-audio
-        class={`inline-flex items-center gap-1.5 ${s?.audio.ok ? "text-accent" : "text-dim"}`}
+        class={`inline-flex items-center gap-1.5 ${s?.audio.ok ? "text-accent" : s?.audio.failed ? "text-red" : "text-dim"}`}
       >
-        {s?.audio.ok ? "● Listening" : "○ No audio"}
+        {s?.audio.ok ? "● Listening" : s?.audio.failed ? "● Capture failed" : "○ No audio"}
         <span class="text-dim">
-          {s?.audio.ok ? (s.audio.device ?? "system default") : "Pick an input in Setup."}
+          {s?.audio.ok
+            ? (s.audio.device ?? "system default")
+            : s?.audio.failed
+              ? "It reopens when the music plays again. Check the input in Setup."
+              : "Pick an input in Setup."}
         </span>
         {s?.audio.ok && s.audio.levelDb !== undefined && <Level db={s.audio.levelDb} />}
       </span>
@@ -192,7 +196,7 @@ export function DetectionTab({ onGoSetup }: { onGoSetup: () => void }) {
         </button>
       </div>
       {live ? (
-        <Timeline ring={ring.current} t={t} onChange={setThreshold} />
+        <Timeline ring={ring.current} t={t} shift={s.sensitivity - 5} onChange={setThreshold} />
       ) : (
         <Empty s={st} onGoSetup={onGoSetup} />
       )}

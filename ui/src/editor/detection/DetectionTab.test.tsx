@@ -133,6 +133,31 @@ it("threshold_label_in_words", async () => {
   expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("14");
 });
 
+it("calm_lines_show_the_sensitivity_the_detector_applies", async () => {
+  // Sensitivity 9 lowers the calm thresholds by 4 dB; the riser is not shifted.
+  vi.mocked(api.getSettings).mockResolvedValue(settings({ sensitivity: 9 }));
+  await mount();
+  push(beat());
+  await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+  const text = root.textContent ?? "";
+  expect(text).toContain("Calm when 10 dB below");
+  expect(text).toContain("Calm when 6 dB below");
+  expect(text).toContain("Build-up when 6 dB above");
+  expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("10");
+  await act(async () => {
+    line("Kick drop").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(400);
+  });
+  // Shown 11 dB means 15 dB stored.
+  expect(api.setDetectionThresholds).toHaveBeenCalledWith({
+    calmKickDb: 15,
+    calmHighDb: 10,
+    riserDb: 6,
+  });
+});
+
 it("threshold_labels_sit_in_a_column_beside_the_waveform", async () => {
   await mount();
   push(beat());
@@ -215,7 +240,7 @@ it("shows_the_active_inputs_values", async () => {
   );
   await mount();
   expect(root.querySelector<HTMLInputElement>("input[type=range]")?.value).toBe("4");
-  expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("22");
+  expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("18"); // 22 stored, minus the sensitivity 9 shift
 });
 
 it("reset_to_defaults_is_one_call", async () => {
@@ -283,6 +308,13 @@ it("status_bar_greys_missing_clock_or_audio", async () => {
   expect(audio?.textContent).toContain("No audio");
   expect(audio?.textContent).toContain("Setup");
   expect(bar?.textContent).toContain("Live view: it moves in real time");
+});
+
+it("status_bar_says_when_the_capture_failed", async () => {
+  await mount(status({ audio: { ok: false, failed: true } }));
+  const audio = root.querySelector("[data-status-bar] [data-audio]");
+  expect(audio?.textContent).toContain("Capture failed");
+  expect(audio?.className).toContain("text-red");
 });
 
 it("status_bar_shows_listening_device", async () => {
