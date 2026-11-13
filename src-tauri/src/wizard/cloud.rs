@@ -188,7 +188,7 @@ async fn flow(
             return Err(login(WizardError::TimedOut));
         }
         // The wait doubles as the cancel check: no timer thread, no flag polling. After a failure
-        // it backs off (2 s, 4 s, ...).
+        // it backs off (4 s, 6 s).
         match timeout(POLL_EVERY * (1 + failures), inputs.recv()).await {
             Ok(Some(Input::Cancel) | None) => return Err(login(WizardError::Cancelled)),
             Ok(Some(Input::Choose(_))) => continue,
@@ -430,10 +430,19 @@ mod tests {
     #[test]
     fn a_good_poll_resets_the_failure_count() {
         let f = fake();
+        // fail, fail, not yet, fail, success: five polls; without the reset the third failure ends it.
         f.fail_polls.store(2, Ordering::SeqCst);
         f.not_yet.store(1, Ordering::SeqCst);
+        let flip = f.clone();
+        *f.on_poll.lock().unwrap() = Some(Box::new(move || {
+            // The 4th poll fails once more, after the not-yet answer of the 3rd.
+            if flip.count("/qrcode/tokens/") == 4 {
+                flip.fail_polls.store(1, Ordering::SeqCst);
+            }
+        }));
         let (out, _) = drive(&f, &["d1"], |_| {});
         assert!(out.is_ok());
+        assert_eq!(f.count("/qrcode/tokens/"), 5);
     }
 
     #[test]

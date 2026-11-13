@@ -158,16 +158,25 @@ export function Wizard({
   useEffect(() => {
     let off = () => {};
     let gone = false;
-    // A remount (tab switch) while the run continues in Rust: ask where it is. An event that
-    // arrived first is newer and wins.
+    // A remount (tab switch) while the run continues in Rust: listen first, then ask where it
+    // is; the answer applies only if no event arrived meanwhile (an event is always newer).
+    let heard = false;
     void api
-      .wizardState()
-      .then((s) => !gone && setState((cur) => (cur.kind === "idle" ? s : cur)))
-      .catch(swallow);
-    void api.onWizard(setState).then((un) => {
-      if (gone) un();
-      else off = un;
-    });
+      .onWizard((s) => {
+        heard = true;
+        setState(s);
+      })
+      .then((un) => {
+        if (gone) {
+          un();
+          return;
+        }
+        off = un;
+        void api
+          .wizardState()
+          .then((s) => !gone && !heard && setState(s))
+          .catch(swallow);
+      });
     // Closing the window mid-login must revoke the cloud session.
     const cancel = () => void api.wizardCancel().catch(swallow);
     window.addEventListener("beforeunload", cancel);

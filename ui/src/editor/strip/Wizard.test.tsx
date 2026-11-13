@@ -300,6 +300,10 @@ it("a_remounted_view_restores_the_step_from_rust", async () => {
     segments: 3,
   });
   await mount();
+  // Listening first, then asking: one more hop than the mount itself.
+  await act(async () => {
+    await settle();
+  });
   expect(root.querySelector("[data-piece]")).not.toBeNull();
 });
 
@@ -313,6 +317,18 @@ it("an_event_that_arrives_first_beats_the_restored_state", async () => {
     await settle();
   });
   expect(root.textContent).toContain("Strip a");
+});
+
+it("an_idle_event_is_not_overwritten_by_a_stale_restored_state", async () => {
+  let resolve: (s: WizardState) => void = () => {};
+  vi.mocked(api.wizardState).mockReturnValue(new Promise((r) => (resolve = r)));
+  await mount();
+  await emit({ kind: "idle" });
+  await act(async () => {
+    resolve({ kind: "identify", device: dev("a"), segments: 3 });
+    await settle();
+  });
+  expect(root.querySelector("[data-piece]")).toBeNull();
 });
 
 it("cancel_on_close_calls_wizard_cancel", async () => {

@@ -146,6 +146,10 @@ impl Wizard {
     /// The step the run is at, for a view that was unmounted meanwhile. Never a secret.
     #[must_use]
     pub fn state(&self) -> WizardState {
+        // A run that ended (saved, cancelled, finished) is Idle whatever was announced last.
+        if lock(&self.0).phase == Phase::Idle {
+            return WizardState::Idle;
+        }
         self.2
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -244,14 +248,7 @@ impl Wizard {
                     if tokio::time::timeout(IDENTIFY_WINDOW, ended).await.is_ok() {
                         return;
                     }
-                    // Untouched for too long: let the strip go and offer Retry or Cancel.
-                    let mut g = lock(&self.0);
-                    if g.phase != Phase::Identify {
-                        return;
-                    }
-                    g.ready = None;
-                    g.identify_done = None;
-                    drop(g);
+                    // Untouched for too long: Retry or Cancel, below, under one lock with the check.
                     (Step::Segments, IDENTIFY_TIMED_OUT.to_owned())
                 }
                 Ok(Err(failure)) => failure,
@@ -265,6 +262,12 @@ impl Wizard {
             let (tx, wait) = oneshot::channel();
             {
                 let mut g = lock(&self.0);
+                // A cancel that already ended the run must not be overwritten (e.g. by the identify timeout).
+                if g.phase == Phase::Idle {
+                    return;
+                }
+                g.ready = None;
+                g.identify_done = None;
                 g.phase = Phase::Failed;
                 g.lan = None;
                 g.hold = None;
@@ -903,6 +906,29 @@ mod tests {
         assert_eq!(identifies(), 2);
         w.cancel(&emit);
         assert_eq!(w.state(), WizardState::Idle);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn after_a_save_the_wizard_is_idle_and_a_new_run_starts() {
+        let l = Arc::new(lan(vec![Ok(IP), Ok(IP)], Ok(4)));
+        l.listen.lock().unwrap().push_back(Ok(4));
+        let w = Wizard::default();
+        let (rec, log) = recorder();
+        let emit = choosing(&w, rec);
+        let code = UserCode::parse("abc123").unwrap();
+        w.start(l.clone(), Arc::new(Cloud::default()), code, emit.clone())
+            .unwrap();
+        wait_for(&log, |s| matches!(s, WizardState::Identify { .. })).await;
+        let dir = tempfile::tempdir().unwrap();
+        w.save(&dir.path().join("strip.json"), &emit, 2, |_| Ok(()))
+            .unwrap();
+        assert!(matches!(
+            log.lock().unwrap().last(),
+            Some(WizardState::Saved { .. })
+        ));
+        assert_eq!(w.state(), WizardState::Idle);
+        let code = UserCode::parse("abc123").unwrap();
+        assert!(w.start(l, Arc::new(Cloud::default()), code, emit).is_ok());
     }
 
     #[tokio::test(start_paused = true)]
