@@ -22,7 +22,7 @@ I/O in `src-tauri`. Pair with the `security` skill for anything network or secre
   (decrypted reply with `dps`, no other `devId`), `Foreign` (names another device), `Rejected` (`watch_error()` set:
   decrypt/CRC/HMAC failure) or `Silent` (3 s, nothing). Saved `last_ip`: kept only on `Ours`; else the device is
   closed (one LAN client at a time) and discovery by ID runs. The device found by ID is accepted on `Ours` or `Silent`
-  (the broadcast tied the ID to that IP); `Rejected` is `Auth`/`KeyInvalid`, `Foreign` is `NotFound`. A new IP is
+  (the broadcast tied the ID to that IP); `Rejected` is `Auth`/`KeyInvalid`, `Foreign` is `NotFound`. A strip confirmed `Silent` by discovery is remembered in memory (id + IP, per session, `SilentCache`): later connects to that same IP accept `Silent` without discovery (`Rejected`/`Foreign` still fall through). A new IP is
   written to `strip.json` (re-read, `last_ip` only, 0600 helper) and kept in the task's config for redials.
 - The cloud does not advertise the segment DP (only `switch_led`, `work_mode`, `colour_data`, `countdown`) but the strip uses it locally.
 - `raw` DPs travel as base64 inside the JSON.

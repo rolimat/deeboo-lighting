@@ -3,7 +3,7 @@
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine;
@@ -137,6 +137,16 @@ enum Verdict {
     Silent,
 }
 
+/// The (device id, address) discovery confirmed for a strip that never answers a status query.
+/// In memory, per session: a Configure with another id or address simply no longer matches it.
+pub type SilentCache = Mutex<Option<(String, Ipv4Addr)>>;
+
+fn silent_here(cache: &SilentCache, id: &str, ip: Ipv4Addr) -> bool {
+    cache
+        .lock()
+        .is_ok_and(|c| c.as_ref().is_some_and(|(i, a)| i == id && *a == ip))
+}
+
 /// The saved address is only a hint: another Tuya device may hold it now. It is kept only when the
 /// device answers the status query as ours; anything else falls back to discovery by ID. The device
 /// found by ID is accepted unless it fails to authenticate (`Auth`) or answers as another device.
@@ -144,12 +154,15 @@ enum Verdict {
 async fn connect_in<L: Link>(
     link: &L,
     cfg: &StripConfig,
+    silent: &SilentCache,
 ) -> Result<(L::Conn, Ipv4Addr), StripError> {
     if let Some(ip) = cfg.last_ip
         && link.hint(ip).await
         && let Ok(conn) = link.dial(cfg, ip, None).await
     {
-        if link.verify(cfg, &conn).await == Verdict::Ours {
+        let v = link.verify(cfg, &conn).await;
+        // A strip that never answers was already tied to this address by discovery this session.
+        if v == Verdict::Ours || (v == Verdict::Silent && silent_here(silent, &cfg.id, ip)) {
             return Ok((conn, ip));
         }
         link.close(conn).await;
@@ -159,7 +172,12 @@ async fn connect_in<L: Link>(
     let conn = link.dial(cfg, found.ip, version).await?;
     // Discovery already tied our ID to this address, so silence is not a reason to refuse it.
     match link.verify(cfg, &conn).await {
-        Verdict::Ours | Verdict::Silent => {}
+        Verdict::Ours => {}
+        Verdict::Silent => {
+            if let Ok(mut c) = silent.lock() {
+                *c = Some((cfg.id.clone(), found.ip));
+            }
+        }
         v => {
             link.close(conn).await;
             return Err(if v == Verdict::Rejected {
@@ -292,8 +310,12 @@ impl Link for RealLink<'_> {
 impl Strip {
     /// # Errors
     /// `NotFound` if discovery misses the ID, `Auth` if the strip rejects the key (or cannot be read with it), `Connect` otherwise.
-    pub async fn connect(cfg: &StripConfig, store: Option<&Path>) -> Result<Self, StripError> {
-        connect_in(&RealLink { store }, cfg)
+    pub async fn connect(
+        cfg: &StripConfig,
+        store: Option<&Path>,
+        silent: &SilentCache,
+    ) -> Result<Self, StripError> {
+        connect_in(&RealLink { store }, cfg, silent)
             .await
             .map(|(device, ip)| Self { device, ip })
     }
@@ -842,12 +864,14 @@ pub fn spawn(
     rx: UnboundedReceiver<StripMsg>,
     report: impl Fn(StripStatus) + Send + 'static,
 ) {
+    let silent = Arc::new(SilentCache::default());
     tauri::async_runtime::spawn(async move {
         run(
             cfg,
             move |c: Arc<StripConfig>| {
                 let store = store.clone();
-                async move { Strip::connect(&c, store.as_deref()).await }
+                let silent = Arc::clone(&silent);
+                async move { Strip::connect(&c, store.as_deref(), &silent).await }
             },
             rx,
             report,
@@ -1629,6 +1653,7 @@ mod tests {
         dials: Mutex<Vec<Ipv4Addr>>,
         /// What each address's device does with the status query; unlisted ones answer as ours.
         verdicts: Vec<(Ipv4Addr, Verdict)>,
+        finds: Mutex<usize>,
         saved: Mutex<Vec<Ipv4Addr>>,
         closed: Mutex<Vec<Ipv4Addr>>,
     }
@@ -1641,6 +1666,7 @@ mod tests {
                 found,
                 dials: Mutex::default(),
                 verdicts: Vec::new(),
+                finds: Mutex::default(),
                 saved: Mutex::default(),
                 closed: Mutex::default(),
             }
@@ -1660,6 +1686,7 @@ mod tests {
         }
 
         fn find(&self, _: &str) -> impl Future<Output = Result<Found, StripError>> + Send {
+            *self.finds.lock().unwrap() += 1;
             std::future::ready(
                 self.found
                     .map(|ip| Found {
@@ -1774,7 +1801,7 @@ mod tests {
     }
 
     fn go(link: &FakeLink, c: &StripConfig) -> Result<Ipv4Addr, StripError> {
-        paused(connect_in(link, c)).map(|(conn, _)| conn)
+        paused(connect_in(link, c, &SilentCache::default())).map(|(conn, _)| conn)
     }
 
     fn saved(l: &FakeLink) -> Vec<Ipv4Addr> {
@@ -1802,9 +1829,32 @@ mod tests {
     }
 
     #[test]
+    fn a_confirmed_silent_strip_is_not_rediscovered_on_the_next_connect() {
+        let link = FakeLink::new(true, &[], Ok(STALE)).says(STALE, Verdict::Silent);
+        let cache = SilentCache::default();
+        let c = cfg("dj", Some(STALE));
+        paused(connect_in(&link, &c, &cache)).unwrap();
+        assert_eq!(*link.finds.lock().unwrap(), 1);
+        paused(connect_in(&link, &c, &cache)).unwrap();
+        assert_eq!(*link.finds.lock().unwrap(), 1);
+        // Another device id at the same address is not covered by the cache.
+        let other = StripConfig {
+            id: "other".into(),
+            ..cfg("dj", Some(STALE))
+        };
+        paused(connect_in(&link, &other, &cache)).unwrap();
+        assert_eq!(*link.finds.lock().unwrap(), 2);
+    }
+
+    #[test]
     fn a_silent_strip_found_at_a_new_ip_is_accepted_and_saved() {
         let link = FakeLink::new(false, &[], Ok(STRIP)).says(STRIP, Verdict::Silent);
-        let (conn, ip) = paused(connect_in(&link, &cfg("dj", Some(STALE)))).unwrap();
+        let (conn, ip) = paused(connect_in(
+            &link,
+            &cfg("dj", Some(STALE)),
+            &SilentCache::default(),
+        ))
+        .unwrap();
         assert_eq!((conn, ip), (STRIP, STRIP));
         assert_eq!(saved(&link), [STRIP]);
     }
