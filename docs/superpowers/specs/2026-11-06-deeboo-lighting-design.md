@@ -227,6 +227,13 @@ como sin estas reglas.
   mínimo de beats por estado. Si en el beat 2 vuelve el bombo, se sale ya, también sin mínimo: a **Ritmo** si el beat
   está lleno, a **Subidón** si es de subidón. El Subidón se sigue mostrando desde el inicio del compás siguiente (§6.2).
   Solo desde Ritmo: un Subidón que se queda sin bombo en el 1 de frase sigue como hoy.
+  - **El beat 2 confirma o deshace (revisión 2026-11-13):** el movimiento rápido solo se mantiene si el beat 2 (el
+    beat justo siguiente del clock) trae la misma prueba: otro beat sin bombo para la Calma, otro beat de subidón con
+    bombo para el Subidón. Si no, se deshace: a **Ritmo** si el beat 2 está lleno o no muestra nada claro; a **Calma**
+    si un Subidón rápido va seguido de un beat sin bombo; a **Subidón** si una Calma rápida va seguida de un beat de
+    subidón con bombo (respetando la pausa tras un colapso). Un beat sin bombo nunca cuenta como «vuelve el bombo».
+    Deshacer a Ritmo no cuenta como un regreso (no arma la regla del «teaser»). Si el beat 2 no se mide (sin audio,
+    luces apagadas, momento forzado), la marca se pierde y siguen las reglas normales.
 - **Drop en el 1 de compás:** desde Subidón, si el beat 1 de un compás está lleno (bombo de vuelta con salto y
   sub-bajo), basta ese beat para pasar a **Ritmo**.
 - **Riser en la segunda mitad de la frase:** si el compás que cierra el riser está en la segunda mitad de la frase

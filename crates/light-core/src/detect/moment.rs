@@ -256,8 +256,9 @@ pub struct MomentDetector {
     /// 4-beat highs mean when the current Build-up began.
     entry_high: f32,
     in_state: u32,
-    /// The state was entered on a phrase's first beat (`phrase_quick`): the next beat may leave at once.
-    quick: bool,
+    /// Clock beat and state of a quick entry on a phrase's first beat (`phrase_quick`): the very next
+    /// clock beat confirms it or undoes it.
+    quick: Option<(u64, Moment)>,
 }
 
 impl MomentDetector {
@@ -297,7 +298,7 @@ impl MomentDetector {
             jump_high: false,
             entry_high: 0.0,
             in_state: params.min_state_beats,
-            quick: false,
+            quick: None,
         }
     }
 
@@ -421,42 +422,59 @@ impl MomentDetector {
     }
 
     /// `phrase_quick`: from Rhythm, a phrase's first beat without kick is Calm (or a groove build-up is
-    /// Build-up) at once; the next beat leaves at once when the kick is back. `[quiet, full, groove_up]`.
+    /// Build-up) at once; the next clock beat confirms it or undoes it. `[quiet, full, groove_up]`.
+    /// Returns the moment and whether it is an undo to Rhythm (not a return: it must not arm the teaser).
     fn quick_move(
         &mut self,
         next: Moment,
         closed: Option<Position>,
         [quiet, full, up]: [bool; 3],
-    ) -> Moment {
-        if std::mem::take(&mut self.quick) {
-            if full {
-                return Moment::Rhythm;
+    ) -> (Moment, bool) {
+        if let Some((entry, was)) = self.quick.take() {
+            if closed.is_none_or(|c| c.beat != entry + 1) {
+                return (next, false);
             }
-            if up && self.moment == Moment::Calm && self.since_collapse >= self.p.refractory_beats {
-                return Moment::BuildUp;
-            }
-        } else if next == Moment::Rhythm
+            let build = up && !quiet;
+            let to = match was {
+                Moment::Calm if quiet => Moment::Calm,
+                Moment::Calm
+                    if !full && build && self.since_collapse >= self.p.refractory_beats =>
+                {
+                    Moment::BuildUp
+                }
+                Moment::BuildUp if build => Moment::BuildUp,
+                Moment::BuildUp if quiet => Moment::Calm,
+                _ => Moment::Rhythm,
+            };
+            // Confirmed: the normal rules carry on.
+            return if to == was {
+                (next, false)
+            } else {
+                (to, to == Moment::Rhythm)
+            };
+        }
+        if next == Moment::Rhythm
             && self.moment == Moment::Rhythm
-            && closed.is_some_and(|c| c.is_phrase_start())
+            && let Some(c) = closed.filter(Position::is_phrase_start)
         {
             let to = if quiet {
                 Moment::Calm
             } else if up {
                 Moment::BuildUp
             } else {
-                return next;
+                return (next, false);
             };
-            self.quick = true;
-            return to;
+            self.quick = Some((c.beat, to));
+            return (to, false);
         }
-        next
+        (next, false)
     }
 
     /// Closes the beat that started at the previous call.
     #[allow(clippy::cast_precision_loss, clippy::similar_names)] // hop counts are tiny
     pub fn on_beat(&mut self, closed: Option<Position>) -> (Moment, Option<BeatFeatures>) {
         if self.hops == 0 {
-            self.quick = false;
+            self.quick = None;
             return (self.moment, None);
         }
         let hops = self.hops as f32;
@@ -534,8 +552,9 @@ impl MomentDetector {
         // whenever `jump_kick` is set).
         let bar_drop = p.rules.bar_drop && closed.is_some_and(|c| c.beat_in_bar == 1);
         let mut next = self.next_moment(riser || approach, high4, bar_drop);
+        let mut undo = false;
         if p.rules.phrase_quick {
-            next = self.quick_move(next, closed, [quiet, full, groove_up]);
+            (next, undo) = self.quick_move(next, closed, [quiet, full, groove_up]);
         }
 
         if self.moment == Moment::Rhythm && kd >= -p.learn_db && hd >= -p.learn_db {
@@ -548,7 +567,7 @@ impl MomentDetector {
                 self.entry_high = high4;
                 self.collapse_run = 0;
             }
-            if next == Moment::Rhythm {
+            if next == Moment::Rhythm && !undo {
                 self.since_return = 0;
             }
             self.moment = next;
@@ -1414,6 +1433,115 @@ mod tests {
             |k| if k >= 33 { 10.0 } else { 0.0 },
         );
         assert_eq!(m[32], Moment::Calm, "{m:?}");
+        assert_eq!(m[33], Moment::BuildUp, "{m:?}");
+    }
+
+    #[test]
+    fn crash_tail_on_beat_two_is_not_a_kick() {
+        // Quiet beat 32 is a quick Calm; beat 33 has no kick either, only a loud crash tail.
+        let m = quick(
+            0,
+            PositionRules::ALL,
+            |k| if k < 32 { 1.0 } else { 0.0 },
+            |k| if k >= 33 { 10.0 } else { 0.0 },
+        );
+        assert_eq!(m[32], Moment::Calm, "{m:?}");
+        assert_eq!(m[33], Moment::Calm, "{m:?}");
+    }
+
+    #[test]
+    fn impact_then_breakdown_turns_quick_buildup_into_calm() {
+        let m = quick(
+            0,
+            PositionRules::ALL,
+            |k| match k {
+                ..=31 => 1.0,
+                32 => 0.4,
+                _ => 0.0,
+            },
+            |k| if k == 32 { 10.0 } else { 0.0 },
+        );
+        assert_eq!(m[32], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[33], Moment::Calm, "{m:?}");
+    }
+
+    #[test]
+    fn low_eq_kill_then_weak_kick_returns_to_rhythm() {
+        let m = quick(
+            0,
+            PositionRules::ALL,
+            |k| match k {
+                ..=31 => 1.0,
+                32 => 0.0,
+                _ => 0.5,
+            },
+            |_| 0.0,
+        );
+        assert_eq!(m[32], Moment::Calm, "{m:?}");
+        assert_eq!(m[33], Moment::Rhythm, "{m:?}");
+    }
+
+    #[test]
+    fn phrase_cut_return_does_not_arm_the_teaser() {
+        let m = quick(
+            0,
+            PositionRules::ALL,
+            |k| match k {
+                ..=31 | 33 => 1.0,
+                32 => 0.0,
+                _ => 0.4,
+            },
+            |_| 0.0,
+        );
+        assert_eq!(m[33], Moment::Rhythm, "{m:?}");
+        assert!(m[34..=38].iter().all(|&x| x == Moment::Rhythm), "{m:?}");
+    }
+
+    #[test]
+    fn quick_mark_needs_the_very_next_clock_beat() {
+        // Beat 32 closes clock beat 32 (quick Calm); the next call closes clock beat 34.
+        let lens = beats(128.0, 40);
+        let sig = synth_gain(
+            &lens,
+            |k| if k == 32 { 0.0 } else { 1.0 },
+            |_| true,
+            |_| 0.0,
+        );
+        let params = DetectorParams {
+            rules: PositionRules::ALL,
+            ..DetectorParams::default()
+        };
+        let o = drive_with(&sig, &lens, params, |i| {
+            let b = if i > 32 { i + 1 } else { i } as u64;
+            Some(Position::at(b, false, PhraseBars::Eight))
+        });
+        let m = moments(&o);
+        assert_eq!(m[32], Moment::Calm, "{m:?}");
+        assert_eq!(m[33], Moment::Calm, "{m:?}");
+    }
+
+    // Guard: passes before the change.
+    #[test]
+    fn quick_calm_confirmed_by_a_second_quiet_beat() {
+        let m = quick(
+            0,
+            PositionRules::ALL,
+            |k| if k < 32 { 1.0 } else { 0.0 },
+            |_| 0.0,
+        );
+        assert_eq!(m[33], Moment::Calm, "{m:?}");
+    }
+
+    // Guard: passes before the change.
+    #[test]
+    fn quick_buildup_confirmed_by_a_second_groove_beat() {
+        let m = quick(
+            0,
+            PositionRules::ALL,
+            |k| if k < 32 { 1.0 } else { 0.4 },
+            |k| if k < 32 { 0.0 } else { 10.0 },
+        );
+        assert_eq!(m[32], Moment::BuildUp, "{m:?}");
         assert_eq!(m[33], Moment::BuildUp, "{m:?}");
     }
 
