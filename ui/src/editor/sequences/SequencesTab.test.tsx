@@ -345,11 +345,10 @@ it("double_and_halve_buttons_undoable_with_limits", async () => {
   await click(bw("Halve length"));
   expect(q("[data-clip]")?.textContent).toContain("1 bar ·");
   expect(bw("Halve length")?.disabled).toBe(true);
-  await click(bw("Double length"));
-  await click(bw("Double length"));
-  await click(bw("Double length"));
-  await click(bw("Double length"));
-  expect(q("[data-clip]")?.textContent).toContain("16 bars");
+  for (const want of ["2 bars", "4 bars", "8 bars", "16 bars"]) {
+    await click(bw("Double length"));
+    expect(q("[data-clip]")?.textContent).toContain(want);
+  }
   expect(bw("Double length")?.disabled).toBe(true);
 });
 
@@ -368,7 +367,6 @@ it("drag_reaches_beyond_the_end_and_back_to_original", async () => {
     y: 0,
     toJSON() {},
   });
-  expect(root.querySelectorAll("[data-grid] > div")[0]).toBeTruthy();
   await fire(q("[role=slider]"), "pointerdown", { clientX: 400 });
   await fire(document.body, "pointermove", { clientX: 600 });
   expect(q("[data-clip]")?.textContent).toContain("3 bars");
@@ -395,4 +393,44 @@ it("grid_leaves_room_to_the_right_of_the_clip", async () => {
     if (!inRoom) expect(Number(el.getAttribute("data-seg"))).toBe(Math.floor(i / 24));
   });
   expect(g.querySelectorAll("[data-room] button, button[data-room]")).toHaveLength(0);
+});
+
+it("unchanged_length_is_not_an_edit", async () => {
+  await mount();
+  const track = q("[data-clip-track]") as HTMLElement;
+  track.getBoundingClientRect = () => ({
+    left: 0,
+    width: 400,
+    right: 400,
+    top: 0,
+    bottom: 0,
+    height: 0,
+    x: 0,
+    y: 0,
+    toJSON() {},
+  });
+  await fire(q("[role=slider]"), "pointerdown", { clientX: 400 });
+  await fire(document.body, "pointermove", { clientX: 400 }); // same 2 bars
+  await fire(document.body, "pointerup", { clientX: 400 });
+  expect(store.canUndo).toBe(false);
+  // ArrowRight at 16 bars adds no undo entry
+  for (let i = 0; i < 4; i++) await click(bw("Double length"));
+  await act(() => store.undo());
+  await act(() => store.undo());
+  await act(() => store.undo());
+  await act(() => store.undo());
+  expect(store.canUndo).toBe(false);
+  await act(() => store.redo());
+  await act(() => store.redo());
+  await act(() => store.redo());
+  await act(() => store.redo());
+  expect(q("[data-clip]")?.textContent).toContain("16 bars");
+  await act(() => store.undo()); // 8 bars, so redo is available
+  await act(() => store.redo()); // back at 16
+  const h = q("[role=slider]");
+  await act(
+    () => void h?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
+  );
+  await act(() => store.undo());
+  expect(q("[data-clip]")?.textContent).toContain("8 bars"); // one undo undid the last real edit, not a no-op
 });

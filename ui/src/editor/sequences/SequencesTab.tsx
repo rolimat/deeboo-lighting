@@ -118,6 +118,7 @@ export function SequencesTab({
   const [counts, setCounts] = useState<number[]>([]);
   const [half, setHalf] = useState<number | null>(null);
   const gesture = useRef(0);
+  const latest = useRef<{ lib?: Library; id?: number }>({}); // the drag handler outlives renders
   const helpHalve = useHelp("Halve the length: keeps the first half.");
   const helpDouble = useHelp("Double the length: repeats the sequence once.");
 
@@ -245,6 +246,7 @@ export function SequencesTab({
         { coalesce },
       );
   };
+  latest.current = { lib, id: entry?.[0] };
   const cols = shown ? toCells(shown.steps) : [];
   const bars = cols.length / BAR;
 
@@ -547,16 +549,16 @@ export function SequencesTab({
                   icon={info[2]}
                   bars={bars}
                   readOnly={readOnly}
-                  onBars={(n) =>
+                  onBars={(n) => {
                     // Against the store, not the render: a drag can reverse before a re-render.
+                    const { lib: l, id } = latest.current;
+                    const cur = l?.sequences.find(([i]) => i === id)?.[1];
+                    if (!cur || toCells(cur.steps).length === n * BAR) return;
                     editSeq(
-                      (s) =>
-                        toCells(s.steps).length === n * BAR
-                          ? s
-                          : { ...s, steps: fromCells(setBars(toCells(s.steps), n)) },
+                      (s) => ({ ...s, steps: fromCells(setBars(toCells(s.steps), n)) }),
                       `bars-${gesture.current}`,
-                    )
-                  }
+                    );
+                  }}
                 />
               }
             />
