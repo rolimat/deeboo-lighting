@@ -497,6 +497,15 @@ async fn next_control(rx: &mut UnboundedReceiver<StripMsg>) -> Option<Control> {
 /// replans on `Connected`). A failed first connection reports its status
 /// (`StripStatus::{Error, NotFound, KeyInvalid}`) and drops commands until a `Connect` retries;
 /// a `Configure` at any moment, even mid-connection, starts over with the new config.
+/// Refills the redial budget after a dropped connection, less one redial per connection that
+/// never painted; false once none is left.
+fn redial_after_drop(retries: &mut usize, unproven: usize) -> bool {
+    *retries = REDIAL_BACKOFF
+        .len()
+        .saturating_sub(unproven.saturating_sub(1));
+    *retries > 0
+}
+
 #[allow(clippy::too_many_lines)] // one reconnect state machine; splitting it hides the flow
 pub async fn run<P, Fut>(
     initial: Option<StripConfig>,
@@ -514,6 +523,9 @@ pub async fn run<P, Fut>(
     let mut tail_lit = false;
     // Automatic redials left; 0 for a first connection, a Configure or a manual Connect.
     let mut retries = 0;
+    // Connections made since the last successful paint; a strip that connects and then drops
+    // at once must not refill the redial budget.
+    let mut unproven = 0_usize;
     'connect: loop {
         // Paused: no connection and no reports; only a new config (kept) or the resume matter.
         while paused {
@@ -522,6 +534,7 @@ pub async fn run<P, Fut>(
                 Some(Control::Pause(p)) => {
                     paused = p;
                     retries = if p { 0 } else { REDIAL_BACKOFF.len() };
+                    unproven = 0;
                 }
                 None => return,
             }
@@ -547,11 +560,13 @@ pub async fn run<P, Fut>(
                         Some(Control::Configure(n)) => {
                             cfg = Some(Arc::new(n));
                             retries = 0;
+                            unproven = 0;
                             continue;
                         }
                         Some(Control::Pause(p)) => {
                             paused = p;
                             retries = if p { 0 } else { REDIAL_BACKOFF.len() };
+                            unproven = 0;
                             continue;
                         }
                     },
@@ -566,11 +581,13 @@ pub async fn run<P, Fut>(
                 Err(Some(Control::Configure(new))) => {
                     cfg = Some(Arc::new(new));
                     retries = 0;
+                    unproven = 0;
                     continue;
                 }
                 Err(Some(Control::Pause(p))) => {
                     paused = p;
                     retries = if p { 0 } else { REDIAL_BACKOFF.len() };
+                    unproven = 0;
                     continue;
                 }
                 Ok(Ok(p)) => {
@@ -588,6 +605,7 @@ pub async fn run<P, Fut>(
                     if let Some(new) = newer {
                         cfg = Some(Arc::new(new));
                         retries = 0;
+                        unproven = 0;
                     }
                     if restart {
                         continue;
@@ -596,6 +614,7 @@ pub async fn run<P, Fut>(
                     tail_lit = false;
                     painter = Some(p);
                     retries = 0;
+                    unproven += 1;
                     report(connected_status(&c));
                 }
                 Ok(Err(e)) => {
@@ -621,6 +640,7 @@ pub async fn run<P, Fut>(
                 (_, StripMsg::Pause(p)) => {
                     paused = p;
                     retries = if p { 0 } else { REDIAL_BACKOFF.len() };
+                    unproven = 0;
                     painter = None;
                     continue 'connect;
                 }
@@ -630,21 +650,31 @@ pub async fn run<P, Fut>(
                     }
                     if let Err(e) = p.paint(c.reported, &wired_cmd(&c, &cmd)).await {
                         log::warn!("strip paint failed: {e}");
-                        painter = None; // redials at once; `Connecting` is reported, not a red blip
-                        retries = REDIAL_BACKOFF.len();
-                        continue 'connect;
+                        painter = None;
+                        if !redial_after_drop(&mut retries, unproven) {
+                            report(status_of(&e));
+                            continue;
+                        }
+                        continue 'connect; // `Connecting` is reported, not a red blip
                     }
+                    unproven = 0;
                 }
                 (Some(p), StripMsg::Identify(n)) => {
                     if let Err(e) = identify_via(p, n, c.reported).await {
                         log::warn!("strip identify failed: {e}");
-                        painter = None; // redials at once; `Connecting` is reported, not a red blip
-                        retries = REDIAL_BACKOFF.len();
-                        continue 'connect;
+                        painter = None;
+                        if !redial_after_drop(&mut retries, unproven) {
+                            report(status_of(&e));
+                            continue;
+                        }
+                        continue 'connect; // `Connecting` is reported, not a red blip
                     }
                     tail_lit = n > c.segments;
                 }
-                (None, StripMsg::Connect) => continue 'connect,
+                (None, StripMsg::Connect) => {
+                    unproven = 0;
+                    continue 'connect;
+                }
                 _ => {}
             }
         }
@@ -804,6 +834,28 @@ mod tests {
             a_while().await;
         });
         assert!(!r.contains(&StripStatus::KeyInvalid), "{r:?}");
+    }
+
+    #[test]
+    fn a_connection_that_drops_at_once_does_not_reset_the_retries() {
+        let n = Arc::new(AtomicUsize::new(0));
+        let n2 = Arc::clone(&n);
+        let r = drive_task(
+            Some(cfg("dj", None)),
+            move |_| {
+                n2.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async { Ok(Fake(Arc::new(AtomicUsize::new(1)))) }) // the first paint fails
+            },
+            async |tx, _| {
+                settle().await;
+                for _ in 0..8 {
+                    tx.send(a_paint()).unwrap_or_default();
+                    a_while().await;
+                }
+            },
+        );
+        assert_eq!(n.load(Ordering::SeqCst), 6, "1 + 5 dials, then stop");
+        assert_eq!(r.last(), Some(&StripStatus::Error));
     }
 
     #[test]
