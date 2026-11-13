@@ -105,8 +105,19 @@ it("reports_its_own_visibility_to_the_backend", async () => {
   expect(api.popoverVisible).toHaveBeenLastCalledWith(true);
   setVisibility("hidden");
   expect(api.popoverVisible).toHaveBeenLastCalledWith(false);
+});
+
+it("focus_and_blur_never_report_visibility", async () => {
+  const done = syncStatus(vi.fn());
+  await vi.waitFor(() => expect(resolveGet).toBeDefined());
+  resolveGet?.(connecting);
+  await done;
+  setVisibility("visible");
+  vi.mocked(api.popoverVisible).mockClear();
+  // The tray hid the popover on blur; the page may still say "visible" for a moment.
   window.dispatchEvent(new Event("blur"));
-  expect(api.popoverVisible).toHaveBeenLastCalledWith(false);
+  window.dispatchEvent(new Event("focus"));
+  expect(api.popoverVisible).not.toHaveBeenCalled();
 });
 
 it("rereads_the_status_each_time_it_becomes_visible", async () => {

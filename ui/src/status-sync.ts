@@ -22,7 +22,5 @@ export async function syncStatus(update: (status: Status) => void): Promise<void
     if (visible) void api.getStatus().then(update, () => {});
   };
   document.addEventListener("visibilitychange", report);
-  window.addEventListener("focus", report);
-  window.addEventListener("blur", report);
   report();
 }
