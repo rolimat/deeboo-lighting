@@ -11,3 +11,5 @@
 [2026-11-08T10:00:10Z DEBUG deeboo_lighting_lib::wizard::session] identify failed: strip offline
 UserCode([REDACTED])
 [2026-11-08T10:00:11Z WARN  deeboo_lighting_lib::wizard::session] strip file not saved: permission denied
+[2026-11-08T10:00:12Z DEBUG x] local_key=[REDACTED]
+[2026-11-08T10:00:13Z DEBUG x] {"access_token":"[REDACTED]","user_code":"[REDACTED]"}

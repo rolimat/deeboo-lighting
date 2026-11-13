@@ -906,11 +906,12 @@ pub fn wizard_emit(app: &tauri::AppHandle) -> Emit {
 pub async fn wizard_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-    user_code: String,
+    user_code: secrecy::SecretString,
 ) -> Result<(), String> {
-    let code = tuya_cloud::UserCode::parse(&user_code).map_err(|_| {
-        "Enter the User Code from Smart Life (letters and digits only).".to_string()
-    })?;
+    let code = tuya_cloud::UserCode::parse(secrecy::ExposeSecret::expose_secret(&user_code))
+        .map_err(|_| {
+            "Enter the User Code from Smart Life (letters and digits only).".to_string()
+        })?;
     let handle = app.clone();
     let pause: Arc<dyn Fn(bool) + Send + Sync> =
         Arc::new(move |p| handle.state::<AppState>().send_strip_pause(p));

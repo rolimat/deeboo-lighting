@@ -33,7 +33,7 @@ Spec §10: [docs/superpowers/specs/2026-11-06-deeboo-lighting-design.md](../../.
 ## Rules
 - Hook: lefthook pre-commit runs `just precommit`. Never `--no-verify`; fix the cause.
 - Conventional Commits (`feat(scope):`, `fix:`, `docs:`, `chore:`, ...).
-- Release: pushing a `v*` tag (user's call) runs `.github/workflows/release.yml`: macOS build job (`contents: read`), then publish job (`contents: write`, `id-token`, `attestations`) with `SHA256SUMS`, build provenance and a GitHub release holding the ad-hoc signed DMG.
+- Release: pushing a `v*` tag (user's call) runs `.github/workflows/release.yml`: macOS build job (`contents: read`; runs `cargo test` and names the DMG space-free with `SHA256SUMS`), then `attest` (`id-token`, `attestations`) and `publish` (`contents: write`, the third-party upload action) as separate jobs: build provenance and a GitHub release holding the ad-hoc signed DMG.
 - Feature branch, never `main`. Ask before pushing any tag.
 - Agent docs have a budget enforced by `scripts/check-agent-docs.sh`: `AGENTS.md` <= 80 lines, each `SKILL.md` <= 100 lines, description <= 250 chars, every `references/*.md` linked from its `SKILL.md`. `rust-engineer` is exempt (vendored unchanged).
 - Convention, command or interface change: update the matching skill in the same commit.
@@ -44,3 +44,5 @@ Spec §10: [docs/superpowers/specs/2026-11-06-deeboo-lighting-design.md](../../.
 ## Checklist
 - [ ] `just precommit` green before commit.
 - [ ] Commit message is Conventional.
+
+- CI macOS job runs when `src-tauri/`, `crates/`, `tools/`, `ui/`, `Cargo.toml/lock`, toolchain or workflow files change (always on PRs).

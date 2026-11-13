@@ -15,6 +15,7 @@ export function StepUserCode({ onSubmit }: { onSubmit: (code: string) => Promise
       return;
     }
     setError(null);
+    setCode("");
     onSubmit(trimmed).catch((err: unknown) => setError(String(err)));
   };
   return (

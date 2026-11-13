@@ -177,7 +177,8 @@ fn pct_encode(s: &str) -> String {
 
 fn api_code(v: &Value) -> String {
     match &v["code"] {
-        Value::String(s) => s.clone(),
+        // Server text reaches the logs: cap it and drop control characters.
+        Value::String(s) => s.chars().filter(|c| !c.is_control()).take(32).collect(),
         Value::Number(n) => n.to_string(),
         _ => "unknown".to_owned(),
     }

@@ -336,6 +336,21 @@ fn api_error_on_signed_call_carries_code() {
 }
 
 #[test]
+fn api_error_text_is_bounded_and_has_no_control_chars() {
+    let body = format!(
+        r#"{{"success":false,"code":"x\ny\u001b[31m{}"}}"#,
+        "z".repeat(500)
+    );
+    let f = Fake::new(move |_| Ok(body.clone()));
+    let Some(CloudError::Api { code }) = start_login(&f, &code()).err() else {
+        panic!("expected Api");
+    };
+    assert!(code.chars().count() <= 32);
+    assert!(code.chars().all(|c| !c.is_control()));
+    assert!(code.starts_with("xy"));
+}
+
+#[test]
 fn signed_requests_carry_valid_signature() {
     let f = Fake::new(devices_handler);
     list_devices(&f, &session()).unwrap();

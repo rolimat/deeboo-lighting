@@ -118,6 +118,8 @@ it("user_code_validation_message", async () => {
   expect(api.wizardStart).toHaveBeenCalledWith("ab12");
   expect(root.textContent).toContain("Wizard already running.");
   expect(root.textContent).not.toContain("ab12");
+  // The code leaves component state as soon as it is sent.
+  expect((root.querySelector("input") as HTMLInputElement).value).toBe("");
 });
 
 it("renders_qr_step_with_countdown_and_cancel", async () => {

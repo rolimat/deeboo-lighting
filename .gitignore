@@ -8,3 +8,4 @@ src-tauri/gen/
 recordings/
 
 # debug-build-only permission (build.rs); release manifests do not include it
+session.log
