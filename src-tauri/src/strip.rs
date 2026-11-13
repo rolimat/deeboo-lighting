@@ -18,6 +18,8 @@ use crate::lan::on_local_subnet;
 use crate::strip_store::{self, StoreError, StripConfig};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a connected device has to answer the status query that proves it is our strip.
+const VERIFY_WINDOW: Duration = Duration::from_secs(3);
 /// Measured: the strip announces itself every ~5 s, but wifi drops some (gaps of 15 s seen).
 const DISCOVERY_WINDOW: Duration = Duration::from_secs(30);
 
@@ -70,7 +72,13 @@ pub fn load(config_dir: &Path) -> Option<StripConfig> {
         };
         return load_logged(&path);
     }
-    load_logged(&config_dir.join("strip.json"))
+    load_logged(&store_path(config_dir))
+}
+
+/// Where the strip file lives (the dev override is for loading only).
+#[must_use]
+pub fn store_path(config_dir: &Path) -> std::path::PathBuf {
+    config_dir.join("strip.json")
 }
 
 fn load_logged(path: &Path) -> Option<StripConfig> {
@@ -99,6 +107,11 @@ trait Link {
     fn hint(&self, ip: Ipv4Addr) -> impl Future<Output = bool> + Send;
     /// Finds the strip by ID through discovery.
     fn find(&self, id: &str) -> impl Future<Output = Result<Found, StripError>> + Send;
+    /// Whether the connected device answers a status query, decrypted with our key, as our strip.
+    /// With protocol 3.3 there is no handshake, so a connection alone proves nothing.
+    fn verify(&self, cfg: &StripConfig, conn: &Self::Conn) -> impl Future<Output = bool> + Send;
+    /// Persists the address the strip was found at (best effort).
+    fn remember(&self, cfg: &StripConfig, ip: Ipv4Addr);
     /// `version` is `None` when unknown (the saved-address path).
     fn dial(
         &self,
@@ -109,26 +122,86 @@ trait Link {
 }
 
 /// The saved address is only a hint: another Tuya device may hold it now, and its refusal of our key
-/// says nothing about ours. Only the device found by ID can fail with `Auth`.
+/// says nothing about ours. A connection counts only once the device answers a status query as our
+/// strip; otherwise discovery by ID runs, and only the device found by ID can fail with `Auth`.
 async fn connect_in<L: Link>(link: &L, cfg: &StripConfig) -> Result<L::Conn, StripError> {
     if let Some(ip) = cfg.last_ip
         && link.hint(ip).await
         && let Ok(conn) = link.dial(cfg, ip, None).await
+        && link.verify(cfg, &conn).await
     {
         return Ok(conn);
     }
     let found = link.find(&cfg.id).await?;
     let version = (found.version != Version::Auto).then_some(found.version);
-    link.dial(cfg, found.ip, version).await
+    let conn = link.dial(cfg, found.ip, version).await?;
+    if !link.verify(cfg, &conn).await {
+        return Err(StripError::Auth);
+    }
+    if cfg.last_ip != Some(found.ip) {
+        link.remember(cfg, found.ip);
+    }
+    Ok(conn)
 }
 
-struct RealLink;
+/// Whether a status frame is a decrypted reply holding DPs that, if it names a device, names ours.
+fn proves_our_strip(payload: &[u8], id: &str) -> bool {
+    if payload.len() > MAX_FRAME {
+        return false;
+    }
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(payload) else {
+        return false;
+    };
+    let dps = v.get("dps").or_else(|| v.get("data")?.get("dps"));
+    let named = |k: &str| v.get(k).and_then(|x| x.as_str()).is_none_or(|x| x == id);
+    dps.is_some_and(serde_json::Value::is_object) && named("devId") && named("gwId")
+}
 
-impl Link for RealLink {
+/// `store` is the strip file to keep up to date when the strip turns up at a new address.
+struct RealLink<'a> {
+    store: Option<&'a Path>,
+}
+
+impl Link for RealLink<'_> {
     type Conn = Device;
 
     async fn hint(&self, ip: Ipv4Addr) -> bool {
         on_local_subnet(ip) && tcp_reachable(ip).await
+    }
+
+    async fn verify(&self, cfg: &StripConfig, device: &Device) -> bool {
+        // Subscribe before asking so the reply cannot slip past.
+        let mut frames = DeviceFrames(device.listener());
+        if device.query().await.is_err() {
+            return false;
+        }
+        let wait = async {
+            while let Some(f) = frames.next().await {
+                if proves_our_strip(&f, &cfg.id) {
+                    return true;
+                }
+            }
+            false
+        };
+        tokio::time::timeout(VERIFY_WINDOW, wait)
+            .await
+            .unwrap_or(false)
+    }
+
+    fn remember(&self, cfg: &StripConfig, ip: Ipv4Addr) {
+        let Some(path) = self.store else { return };
+        // Re-read so a newer segment count on disk is not overwritten by this task's copy.
+        let saved = strip_store::load(path)
+            .ok()
+            .filter(|c| c.id == cfg.id)
+            .map(|mut c| {
+                c.last_ip = Some(ip);
+                c
+            })
+            .map(|c| strip_store::save(path, &c));
+        if !matches!(saved, Some(Ok(()))) {
+            log::warn!("strip address not saved");
+        }
     }
 
     async fn find(&self, id: &str) -> Result<Found, StripError> {
@@ -163,9 +236,9 @@ impl Link for RealLink {
 
 impl Strip {
     /// # Errors
-    /// `NotFound` if discovery misses the ID, `Auth` if the strip rejects the key, `Connect` otherwise.
-    pub async fn connect(cfg: &StripConfig) -> Result<Self, StripError> {
-        connect_in(&RealLink, cfg)
+    /// `NotFound` if discovery misses the ID, `Auth` if the strip rejects the key (or cannot be read with it), `Connect` otherwise.
+    pub async fn connect(cfg: &StripConfig, store: Option<&Path>) -> Result<Self, StripError> {
+        connect_in(&RealLink { store }, cfg)
             .await
             .map(|device| Self { device })
     }
@@ -684,13 +757,17 @@ pub async fn run<P, Fut>(
 /// Starts the strip task on the async runtime; it idles until a config arrives if there is none.
 pub fn spawn(
     cfg: Option<StripConfig>,
+    store: Option<std::path::PathBuf>,
     rx: UnboundedReceiver<StripMsg>,
     report: impl Fn(StripStatus) + Send + 'static,
 ) {
     tauri::async_runtime::spawn(async move {
         run(
             cfg,
-            |c: Arc<StripConfig>| async move { Strip::connect(&c).await },
+            move |c: Arc<StripConfig>| {
+                let store = store.clone();
+                async move { Strip::connect(&c, store.as_deref()).await }
+            },
             rx,
             report,
         )
@@ -1469,6 +1546,9 @@ mod tests {
         reject: Vec<Ipv4Addr>,
         found: Result<Ipv4Addr, ()>,
         dials: Mutex<Vec<Ipv4Addr>>,
+        /// Addresses that connect but never answer a status query we can read (another key).
+        mute: Vec<Ipv4Addr>,
+        saved: Mutex<Vec<Ipv4Addr>>,
     }
 
     impl FakeLink {
@@ -1478,7 +1558,14 @@ mod tests {
                 reject: reject.to_vec(),
                 found,
                 dials: Mutex::default(),
+                mute: Vec::new(),
+                saved: Mutex::default(),
             }
+        }
+
+        fn mute(mut self, ips: &[Ipv4Addr]) -> Self {
+            self.mute = ips.to_vec();
+            self
         }
     }
 
@@ -1500,6 +1587,17 @@ mod tests {
             )
         }
 
+        fn verify(&self, _: &StripConfig, conn: &Ipv4Addr) -> impl Future<Output = bool> + Send {
+            std::future::ready(!self.mute.contains(conn))
+        }
+
+        fn remember(&self, _: &StripConfig, ip: Ipv4Addr) {
+            self.saved
+                .lock()
+                .map(|mut d| d.push(ip))
+                .unwrap_or_default();
+        }
+
         fn dial(
             &self,
             _: &StripConfig,
@@ -1519,6 +1617,53 @@ mod tests {
     }
 
     const STALE: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 77);
+
+    #[test]
+    fn another_key_at_the_saved_ip_goes_to_discovery_and_saves_the_new_ip() {
+        // 3.3 connects without a handshake: the wrong device only shows by not answering the query.
+        let link = FakeLink::new(true, &[], Ok(STRIP)).mute(&[STALE]);
+        let r = paused(connect_in(&link, &cfg("dj", Some(STALE))));
+        assert_eq!(r.ok(), Some(STRIP));
+        assert_eq!(*link.dials.lock().unwrap(), [STALE, STRIP]);
+        assert_eq!(*link.saved.lock().unwrap(), [STRIP]);
+    }
+
+    #[test]
+    fn a_strip_that_moved_is_found_and_its_new_ip_saved() {
+        let link = FakeLink::new(false, &[], Ok(STRIP));
+        assert_eq!(
+            paused(connect_in(&link, &cfg("dj", Some(STALE)))).ok(),
+            Some(STRIP)
+        );
+        assert_eq!(*link.saved.lock().unwrap(), [STRIP]);
+    }
+
+    #[test]
+    fn a_rekeyed_strip_found_by_id_is_a_rejected_key_and_nothing_is_saved() {
+        let link = FakeLink::new(true, &[], Ok(STRIP)).mute(&[STALE, STRIP]);
+        let r = paused(connect_in(&link, &cfg("dj", Some(STALE))));
+        assert!(matches!(r, Err(StripError::Auth)));
+        assert!(link.saved.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_healthy_saved_ip_neither_discovers_nor_rewrites() {
+        let link = FakeLink::new(true, &[], Err(()));
+        assert!(paused(connect_in(&link, &cfg("dj", Some(STALE)))).is_ok());
+        assert!(link.saved.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_status_reply_proves_the_strip_only_with_dps_and_our_id() {
+        let ok = |p: &str| proves_our_strip(p.as_bytes(), "bf1234");
+        assert!(ok(r#"{"dps":{"20":true}}"#));
+        assert!(ok(r#"{"devId":"bf1234","dps":{"20":true}}"#));
+        assert!(ok(r#"{"data":{"dps":{"20":true}}}"#));
+        assert!(!ok(r#"{"devId":"other","dps":{"20":true}}"#));
+        assert!(!ok(r#"{"dps":[]}"#));
+        assert!(!ok(r#"{"x":1}"#));
+        assert!(!ok("garbage"));
+    }
 
     #[test]
     fn stale_last_ip_falls_back_to_discovery() {

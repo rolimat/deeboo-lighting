@@ -852,7 +852,12 @@ pub fn spawn(
     let strip_tx = {
         let (stx, srx) = unbounded_channel();
         let engine_tx = tx.clone();
-        strip::spawn(strip, srx, move |s| report_strip(&engine_tx, s));
+        let store = app
+            .path()
+            .app_config_dir()
+            .ok()
+            .map(|d| strip::store_path(&d));
+        strip::spawn(strip, store, srx, move |s| report_strip(&engine_tx, s));
         Some(stx)
     };
     let midi_tx = tx.clone();

@@ -481,7 +481,7 @@ impl Lan for RealLan {
     }
 
     async fn connect(&self, cfg: &StripConfig) -> Result<Arc<dyn Identify>, StripError> {
-        Ok(Arc::new(RealConn(Strip::connect(cfg).await?)))
+        Ok(Arc::new(RealConn(Strip::connect(cfg, None).await?)))
     }
 }
 
