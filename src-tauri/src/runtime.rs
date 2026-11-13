@@ -94,6 +94,8 @@ struct Detect {
     rate: u32,
     bands: BandAnalyzer,
     moment: MomentDetector,
+    /// No beat has been drained since the capture opened: its audio is a partial beat.
+    fresh: bool,
 }
 
 impl Detect {
@@ -105,6 +107,7 @@ impl Detect {
             rate,
             bands,
             moment: MomentDetector::new(params, hop_s),
+            fresh: true,
         }
     }
 }
@@ -127,6 +130,8 @@ fn detect_beat<A: AudioPort>(
     let peak = buf.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
     *level_db = Some((20.0 * peak.max(1e-6).log10()).round());
     d.bands.process(buf, &mut |f| d.moment.push(f));
+    let partial = std::mem::take(&mut d.fresh);
+    let closed = closed.filter(|_| !partial);
     let (moment, f) = d.moment.on_beat(closed);
     *features = f.map(|f| (f, moment));
     Some(moment)
@@ -450,6 +455,9 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 Ok(info) => {
                     if self.detect.as_ref().is_none_or(|d| d.rate != info.rate) {
                         self.detect = Some(Detect::new(info.rate, detector_params(&self.settings)));
+                    }
+                    if let Some(d) = self.detect.as_mut() {
+                        d.fresh = true;
                     }
                     self.buf = Vec::with_capacity((info.rate * RING_SECONDS) as usize);
                     self.capture = Capture::Open(info.name);
@@ -1716,5 +1724,43 @@ mod tests {
         );
         assert_eq!(*paints.borrow(), 2, "dot went green");
         assert_eq!(c.tray_due, None, "stopped: no tray deadline");
+    }
+
+    /// Feeds half-second beats of an 80 Hz tone, one amplitude each; the last gets `last`.
+    #[allow(clippy::cast_precision_loss)] // sample index below 2^24
+    fn tone_beats(d: &mut Option<Detect>, amps: &[f32], last: Option<Position>) -> Moment {
+        let mut audio = FakeAudio::default();
+        let (mut buf, mut db, mut f) = (Vec::new(), None, None);
+        let mut out = Moment::Rhythm;
+        for (i, a) in amps.iter().enumerate() {
+            audio.samples = (0..24_000)
+                .map(|n| a * (n as f32 * 80.0 * std::f32::consts::TAU / 48_000.0).sin())
+                .collect();
+            let pos = if i + 1 == amps.len() { last } else { None };
+            out = detect_beat(&mut audio, d, &mut buf, &mut db, &mut f, pos).unwrap();
+        }
+        out
+    }
+
+    fn learned() -> Option<Detect> {
+        let mut d = Some(Detect::new(48_000, DetectorParams::default()));
+        tone_beats(&mut d, &[0.5; 12], None);
+        d
+    }
+
+    #[test]
+    fn a_normal_beat_gives_the_detector_its_position() {
+        let mut d = learned();
+        let start = Position::at(0, false, PhraseBars::Four);
+        assert_eq!(tone_beats(&mut d, &[0.0005], Some(start)), Moment::Calm);
+    }
+
+    #[test]
+    fn the_first_beat_after_capture_opens_has_no_position() {
+        let mut d = learned();
+        d.as_mut().unwrap().fresh = true; // as `sync_capture` leaves it
+        let start = Position::at(0, false, PhraseBars::Four);
+        assert_eq!(tone_beats(&mut d, &[0.0005], Some(start)), Moment::Rhythm);
+        assert!(!d.unwrap().fresh, "only that one beat");
     }
 }
