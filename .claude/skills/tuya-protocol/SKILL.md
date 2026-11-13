@@ -17,10 +17,13 @@ I/O in `src-tauri`. Pair with the `security` skill for anything network or secre
   redial raced ours and a refused redial looked like a bad key). A paint/identify failure or a resume redials with the
   saved config: 5 attempts, waits 0.5/1/2/4/8 s, then repaints. Only a first connection or exhausted retries report
   `KeyInvalid`/`Error`; Lights on retries from any failure. Nothing clears `strip.json` but the wizard saving a new one.
-- Protocol 3.3 has no handshake: `wait_connected` succeeds against any device on port 6668. So `connect_in` calls
-  `query()` after every dial and requires a decrypted reply with a `dps` object (and our `devId`/`gwId` if named) within
-  3 s. The saved `last_ip` failing that falls back to discovery by ID; the device found by ID failing it is `Auth`
-  (`KeyInvalid`). A strip found at a new IP is written to `strip.json` (re-read, `last_ip` only, 0600 helper).
+- Protocol 3.3 has no handshake: `wait_connected` succeeds against any device on port 6668, and it is unverified
+  whether the strip answers a plain `query()`. So `connect_in` queries after each dial and gets a `Verdict`: `Ours`
+  (decrypted reply with `dps`, no other `devId`), `Foreign` (names another device), `Rejected` (`watch_error()` set:
+  decrypt/CRC/HMAC failure) or `Silent` (3 s, nothing). Saved `last_ip`: kept only on `Ours`; else the device is
+  closed (one LAN client at a time) and discovery by ID runs. The device found by ID is accepted on `Ours` or `Silent`
+  (the broadcast tied the ID to that IP); `Rejected` is `Auth`/`KeyInvalid`, `Foreign` is `NotFound`. A new IP is
+  written to `strip.json` (re-read, `last_ip` only, 0600 helper) and kept in the task's config for redials.
 - The cloud does not advertise the segment DP (only `switch_led`, `work_mode`, `colour_data`, `countdown`) but the strip uses it locally.
 - `raw` DPs travel as base64 inside the JSON.
 
