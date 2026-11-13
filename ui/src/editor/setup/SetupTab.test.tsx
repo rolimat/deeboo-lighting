@@ -244,7 +244,7 @@ it("copy_never_names_midi_sync", async () => {
   await settle();
   const all =
     (root.textContent ?? "") +
-    [...root.querySelectorAll("[title]")].map((e) => e.getAttribute("title")).join();
+    [...root.querySelectorAll("[data-help]")].map((e) => e.getAttribute("data-help")).join();
   expect(all).not.toMatch(/midi sync/i);
   for (const t of [
     "Where the tempo comes from. Deeboo Lighting listens; it never sends.",

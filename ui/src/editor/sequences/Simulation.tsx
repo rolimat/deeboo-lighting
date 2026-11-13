@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { Status } from "../../api";
 import { api, type Palette, type Piece, type Sequence } from "../api";
 import { Icon } from "../../icons/Icon";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import { bounds } from "../strip/shape";
 import { stepAt } from "./player";
 import { roleColour } from "./RolePicker";
@@ -93,6 +95,7 @@ export function Simulation({
         type="button"
         aria-label={playing ? "Pause" : "Play"}
         aria-pressed={playing}
+        {...help(H.simulation)}
         onClick={() => setPlaying((p) => !p)}
         class={`grid h-7 w-7 shrink-0 place-items-center rounded-lg border ${playing ? "border-accent text-accent" : "border-border text-dim"}`}
       >

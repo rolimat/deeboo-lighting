@@ -1,4 +1,6 @@
 import { Icon } from "../../icons/Icon";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import type { IconName } from "../../icons";
 import type { MomentName } from "../../api";
 import type { MomentSet, Order, Palette, SeqRef, Sequence } from "../api";
@@ -33,7 +35,7 @@ export function OrderPicker({
           type="button"
           key={o}
           aria-label={name}
-          title={name}
+          {...help(H.order[o])}
           aria-pressed={o === value}
           onClick={() => onChange(o)}
           class="grid place-items-center px-1.5 py-1"
@@ -130,7 +132,7 @@ export function Track(p: TrackProps) {
           <label class="flex min-w-0 items-center gap-1">
             <span class="hidden @[26rem]:inline">Change every</span>
             <select
-              title="Change every"
+              {...help(H.changeEvery(p.label))}
               aria-label={`${p.label} change every`}
               value={value}
               onChange={(e) => p.onInterval(e.currentTarget.value)}
@@ -152,7 +154,7 @@ export function Track(p: TrackProps) {
               <button
                 type="button"
                 aria-label={`Preview ${d.name} on strip`}
-                title="Hold to preview on the strip"
+                {...help(H.previewClip)}
                 onPointerDown={() => p.onPreview(ref, true)}
                 onPointerUp={() => p.onPreview(ref, false)}
                 onPointerLeave={() => p.onPreview(ref, false)}
@@ -164,7 +166,7 @@ export function Track(p: TrackProps) {
               <button
                 type="button"
                 aria-label={`Remove ${d.name}`}
-                title="Remove from set"
+                {...help(H.removeClip)}
                 onClick={() => p.onRemove(i)}
                 class="grid place-items-center text-dim"
               >
@@ -177,6 +179,7 @@ export function Track(p: TrackProps) {
               key={i}
               data-clip={`${p.field}-${i}`}
               draggable
+              {...help(H.clip)}
               onDragStart={(e) => {
                 e.dataTransfer?.setData("text/plain", d.name);
                 p.onDragClip(i);
@@ -196,7 +199,7 @@ export function Track(p: TrackProps) {
                 <span class="flex min-w-0 items-center gap-1.5">
                   <span class="truncate">{d.name}</span>
                   {d.generated && (
-                    <span data-generated class="text-accent" title="Generated from your strip">
+                    <span data-generated class="text-accent" {...help(H.generated)}>
                       <Icon name="generated" />
                     </span>
                   )}
@@ -234,6 +237,7 @@ export function Track(p: TrackProps) {
         })}
         <div
           data-zone
+          {...help(H.trackZone)}
           onDragOver={over}
           onDrop={(e) => {
             e.preventDefault();

@@ -1,3 +1,6 @@
+import { help } from "./Help";
+import { H } from "../help-texts";
+
 export function ConfirmDelete({
   label,
   onConfirm,
@@ -20,6 +23,7 @@ export function ConfirmDelete({
           <button
             type="button"
             onClick={onCancel}
+            {...help(H.cancelDelete)}
             class="rounded-card border border-border px-4 py-2"
           >
             Cancel
@@ -27,6 +31,7 @@ export function ConfirmDelete({
           <button
             type="button"
             onClick={onConfirm}
+            {...help(H.confirmDelete)}
             class="rounded-card bg-red px-4 py-2 text-white"
           >
             Delete

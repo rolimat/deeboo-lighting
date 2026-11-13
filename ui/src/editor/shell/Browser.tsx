@@ -1,4 +1,6 @@
 import { useState } from "preact/hooks";
+import { help } from "./Help";
+import { H } from "../help-texts";
 
 export interface BrowserItem {
   id: number;
@@ -25,6 +27,7 @@ export function Browser({
         type="search"
         aria-label={`Search ${title.toLowerCase()}`}
         placeholder="Search"
+        {...help(H.search(title))}
         value={q}
         onInput={(e) => setQ(e.currentTarget.value)}
         class="w-full rounded-card border border-border bg-card px-3 py-2"
@@ -35,6 +38,7 @@ export function Browser({
             <button
               type="button"
               aria-current={i.id === selected ? "true" : undefined}
+              {...help(H.browserItem(title))}
               onClick={() => onSelect(i.id)}
               class={`block w-full rounded-card px-3 py-2 text-left ${i.id === selected ? "bg-card text-accent" : ""}`}
             >

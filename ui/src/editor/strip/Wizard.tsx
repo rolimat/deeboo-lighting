@@ -1,5 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { api, type WizardState } from "../api";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import { QrCanvas } from "./QrCanvas";
 import { StepChoose } from "./StepChoose";
 import { StepIdentify } from "./StepIdentify";
@@ -30,6 +32,7 @@ function CancelButton() {
     <button
       type="button"
       onClick={() => void api.wizardCancel().catch(swallow)}
+      {...help(H.wizardCancel)}
       class="rounded-card border border-border px-4 py-2"
     >
       Cancel
@@ -106,7 +109,12 @@ function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
       return (
         <div class="space-y-4">
           <p>{`Connected: ${state.device.name} (${state.segments} segments).`}</p>
-          <button type="button" onClick={onDone} class="rounded-card bg-green px-4 py-2">
+          <button
+            type="button"
+            onClick={onDone}
+            class="rounded-card bg-green px-4 py-2"
+            {...help(H.drawShape)}
+          >
             Draw the shape
           </button>
         </div>
@@ -120,6 +128,7 @@ function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
           <button
             type="button"
             onClick={() => void api.wizardRetry().catch(swallow)}
+            {...help(H.wizardRetry)}
             class="rounded-card bg-green px-4 py-2"
           >
             Retry

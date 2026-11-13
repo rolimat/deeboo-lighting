@@ -1,4 +1,6 @@
 import { useRef } from "preact/hooks";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import type { Hsv } from "../api";
 import { css } from "../sequences/RolePicker";
 import { fromWheel, wheelPoint } from "./colour";
@@ -29,6 +31,7 @@ export function ColourWheel({ value, onChange }: { value: Hsv; onChange: (c: Hsv
       role="group"
       tabIndex={0}
       aria-label="Colour wheel: hue and saturation"
+      {...help(H.wheel)}
       class="wheel relative h-44 w-44 shrink-0 touch-none rounded-full"
       onPointerDown={(e) => {
         down.current = true;

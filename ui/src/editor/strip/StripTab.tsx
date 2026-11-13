@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, type Piece } from "../api";
-import { useHelpOn } from "../shell/Help";
+import { help, useHelpOn } from "../shell/Help";
+import { H } from "../help-texts";
 import type { useLibrary } from "../state/library";
 import { Guide } from "./Guide";
 import { PRESETS, preset } from "./presets";
@@ -91,6 +92,7 @@ export function StripTab({
           <button
             key={x.name}
             type="button"
+            {...help(H.preset(x.label))}
             onClick={() => {
               setShape(preset(x.name, pieces.length || wired));
               setSelected(null);

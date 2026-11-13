@@ -1,3 +1,5 @@
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import { useEffect, useRef, useState } from "preact/hooks";
 
 const KEY = "deeboo.stripGuide";
@@ -43,7 +45,7 @@ export function Guide({ helpOn }: { helpOn: boolean }) {
           Click a piece: that segment lights up on the real strip, so you can check it matches.
         </li>
       </ol>
-      <button type="button" onClick={close} class="text-dim underline">
+      <button type="button" onClick={close} class="text-dim underline" {...help(H.guideClose)}>
         Got it
       </button>
     </aside>

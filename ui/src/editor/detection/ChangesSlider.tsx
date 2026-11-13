@@ -1,3 +1,6 @@
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
+
 /** Five steps of "Moment changes" <-> detector sensitivity 1..10 (shared with Setup). */
 const SENSITIVITY = [1, 3, 5, 7, 9];
 const EXPLAIN = [
@@ -32,6 +35,7 @@ export function ChangesSlider(props: {
       <input
         type="range"
         aria-label="Moment changes"
+        {...help(H.momentChanges)}
         min={0}
         max={4}
         step={1}

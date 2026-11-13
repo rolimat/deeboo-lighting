@@ -1,6 +1,8 @@
 import { useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import type { Palette } from "../api";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import { BAR, MAX_BARS, type Cols } from "./cells";
 import { roleColour } from "./RolePicker";
 
@@ -124,6 +126,7 @@ export function ArrangementGrid({
                   type="button"
                   key={`${s}-${c}`}
                   data-seg={s}
+                  {...help(H.cell)}
                   data-col={c}
                   tabIndex={s === 0 && c === 0 ? 0 : -1}
                   aria-label={`Segment ${s + 1}, ${pos(c)}: ${ROLE_NAMES[role] ?? role}`}

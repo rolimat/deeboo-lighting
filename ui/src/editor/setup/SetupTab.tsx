@@ -7,7 +7,8 @@ import { api } from "../api";
 import { patchSettings } from "../state/settings";
 import { ChangesSlider } from "../detection/ChangesSlider";
 import { Level } from "../detection/DetectionTab";
-import { useHelp } from "../shell/Help";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 
 const LEAD_MAX = 500; // Rust `Settings::validate`
 const LEAD_STEP = 10;
@@ -112,9 +113,6 @@ export function SetupTab() {
     if (noCalibrate) calibrate(false);
   }, [noCalibrate]);
 
-  const helpMidi = useHelp("Pick the app or device that sends the MIDI clock.");
-  const helpAudio = useHelp("The input the detector listens to.");
-  const helpLead = useHelp("How much earlier the app sends light, in milliseconds.");
   if (!s) return <p class="text-red">{err}</p>;
 
   const apply = (patch: Partial<Settings>) => {
@@ -141,7 +139,7 @@ export function SetupTab() {
             class={`${field} min-w-60`}
             value={s.midiSource ?? ""}
             onChange={(e) => apply({ midiSource: e.currentTarget.value || null })}
-            {...helpMidi}
+            {...help(H.midiInput)}
           >
             <option value="">Virtual port (Deeboo Lighting In)</option>
             {sources.map((m) => (
@@ -175,7 +173,7 @@ export function SetupTab() {
             class={`${field} min-w-60`}
             value={s.audioInput ?? ""}
             onChange={(e) => apply({ audioInput: e.currentTarget.value || null })}
-            {...helpAudio}
+            {...help(H.audioInput)}
           >
             <option value="">System default</option>
             {(s.audioInput && !audio.includes(s.audioInput) ? [s.audioInput, ...audio] : audio).map(
@@ -210,6 +208,7 @@ export function SetupTab() {
             <button
               type="button"
               aria-label="Send 10 ms later"
+              {...help(H.leadLater)}
               class="px-2.5 py-1 hover:bg-card disabled:opacity-40"
               disabled={s.leadMs <= 0}
               onClick={() => setLead(s.leadMs - LEAD_STEP)}
@@ -229,12 +228,13 @@ export function SetupTab() {
                   e.currentTarget.value = String(s.leadMs);
                 } else setLead(n);
               }}
-              {...helpLead}
+              {...help(H.leadInput)}
             />
             <span class="pr-1 text-dim">ms</span>
             <button
               type="button"
               aria-label="Send earlier by 10 ms more"
+              {...help(H.leadEarlier)}
               class="px-2.5 py-1 hover:bg-card disabled:opacity-40"
               disabled={s.leadMs >= LEAD_MAX}
               onClick={() => setLead(s.leadMs + LEAD_STEP)}
@@ -245,6 +245,7 @@ export function SetupTab() {
           <button
             type="button"
             aria-label="Calibrate"
+            {...help(H.calibrate)}
             class={`${btn} ${calibrating ? "border-accent text-accent" : ""}`}
             disabled={!st || (!!noCalibrate && !calibrating)}
             onClick={() => calibrate(!calibrating)}
@@ -280,6 +281,7 @@ export function SetupTab() {
                 type="button"
                 role="radio"
                 aria-checked={s.phraseBars === n}
+                {...help(H.phraseBars(n))}
                 class="px-3 py-1"
                 onClick={() => apply({ phraseBars: n })}
               >
@@ -298,6 +300,7 @@ export function SetupTab() {
         <Row label="Show in Dock">
           <select
             aria-label="Show in Dock"
+            {...help(H.dock)}
             class={`${field} min-w-60`}
             value={s.showInDock}
             onChange={(e) => apply({ showInDock: e.currentTarget.value as Settings["showInDock"] })}
@@ -320,6 +323,7 @@ export function SetupTab() {
         <button
           type="button"
           aria-label="Quit Deeboo Lighting"
+          {...help(H.quit)}
           class={`${btn} text-red`}
           onClick={() => void api.quit()}
         >

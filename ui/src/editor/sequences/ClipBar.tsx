@@ -1,6 +1,8 @@
 import { useRef } from "preact/hooks";
 import { Icon } from "../../icons/Icon";
 import type { IconName } from "../../icons";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import { MAX_BARS } from "./cells";
 
 /** The sequence as one clip: its length in whole bars, stretched from the right edge. */
@@ -53,7 +55,7 @@ export function ClipBar({
             aria-valuemax={MAX_BARS}
             aria-valuenow={bars}
             aria-valuetext={`${bars} ${bars === 1 ? "bar" : "bars"}`}
-            title="Drag to change the length (whole bars)"
+            {...help(H.clipLength)}
             onPointerDown={drag}
             onKeyDown={(e) => {
               const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;

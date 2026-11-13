@@ -8,7 +8,8 @@ import { StripTab } from "./strip/StripTab";
 import { DetectionTab } from "./detection/DetectionTab";
 import { Wizard, wizardLine } from "./strip/Wizard";
 import { SetupTab } from "./setup/SetupTab";
-import { HelpProvider } from "./shell/Help";
+import { HelpProvider, help } from "./shell/Help";
+import { H } from "./help-texts";
 import { TopBar, TABS, type Tab } from "./shell/TopBar";
 import { useLibrary } from "./state/library";
 
@@ -131,6 +132,7 @@ export function App() {
                   <button
                     type="button"
                     onClick={() => setRepair(false)}
+                    {...help(H.backToStrip)}
                     class="mt-4 rounded-card border border-border px-4 py-2"
                   >
                     Back to the strip

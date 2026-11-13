@@ -8,7 +8,8 @@ import type { TopBarProps } from "../shell/TopBar";
 import { ArrangementGrid, ROLE_NAMES } from "./ArrangementGrid";
 import { ClipBar } from "./ClipBar";
 import { BAR, MAX_BARS, doubleBars, fromCells, halveBars, setBars, toCells } from "./cells";
-import { useHelp } from "../shell/Help";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import { css, roleColour } from "./RolePicker";
 import { Simulation } from "./Simulation";
 
@@ -78,11 +79,17 @@ function Dialog(p: { text: string; ok: string; onOk: () => void; onCancel: () =>
           <button
             type="button"
             onClick={p.onCancel}
+            {...help(H.cancelDialog)}
             class="rounded-card border border-border px-4 py-2"
           >
             Cancel
           </button>
-          <button type="button" onClick={p.onOk} class="rounded-card bg-accent px-4 py-2 text-bg">
+          <button
+            type="button"
+            onClick={p.onOk}
+            {...help(H.changeMoment)}
+            class="rounded-card bg-accent px-4 py-2 text-bg"
+          >
             {p.ok}
           </button>
         </div>
@@ -119,8 +126,6 @@ export function SequencesTab({
   const [half, setHalf] = useState<number | null>(null);
   const gesture = useRef(0);
   const latest = useRef<{ lib?: Library; id?: number }>({}); // the drag handler outlives renders
-  const helpHalve = useHelp("Halve the length: keeps the first half.");
-  const helpDouble = useHelp("Double the length: repeats the sequence once.");
 
   const picked: Sel | null =
     sel?.k === "seq" && !lib?.sequences.some(([id]) => id === sel.id)
@@ -331,6 +336,7 @@ export function SequencesTab({
         <input
           type="search"
           aria-label="Search sequences"
+          {...help(H.search("Sequences"))}
           placeholder="Search"
           value={q}
           onInput={(e) => setQ(e.currentTarget.value)}
@@ -350,6 +356,7 @@ export function SequencesTab({
                     <button
                       type="button"
                       aria-current={picked?.k === "seq" && picked.id === id ? "true" : undefined}
+                      {...help(H.openSequence)}
                       onClick={() => select({ k: "seq", id })}
                       class={itemClass(picked?.k === "seq" && picked.id === id)}
                     >
@@ -374,7 +381,7 @@ export function SequencesTab({
                       <button
                         type="button"
                         aria-current={on ? "true" : undefined}
-                        title="Generated from your strip"
+                        {...help(H.openPattern)}
                         onClick={() => select({ k: "gen", moment: m, pattern: p })}
                         class={itemClass(on)}
                       >
@@ -400,6 +407,7 @@ export function SequencesTab({
         <button
           type="button"
           disabled={lib.sequences.length >= MAX_SEQUENCES}
+          {...help(H.newSequence)}
           onClick={() => {
             const off = Array<string>(pieces).fill("off");
             add({
@@ -421,6 +429,7 @@ export function SequencesTab({
                 type="button"
                 draggable
                 data-palette={id}
+                {...help(H.previewPaletteItem)}
                 onDragStart={(e) => e.dataTransfer?.setData("text/plain", String(id))}
                 onClick={() => setPreviewId(id)}
                 class={itemClass(id === paletteId)}
@@ -459,6 +468,7 @@ export function SequencesTab({
                   </label>
                   <input
                     id="seq-name"
+                    {...help(H.sequenceName)}
                     value={draft ?? shown.name}
                     onInput={(e) => {
                       const name = e.currentTarget.value;
@@ -479,6 +489,7 @@ export function SequencesTab({
                         type="button"
                         key={m}
                         aria-label={`Moment ${name}`}
+                        {...help(H.moment[m])}
                         aria-pressed={shown.moment === m}
                         onClick={() => changeMoment(m)}
                         class="flex items-center gap-1.5 px-2 py-1 text-body"
@@ -496,6 +507,7 @@ export function SequencesTab({
                 </label>
                 <select
                   id="seq-palette"
+                  {...help(H.previewPalette)}
                   value={paletteId}
                   onChange={(e) => setPreviewId(Number(e.currentTarget.value))}
                   class="rounded-md border border-border bg-bg px-2 py-1"
@@ -518,6 +530,7 @@ export function SequencesTab({
                       moment: picked?.k === "gen" ? picked.moment : shown.moment,
                     })
                   }
+                  {...help(H.duplicateToEdit)}
                   class="rounded-md border border-accent px-3 py-1 text-accent"
                 >
                   Duplicate to edit
@@ -569,7 +582,7 @@ export function SequencesTab({
                   type="button"
                   aria-label="Halve length"
                   disabled={bars <= 1}
-                  {...helpHalve}
+                  {...help(H.halve)}
                   onClick={() =>
                     editSeq((s) => ({ ...s, steps: fromCells(halveBars(toCells(s.steps))) }))
                   }
@@ -581,7 +594,7 @@ export function SequencesTab({
                   type="button"
                   aria-label="Double length"
                   disabled={bars >= MAX_BARS}
-                  {...helpDouble}
+                  {...help(H.double)}
                   onClick={() =>
                     editSeq((s) => ({ ...s, steps: fromCells(doubleBars(toCells(s.steps))) }))
                   }
@@ -598,6 +611,7 @@ export function SequencesTab({
                   type="button"
                   key={r}
                   aria-label={`Paint ${ROLE_NAMES[r]}`}
+                  {...help(H.paintRole(ROLE_NAMES[r] ?? r))}
                   aria-pressed={role === r}
                   onClick={() => setRole(r)}
                   class={`flex items-center gap-1.5 rounded-md border bg-card px-2 py-1 text-text ${role === r ? "border-accent" : "border-border"}`}
@@ -614,6 +628,7 @@ export function SequencesTab({
                 <button
                   type="button"
                   aria-label="Zoom out"
+                  {...help(H.zoomOut)}
                   disabled={zoom <= 1}
                   onClick={() => setZoom(ZOOMS[Math.max(0, ZOOMS.indexOf(zoom) - 1)] as number)}
                   class="rounded-md border border-border bg-card p-1 text-text disabled:opacity-40"
@@ -623,6 +638,7 @@ export function SequencesTab({
                 <button
                   type="button"
                   aria-label="Zoom in"
+                  {...help(H.zoomIn)}
                   disabled={zoom >= 4}
                   onClick={() => setZoom(ZOOMS[Math.min(2, ZOOMS.indexOf(zoom) + 1)] as number)}
                   class="rounded-md border border-border bg-card p-1 text-text disabled:opacity-40"

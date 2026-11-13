@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "preact/hooks";
-import { useHelp } from "../shell/Help";
+import { help } from "../shell/Help";
 
 interface Props {
   name: string;
@@ -57,7 +57,7 @@ export function ThresholdLine(p: Props) {
       onKeyDown={key}
       style={{ top: `${p.topPct}%` }}
       class="group absolute inset-x-0 z-10 -mt-2 h-4 cursor-ns-resize outline-none"
-      {...useHelp(p.hint)}
+      {...help(p.hint)}
     >
       <div class="absolute inset-x-0 top-2 border-t-2 border-dashed border-accent group-focus-visible:border-solid" />
     </div>

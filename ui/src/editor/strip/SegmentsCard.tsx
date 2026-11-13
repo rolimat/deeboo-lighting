@@ -1,4 +1,6 @@
 import { Icon } from "../../icons/Icon";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 
 export interface StripInfo {
   name: string;
@@ -43,6 +45,7 @@ export function SegmentsCard(p: {
             <button
               type="button"
               aria-label="Fewer segments"
+              {...help(H.fewerSegments)}
               disabled={p.wired <= 1}
               onClick={() => p.onStep(p.wired - 1)}
               class={step}
@@ -55,6 +58,7 @@ export function SegmentsCard(p: {
             <button
               type="button"
               aria-label="More segments"
+              {...help(H.moreSegments)}
               disabled={p.wired >= reported}
               onClick={() => p.onStep(p.wired + 1)}
               class={step}
@@ -71,6 +75,7 @@ export function SegmentsCard(p: {
               data-segment-number
               data-wired={String(n <= p.wired)}
               aria-label={`Light segment ${n}`}
+              {...help(H.lightSegment)}
               onClick={() => p.onNumber(n)}
               class={`grid h-6 w-7 place-items-center rounded-md border text-small ${n <= p.wired ? "border-border bg-bg" : "border-dashed border-border opacity-40"}`}
             >
@@ -79,11 +84,11 @@ export function SegmentsCard(p: {
           ))}
         </div>
         <span class="flex-1" />
-        <button type="button" class={iconChip} onClick={p.onRepair}>
+        <button type="button" class={iconChip} onClick={p.onRepair} {...help(H.reconnect)}>
           <Icon name="refresh" />
           Reconnect…
         </button>
-        <button type="button" class={iconChip} onClick={p.onRepair}>
+        <button type="button" class={iconChip} onClick={p.onRepair} {...help(H.changeStrip)}>
           <Icon name="swap" />
           Change strip…
         </button>
@@ -94,13 +99,19 @@ export function SegmentsCard(p: {
       {p.confirm !== null && (
         <div role="alertdialog" class="mt-3 flex items-center gap-3 border-t border-border pt-3">
           <span>{`Reduce to ${p.confirm} segments? Sequences lose segments ${p.confirm + 1}–${p.wired}.`}</span>
-          <button type="button" class={chip} onClick={() => p.onConfirm(false)}>
+          <button
+            type="button"
+            class={chip}
+            onClick={() => p.onConfirm(false)}
+            {...help(H.cancelReduce)}
+          >
             Cancel
           </button>
           <button
             type="button"
             class="rounded-lg bg-red px-3 py-1 text-white"
             onClick={() => p.onConfirm(true)}
+            {...help(H.confirmReduce)}
           >
             Reduce
           </button>

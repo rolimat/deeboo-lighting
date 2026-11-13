@@ -1,4 +1,6 @@
 import { useState } from "preact/hooks";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 
 export const USER_CODE_MESSAGE = "Enter the User Code from Smart Life (letters and digits only).";
 
@@ -23,6 +25,7 @@ export function StepUserCode({ onSubmit }: { onSubmit: (code: string) => Promise
         autocomplete="off"
         spellcheck={false}
         aria-label="User Code"
+        {...help(H.userCode)}
         value={code}
         onInput={(e) => setCode(e.currentTarget.value)}
         class="w-full rounded-card border border-border bg-card px-3 py-2"
@@ -32,7 +35,7 @@ export function StepUserCode({ onSubmit }: { onSubmit: (code: string) => Promise
           {error}
         </p>
       )}
-      <button type="submit" class="rounded-card bg-green px-4 py-2">
+      <button type="submit" class="rounded-card bg-green px-4 py-2" {...help(H.userCodeContinue)}>
         Continue
       </button>
     </form>
