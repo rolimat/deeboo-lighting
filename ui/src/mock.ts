@@ -46,6 +46,7 @@ export function installMock(api: typeof realApi): void {
     calmHighDb: 12,
     riserDb: 7,
     helpTooltips: true,
+    showInDock: "editor",
   };
   let set = 0;
   let pal = -1; // -1: Auto

@@ -84,6 +84,7 @@ pub fn run() -> tauri::Result<()> {
                     let state = app.state::<commands::AppState>();
                     state.set_editor_visible(false);
                     state.editor_closed(&commands::wizard_emit(app));
+                    editor_window::apply_dock(app, false);
                 }
                 _ => {}
             }

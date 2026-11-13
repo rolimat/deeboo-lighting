@@ -541,10 +541,12 @@ pub fn get_settings(state: tauri::State<'_, AppState>) -> Settings {
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn save_settings(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     settings: Settings,
 ) -> Result<Settings, String> {
     let saved = state.save_settings(settings)?;
+    crate::editor_window::apply_dock(&app, app.get_webview_window("editor").is_some());
     state.send(Input::Settings(saved.clone()))?;
     Ok(saved)
 }

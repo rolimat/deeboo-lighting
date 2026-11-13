@@ -291,6 +291,24 @@ export function SetupTab() {
       </Section>
 
       <Section
+        icon="setup"
+        title="Dock"
+        hint="The menu bar icon is always there. The Dock icon is optional."
+      >
+        <Row label="Show in Dock">
+          <select
+            aria-label="Show in Dock"
+            class={`${field} min-w-60`}
+            value={s.showInDock}
+            onChange={(e) => apply({ showInDock: e.currentTarget.value as Settings["showInDock"] })}
+          >
+            <option value="editor">Only while the editor is open</option>
+            <option value="always">Always</option>
+          </select>
+        </Row>
+      </Section>
+
+      <Section
         icon="detection"
         title="Moment changes"
         hint="How readily the show moves to Calm or Build-up."

@@ -31,6 +31,7 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   calmHighDb: 10,
   riserDb: 6,
   helpTooltips: true,
+  showInDock: "editor",
   ...over,
 });
 const hsv = { h: 0, s: 0, v: 0 };
@@ -209,6 +210,19 @@ it("phrase_bars_4_8_16", async () => {
   expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
   await click(radios[2] as HTMLElement);
   expect(saved()?.phraseBars).toBe(16);
+});
+
+it("show_in_dock_offers_editor_or_always_and_saves", async () => {
+  await mount();
+  const sel = q<HTMLSelectElement>("select[aria-label='Show in Dock']");
+  expect([...sel.options].map((o) => o.textContent)).toEqual([
+    "Only while the editor is open",
+    "Always",
+  ]);
+  expect(sel.value).toBe("editor");
+  sel.value = "always";
+  await act(async () => void sel.dispatchEvent(new Event("change", { bubbles: true })));
+  expect(saved()?.showInDock).toBe("always");
 });
 
 it("moment_changes_slider_saves_sensitivity", async () => {

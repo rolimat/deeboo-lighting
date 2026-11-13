@@ -65,6 +65,8 @@ export interface Settings {
   riserDb: number;
   /** Show the `?` help tooltips in the editor. */
   helpTooltips: boolean;
+  /** Dock icon: only while the editor is open, or always. */
+  showInDock: "editor" | "always";
 }
 
 export type MomentName = "rhythm" | "calm" | "buildUp";
