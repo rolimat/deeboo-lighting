@@ -47,6 +47,7 @@ export function installMock(api: typeof realApi): void {
     riserDb: 7,
     helpTooltips: true,
     showInDock: "editor",
+    detectorByInput: {},
   };
   let set = 0;
   let pal = -1; // -1: Auto
@@ -78,7 +79,7 @@ export function installMock(api: typeof realApi): void {
       lightsOn,
       midi: { source: null, ok: true },
       audio: flags.has("audiofail")
-        ? { ok: false, device: "Loopback" }
+        ? { ok: false, failed: true }
         : { ok: !noClock, device: "Loopback", levelDb: -24 },
       selection: { set: SETS[set] as string, setId: set + 1, paletteAuto: pal < 0, palette: p },
       clip: null,

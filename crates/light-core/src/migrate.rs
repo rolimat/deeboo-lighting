@@ -162,7 +162,7 @@ pub fn migrate_v1(v1: LibraryV1, phrase_bars: u8) -> Result<Library, LibraryErro
     for (_, s) in &mut sequences {
         pad_to_bars(s);
     }
-    let lib = Library {
+    let mut lib = Library {
         schema_version: SCHEMA_VERSION,
         shape: v1.shape,
         palettes: v1.palettes,
@@ -171,6 +171,7 @@ pub fn migrate_v1(v1: LibraryV1, phrase_bars: u8) -> Result<Library, LibraryErro
         active_set: v1.active_set,
         active_palette: None,
     };
+    let _ = lib.drop_foreign_refs(); // a v1 file is backed up whole by the caller
     lib.validate()?;
     Ok(lib)
 }

@@ -101,6 +101,8 @@ function Lane(props: {
   def: LaneDef;
   ring: DetectorEvent[];
   t: Thresholds;
+  /** dB the detector lowers the calm thresholds by (sensitivity - 5); lines show what it applies. */
+  shift: number;
   onChange: (key: keyof Thresholds, value: number) => void;
 }) {
   const { def, ring, t } = props;
@@ -138,7 +140,8 @@ function Lane(props: {
           />
         </svg>
         {def.lines.map((l) => {
-          const v = t[l.key];
+          const sh = l.above ? 0 : props.shift;
+          const v = t[l.key] - sh;
           return (
             <ThresholdLine
               key={l.key}
@@ -146,8 +149,8 @@ function Lane(props: {
               hint={l.hint}
               words={`${l.label} when ${v} dB ${l.above ? "above" : "below"}`}
               value={v}
-              min={l.min}
-              max={l.max}
+              min={l.min - sh}
+              max={l.max - sh}
               topPct={yPct(ref + (l.above ? v : -v))}
               toValue={(clientY) => {
                 const r = box.current?.getBoundingClientRect();
@@ -155,21 +158,24 @@ function Lane(props: {
                 const db = -((clientY - r.top) / r.height) * FLOOR_DB;
                 return l.above ? db - ref : ref - db;
               }}
-              onChange={(n) => props.onChange(l.key, n)}
+              onChange={(n) => props.onChange(l.key, n + sh)}
             />
           );
         })}
       </div>
       <div data-readouts class="relative h-20 border-b border-l border-border bg-card">
-        {def.lines.map((l) => (
-          <span
-            key={l.key}
-            style={{ top: `${yPct(ref + (l.above ? t[l.key] : -t[l.key]))}%` }}
-            class="absolute left-1.5 -translate-y-1/2 select-none whitespace-nowrap rounded border border-accent bg-card px-1.5 text-small text-accent"
-          >
-            {l.label} when {t[l.key]} dB {l.above ? "above" : "below"}
-          </span>
-        ))}
+        {def.lines.map((l) => {
+          const v = t[l.key] - (l.above ? 0 : props.shift);
+          return (
+            <span
+              key={l.key}
+              style={{ top: `${yPct(ref + (l.above ? v : -v))}%` }}
+              class="absolute left-1.5 -translate-y-1/2 select-none whitespace-nowrap rounded border border-accent bg-card px-1.5 text-small text-accent"
+            >
+              {l.label} when {v} dB {l.above ? "above" : "below"}
+            </span>
+          );
+        })}
       </div>
     </>
   );
@@ -190,6 +196,7 @@ function runs(ring: DetectorEvent[]): [MomentName, number][] {
 export function Timeline(props: {
   ring: DetectorEvent[];
   t: Thresholds;
+  shift: number;
   onChange: (key: keyof Thresholds, value: number) => void;
 }) {
   const r = runs(props.ring);
@@ -230,7 +237,14 @@ export function Timeline(props: {
       </div>
       <div class="border-b border-l border-border bg-card" />
       {LANES.map((def) => (
-        <Lane key={def.id} def={def} ring={props.ring} t={props.t} onChange={props.onChange} />
+        <Lane
+          key={def.id}
+          def={def}
+          ring={props.ring}
+          t={props.t}
+          shift={props.shift}
+          onChange={props.onChange}
+        />
       ))}
     </div>
   );

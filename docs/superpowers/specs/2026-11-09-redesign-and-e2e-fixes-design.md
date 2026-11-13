@@ -340,3 +340,25 @@ Donde esta sección contradiga a las anteriores, manda esta.
   explicación corta en inglés, en un globo con el estilo de la app que aparece al momento.
 - **Longitud de una secuencia:** botones **×2** (dobla la longitud repitiendo el contenido, hasta 16 compases) y **÷2**
   (la reduce a la mitad, mínimo 1 compás) junto al clip. La rejilla deja hueco a la derecha para alargar arrastrando.
+
+## 13. Revisión completa del repositorio (2026-11-13)
+
+Arreglos de `/code-review max` sobre todo el repositorio antes del tag v0.1.0. Donde contradiga a lo anterior, manda esto.
+
+- **Editor:** la ventana solo navega a la propia app. Soltar un archivo o un enlace desde fuera no hace nada, y un
+  arrastre interno nunca escribe su texto en un campo.
+- **Tira:** la IP guardada solo vale si el dispositivo que responde es nuestra tira con nuestra clave. Si no, se busca
+  la tira por su ID y se guarda la IP nueva.
+- **Edición:** «New» y «Duplicate» dejan seleccionado lo nuevo aunque al guardar cambien los ids; nunca se edita el set
+  en vivo sin querer.
+- **Segmentos:** emparejar una tira con otro número de segmentos adapta la biblioteca guardada (con copia de seguridad);
+  nunca se pierde el show. Las vistas previas se ajustan a los segmentos de la tira.
+- **Smart Life:** un dispositivo sin clave aparece en gris como no usable y no impide emparejar los demás.
+- **Calma suave:** si dura más de 2 frases, se vuelve a Ritmo y se aprende el nuevo nivel como referencia.
+- **Detector por entrada de audio (decisión del usuario):** umbrales y sensibilidad se guardan por entrada. Una entrada
+  nueva empieza con los valores por defecto; al volver a una anterior se recuperan los suyos. Los niveles aprendidos se
+  conservan por entrada mientras la app está abierta.
+- **MIDI:** un parón del motor no se toma como Stop; cambiar los segmentos no reinicia el conteo de beats; «Virtual port»
+  es una elección explícita que se respeta.
+- **Asistente:** se puede cancelar en cada paso, recupera su estado al cambiar de pestaña e Identify tiene tiempo límite.
+- **Ajustes ilegibles** se guardan aparte antes de usar los valores por defecto.

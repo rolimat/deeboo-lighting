@@ -14,6 +14,7 @@ vi.mock("../api", () => ({
 }));
 import { api } from "../api";
 import { useLibrary } from "../state/library";
+import { renumbering } from "../state/renumber-mock";
 import { PalettesTab } from "./PalettesTab";
 import type { BarActions } from "../sequences/SequencesTab";
 
@@ -254,4 +255,15 @@ it("browser_lists_palettes_with_three_swatches_and_new_palette", async () => {
   expect(root.textContent).toContain("Main colour · most segments");
   expect(root.textContent).toContain("Accents and hits");
   expect(root.textContent).toContain("Background, calm moments");
+});
+
+it("a_duplicate_stays_selected_after_renumbering_and_recolour_edits_it", async () => {
+  vi.mocked(api.saveLibrary).mockImplementation(renumbering(lib()));
+  await mount();
+  await act(() => void actions?.onDuplicate?.());
+  await act(async () => void (await new Promise((r) => setTimeout(r, 600))));
+  expect(store.lib?.palettes.map(([i]) => i)).toEqual([1, 2, 3, 4]);
+  await typeInto(q<HTMLInputElement>("input[aria-label='Hex colour']"), "#00FF00");
+  expect(pal(4)?.principal).toEqual({ h: 120, s: 1000, v: 1000 });
+  expect(pal(1)?.principal).toEqual({ h: 300, s: 1000, v: 1000 });
 });

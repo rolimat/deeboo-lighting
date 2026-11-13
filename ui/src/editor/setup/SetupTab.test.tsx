@@ -32,6 +32,7 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   riserDb: 6,
   helpTooltips: true,
   showInDock: "editor",
+  detectorByInput: {},
   ...over,
 });
 const hsv = { h: 0, s: 0, v: 0 };
@@ -122,6 +123,12 @@ it("midi_list_updates_on_sources_event", async () => {
       ),
   );
   expect(saved()?.midiSource).toBe("Late Source");
+});
+
+it("a_failed_capture_is_named_in_setup", async () => {
+  await mount();
+  await act(async () => void pushStatus(status({ audio: { ok: false, failed: true } })));
+  expect(root.textContent).toContain("Capture failed");
 });
 
 it("audio_level_and_permission_status", async () => {
@@ -233,6 +240,17 @@ it("moment_changes_slider_saves_sensitivity", async () => {
   expect(saved()?.sensitivity).toBe(9);
 });
 
+it("picking_another_input_shows_that_inputs_sensitivity", async () => {
+  await mount();
+  // Like the backend: another input brings its own stored detector values.
+  vi.mocked(api.saveSettings).mockImplementation(async (v) => ({ ...v, sensitivity: 9 }));
+  const sel = q<HTMLSelectElement>("select[aria-label='Audio input']");
+  sel.value = "Mic B";
+  await act(async () => void sel.dispatchEvent(new Event("change", { bubbles: true })));
+  await settle();
+  expect(q<HTMLInputElement>("input[aria-label='Moment changes']").value).toBe("4");
+});
+
 it("quit_button_calls_quit", async () => {
   await mount();
   await click(q("button[aria-label='Quit Deeboo Lighting']"));
@@ -266,4 +284,16 @@ it("a_save_keeps_settings_changed_elsewhere_since_mount", async () => {
   expect(saved()?.leadMs).toBe(110);
   expect(saved()?.midiSource).toBe("Clock A");
   expect(saved()?.brightnessPct).toBe(40);
+});
+
+it("virtual_port_is_saved_as_an_explicit_choice", async () => {
+  await mount();
+  q<HTMLSelectElement>("select[aria-label='MIDI input']").value = "Deeboo Lighting In";
+  await act(
+    async () =>
+      void q("select[aria-label='MIDI input']").dispatchEvent(
+        new Event("change", { bubbles: true }),
+      ),
+  );
+  expect(saved()?.midiSource).toBe("Deeboo Lighting In");
 });

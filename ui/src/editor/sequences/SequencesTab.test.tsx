@@ -16,6 +16,7 @@ vi.mock("../api", () => ({
 }));
 import { api } from "../api";
 import { useLibrary } from "../state/library";
+import { renumbering } from "../state/renumber-mock";
 import { SequencesTab, type BarActions } from "./SequencesTab";
 
 const hsv = (h: number) => ({ h, s: 1000, v: 1000 });
@@ -333,6 +334,23 @@ it("dropping_a_palette_changes_the_preview", async () => {
   expect(store.canUndo).toBe(false); // UI-only
 });
 
+it("an_external_drop_on_the_grid_leaves_the_preview_palette_alone", async () => {
+  await mount();
+  const dt = { types: ["Files"], getData: () => "" };
+  const over = new Event("dragover", { bubbles: true, cancelable: true });
+  await act(() => {
+    Object.assign(over, { dataTransfer: dt });
+    q("[data-grid]")?.dispatchEvent(over);
+  });
+  expect(over.defaultPrevented).toBe(false);
+  await act(() => {
+    const e = new Event("drop", { bubbles: true, cancelable: true });
+    Object.assign(e, { dataTransfer: dt });
+    q("[data-grid]")?.dispatchEvent(e);
+  });
+  expect(q<HTMLSelectElement>("select#seq-palette")?.value).toBe("2");
+});
+
 const bw = (sel: string) => q<HTMLButtonElement>(`button[aria-label='${sel}']`);
 
 it("double_and_halve_buttons_undoable_with_limits", async () => {
@@ -433,4 +451,22 @@ it("unchanged_length_is_not_an_edit", async () => {
   );
   await act(() => store.undo());
   expect(q("[data-clip]")?.textContent).toContain("8 bars"); // one undo undid the last real edit, not a no-op
+});
+
+it("a_duplicate_stays_selected_after_renumbering", async () => {
+  vi.mocked(api.saveLibrary).mockImplementation(renumbering(lib()));
+  await mount();
+  actions?.onDuplicate?.();
+  await tick(600);
+  expect(store.lib?.sequences.map(([i]) => i)).toEqual([7, 8, 9]);
+  expect(q<HTMLInputElement>("input#seq-name")?.value).toBe("Pulse copy");
+  expect(actions?.deleteLabel).toBe("Pulse copy");
+  // An edit after renumbering lands on the copy, not on the first sequence.
+  const input = q<HTMLInputElement>("input#seq-name");
+  await act(async () => {
+    if (input) input.value = "Renamed";
+    input?.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+  });
+  expect(store.lib?.sequences.map(([, x]) => x.name)).toEqual(["Pulse", "Drift", "Renamed"]);
 });

@@ -36,6 +36,7 @@ pub fn run() -> tauri::Result<()> {
     logger().init();
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
+        .plugin(editor_window::navigation_guard())
         .manage(commands::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
@@ -57,6 +58,7 @@ pub fn run() -> tauri::Result<()> {
             commands::wizard_choose,
             commands::wizard_retry,
             commands::wizard_cancel,
+            commands::wizard_state,
             commands::strip_identify,
             commands::identify_segment,
             commands::wizard_save,

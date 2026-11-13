@@ -5,6 +5,8 @@ export interface History<T> {
   push(next: T): void;
   /** Overwrites the present without a new undo step (gestures, server-assigned ids). */
   replace(next: T): void;
+  /** Rewrites every undo and redo state (not the present) through `fn`. */
+  remapStates(fn: (v: T) => T): void;
   undo(): void;
   redo(): void;
 }
@@ -31,6 +33,10 @@ export function createHistory<T>(initial: T, limit = 100): History<T> {
     },
     replace(next) {
       present = next;
+    },
+    remapStates(fn) {
+      past = past.map(fn);
+      future = future.map(fn);
     },
     undo() {
       const prev = past.at(-1);

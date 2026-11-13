@@ -1,3 +1,4 @@
+import { COLOUR_TYPE, ROLE_TYPE } from "../drag";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, type Hsv, type Palette } from "../api";
 import { Icon } from "../../icons/Icon";
@@ -38,8 +39,6 @@ const QUICK = [
   "#FFFFFF",
   "#FFE0B2",
 ];
-const COLOUR_TYPE = "application/x-deeboo-colour";
-const ROLE_TYPE = "application/x-deeboo-role";
 const NEW_PALETTE: Palette = {
   name: "New palette",
   principal: { h: 340, s: 830, v: 1000 },
@@ -76,6 +75,14 @@ export function PalettesTab({
   const [notice, setNotice] = useState("");
   const [drag, setDrag] = useState<Drag>(null);
   const [seqId, setSeqId] = useState<number | null>(null);
+  useEffect(
+    () =>
+      store.onRemap((m) => {
+        setSel((s) => (s === null ? s : (m.palettes.get(s) ?? s)));
+        setSeqId((s) => (s === null ? s : (m.sequences.get(s) ?? s)));
+      }),
+    [store.onRemap],
+  );
   const [onStrip, setOnStrip] = useState(false);
   const live = useRef<{ dup: () => void; del: () => void; guard: () => boolean }>({
     dup: () => {},

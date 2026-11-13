@@ -9,6 +9,7 @@ vi.mock("../api", () => ({
     wizardChoose: vi.fn(),
     wizardRetry: vi.fn(),
     wizardCancel: vi.fn(),
+    wizardState: vi.fn(),
     stripIdentify: vi.fn(),
     wizardSave: vi.fn(),
     onWizard: vi.fn(),
@@ -72,6 +73,7 @@ beforeEach(() => {
   ]) {
     vi.mocked(f).mockResolvedValue();
   }
+  vi.mocked(api.wizardState).mockResolvedValue({ kind: "idle" });
 });
 
 afterEach(async () => {
@@ -116,6 +118,8 @@ it("user_code_validation_message", async () => {
   expect(api.wizardStart).toHaveBeenCalledWith("ab12");
   expect(root.textContent).toContain("Wizard already running.");
   expect(root.textContent).not.toContain("ab12");
+  // The code leaves component state as soon as it is sent.
+  expect((root.querySelector("input") as HTMLInputElement).value).toBe("");
 });
 
 it("renders_qr_step_with_countdown_and_cancel", async () => {
@@ -133,6 +137,16 @@ it("renders_qr_step_with_countdown_and_cancel", async () => {
     await settle();
   });
   expect(api.wizardCancel).toHaveBeenCalled();
+});
+
+it("renders_unusable_device_disabled_with_its_reason", async () => {
+  await mount();
+  const hub = { ...dev("h", false), reason: "Not usable: no local key" };
+  await emit({ kind: "chooseStrip", devices: [dev("a"), hub] });
+  const items = [...root.querySelectorAll("li")];
+  const b = items[1]?.querySelector("button") as HTMLButtonElement;
+  expect(b.disabled).toBe(true);
+  expect(items[1]?.textContent).toContain("Not usable: no local key");
 });
 
 it("renders_choose_step_greys_unsupported", async () => {
@@ -259,6 +273,64 @@ it("renders_failed_step_with_retry", async () => {
     await settle();
   });
   expect(api.wizardRetry).toHaveBeenCalled();
+});
+
+it("failed_step_offers_cancel_too", async () => {
+  await mount();
+  await emit({ kind: "failed", step: "segments", message: "Took too long to finish." });
+  await act(async () => {
+    button("Cancel").click();
+    await settle();
+  });
+  expect(api.wizardCancel).toHaveBeenCalled();
+});
+
+it("identify_step_has_cancel", async () => {
+  await mount();
+  await emit({ kind: "identify", device: dev("a"), segments: 3 });
+  await act(async () => {
+    button("Cancel").click();
+    await settle();
+  });
+  expect(api.wizardCancel).toHaveBeenCalled();
+});
+
+it("a_remounted_view_restores_the_step_from_rust", async () => {
+  vi.mocked(api.wizardState).mockResolvedValue({
+    kind: "identify",
+    device: dev("a"),
+    segments: 3,
+  });
+  await mount();
+  // Listening first, then asking: one more hop than the mount itself.
+  await act(async () => {
+    await settle();
+  });
+  expect(root.querySelector("[data-piece]")).not.toBeNull();
+});
+
+it("an_event_that_arrives_first_beats_the_restored_state", async () => {
+  let resolve: (s: WizardState) => void = () => {};
+  vi.mocked(api.wizardState).mockReturnValue(new Promise((r) => (resolve = r)));
+  await mount();
+  await emit({ kind: "chooseStrip", devices: [dev("a")] });
+  await act(async () => {
+    resolve({ kind: "idle" });
+    await settle();
+  });
+  expect(root.textContent).toContain("Strip a");
+});
+
+it("an_idle_event_is_not_overwritten_by_a_stale_restored_state", async () => {
+  let resolve: (s: WizardState) => void = () => {};
+  vi.mocked(api.wizardState).mockReturnValue(new Promise((r) => (resolve = r)));
+  await mount();
+  await emit({ kind: "idle" });
+  await act(async () => {
+    resolve({ kind: "identify", device: dev("a"), segments: 3 });
+    await settle();
+  });
+  expect(root.querySelector("[data-piece]")).toBeNull();
 });
 
 it("cancel_on_close_calls_wizard_cancel", async () => {

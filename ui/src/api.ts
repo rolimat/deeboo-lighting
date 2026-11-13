@@ -41,7 +41,7 @@ export interface Status {
   predicted: boolean;
   lightsOn: boolean;
   midi: { source: string | null; ok: boolean };
-  audio: { ok: boolean; device?: string; levelDb?: number };
+  audio: { ok: boolean; failed?: boolean; device?: string; levelDb?: number };
   selection: Selection;
   /** The entry of the live set's list playing now, with the loop position in half beats. */
   clip: { moment: MomentName; index: number; elapsed: number; total: number } | null;
@@ -67,6 +67,11 @@ export interface Settings {
   helpTooltips: boolean;
   /** Dock icon: only while the editor is open, or always. */
   showInDock: "editor" | "always";
+  /** Owned by Rust: the other inputs' detector values; the UI only passes it back. */
+  detectorByInput: Record<
+    string,
+    { sensitivity: number; calmKickDb: number; calmHighDb: number; riserDb: number }
+  >;
 }
 
 export type MomentName = "rhythm" | "calm" | "buildUp";

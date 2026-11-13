@@ -11,5 +11,5 @@
 - Run `just dev` from the host, never inside the container (Docker on a Mac is Linux: no CoreMIDI, audio or bundles).
 - Manual acceptance tests: spec §11. 
 ## CI
-- `.github/workflows/ci.yml`: `linux` job runs `just precommit` in the same Docker image; `macos` job (PRs, and pushes touching `src-tauri/`, `tools/`, `ui/`, lockfile, toolchain or workflows) runs clippy and tests with `--locked` and builds the unsigned DMG via `.github/actions/macos-build`. `just ship` pushes and waits for the run of that commit.
+- `.github/workflows/ci.yml`: `linux` job runs `just precommit` in the same Docker image; `macos` job (PRs, and pushes touching `src-tauri/`, `tools/`, `ui/`, lockfile, toolchain or workflows) runs clippy and tests with `--locked` and builds the unsigned DMG via `.github/actions/macos-build`. `just ship` pushes and waits for every run of that commit.
 - Dependabot keeps cargo, npm, GitHub Actions and the pinned Docker base image (`FROM ...@sha256:`) fresh.

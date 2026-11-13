@@ -127,6 +127,7 @@ export function installMock(api: typeof realApi): void {
     riserDb: 6,
     helpTooltips: true,
     showInDock: "editor",
+    detectorByInput: {},
   };
   let beat = 0;
   let wired = SEGS;
@@ -209,7 +210,32 @@ export function installMock(api: typeof realApi): void {
         p === "snake" || p === "drift" || p === "strobe" ? pat(p) : pat("halves"),
       ),
     getSettings: async () => settings,
-    saveSettings: async (s: Settings) => (settings = s),
+    // Mirrors Rust's switch_input: the map is not the UI's; a new input swaps the detector values.
+    saveSettings: async (s: Settings) => {
+      const key = (i: string | null) => i ?? "";
+      const map = { ...settings.detectorByInput };
+      let next = { ...s, detectorByInput: map };
+      if (s.audioInput !== settings.audioInput) {
+        const d = (v: Settings) => ({
+          sensitivity: v.sensitivity,
+          calmKickDb: v.calmKickDb,
+          calmHighDb: v.calmHighDb,
+          riserDb: v.riserDb,
+        });
+        map[key(settings.audioInput)] = d(settings);
+        const back = map[key(s.audioInput)] ?? {
+          sensitivity: 5,
+          calmKickDb: 15,
+          calmHighDb: 12,
+          riserDb: 6,
+        };
+        const rest = Object.fromEntries(
+          Object.entries(map).filter(([k]) => k !== key(s.audioInput)),
+        );
+        next = { ...next, ...back, detectorByInput: rest };
+      }
+      return (settings = next);
+    },
     listMidiSources: async () => sources,
     onMidiSources: async (cb: (l: string[]) => void) => {
       sourceListeners.add(cb);
@@ -236,6 +262,7 @@ export function installMock(api: typeof realApi): void {
     onWizard: async () => () => {},
     onSection: async () => () => {},
     wizardCancel: async () => {},
+    wizardState: async () => ({ kind: "idle" as const }),
     identifySegment: async () => {},
     previewPalette: async () => {},
     previewSequence: async () => {},

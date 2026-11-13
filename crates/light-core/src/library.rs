@@ -203,6 +203,32 @@ fn unique_ids<'a>(field: &str, ids: impl Iterator<Item = &'a u32>) -> Result<(),
 }
 
 impl Library {
+    /// Removes references to another moment's sequence (a track left empty falls back to
+    /// `Generated`): old files may hold them and `validate` rejects them. Returns whether
+    /// anything changed.
+    pub fn drop_foreign_refs(&mut self) -> bool {
+        let mut changed = false;
+        let seqs = &self.sequences;
+        for set in &mut self.sets {
+            for (m, moment) in [
+                (&mut set.rhythm, Moment::Rhythm),
+                (&mut set.calm, Moment::Calm),
+                (&mut set.buildup, Moment::BuildUp),
+            ] {
+                let before = m.sequences.len();
+                m.sequences.retain(|r| match r {
+                    SeqRef::Id(id) => !seqs.iter().any(|(s, q)| s == id && q.moment != moment),
+                    _ => true,
+                });
+                changed |= m.sequences.len() != before;
+                if m.sequences.is_empty() && before > 0 {
+                    m.sequences.push(SeqRef::Generated);
+                }
+            }
+        }
+        changed
+    }
+
     /// First-run library (spec §6.3): the 8 built-in palettes, the 10 built-in sequences for a row of
     /// `segments`, and the active set "Auto". A stored library always has palettes and sequences, so
     /// built-ins are never merged into one; `library_store::load` only uses this when none is usable.
@@ -335,7 +361,7 @@ impl Library {
         let has_seq = |r: &SeqRef, m: Moment| match r {
             SeqRef::Generated => true,
             SeqRef::Pattern(p) => p.moment() == m,
-            SeqRef::Id(id) => self.sequences.iter().any(|(s, _)| s == id),
+            SeqRef::Id(id) => self.sequences.iter().any(|(s, q)| s == id && q.moment == m),
         };
         for (i, set) in self.sets.iter().enumerate() {
             check_name(format!("sets[{i}].name"), &set.name)?;

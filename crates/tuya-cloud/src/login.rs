@@ -8,7 +8,6 @@ use crate::CloudError;
 use crate::crypto;
 use crate::transport::{HttpRequest, Method, Transport};
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 use zeroize::Zeroizing;
@@ -101,14 +100,47 @@ impl Session {
     }
 }
 
-#[derive(Deserialize)]
+/// A device of the account. `local_key` is `Some` only when the cloud gave a usable (16 byte) key:
+/// hubs and sub-devices have none and are listed, never selectable.
 pub struct CloudDevice {
     pub id: String,
     pub name: String,
     pub category: String,
     pub product_name: String,
     pub online: bool,
-    pub local_key: SecretString,
+    pub local_key: Option<SecretString>,
+}
+
+const MAX_DEVICES: usize = 200;
+const MAX_FIELD_CHARS: usize = 128;
+const LOCAL_KEY_LEN: usize = 16;
+
+fn text(v: &Value) -> String {
+    v.as_str()
+        .unwrap_or_default()
+        .chars()
+        .take(MAX_FIELD_CHARS)
+        .collect()
+}
+
+/// One entry of the cloud list; `None` when it has no id (nothing to show or select).
+fn parse_device(v: &Value) -> Option<CloudDevice> {
+    let id = text(&v["id"]);
+    if id.is_empty() {
+        return None;
+    }
+    let local_key = v["local_key"]
+        .as_str()
+        .filter(|k| k.len() == LOCAL_KEY_LEN)
+        .map(|k| SecretString::from(k.to_owned()));
+    Some(CloudDevice {
+        id,
+        name: text(&v["name"]),
+        category: text(&v["category"]),
+        product_name: text(&v["product_name"]),
+        online: v["online"].as_bool().unwrap_or(false),
+        local_key,
+    })
 }
 
 impl CloudDevice {
@@ -126,7 +158,7 @@ impl std::fmt::Debug for CloudDevice {
             .field("category", &self.category)
             .field("product_name", &self.product_name)
             .field("online", &self.online)
-            .field("local_key", &"[REDACTED]")
+            .field("has_local_key", &self.local_key.is_some())
             .finish()
     }
 }
@@ -145,7 +177,8 @@ fn pct_encode(s: &str) -> String {
 
 fn api_code(v: &Value) -> String {
     match &v["code"] {
-        Value::String(s) => s.clone(),
+        // Server text reaches the logs: cap it and drop control characters.
+        Value::String(s) => s.chars().filter(|c| !c.is_control()).take(32).collect(),
         Value::Number(n) => n.to_string(),
         _ => "unknown".to_owned(),
     }
@@ -347,7 +380,7 @@ fn signed_call(
 /// Lists the devices of every home of the account.
 ///
 /// # Errors
-/// Transport, `Api`, `Crypto`, or `Decode` (including a device without its required fields).
+/// Transport, `Api`, `Crypto`, or `Decode` (the list itself is malformed; a bad device is skipped or listed unusable).
 pub fn list_devices(t: &dyn Transport, s: &Session) -> Result<Vec<CloudDevice>, CloudError> {
     let homes = parse_json(&signed_call(
         t,
@@ -370,8 +403,15 @@ pub fn list_devices(t: &dyn Transport, s: &Session) -> Result<Vec<CloudDevice>, 
             "/v1.0/m/life/ha/home/devices",
             Some(&json!({ "homeId": home_id })),
         )?;
-        let devs: Vec<CloudDevice> = serde_json::from_str(&devs).map_err(|_| CloudError::Decode)?;
-        out.extend(devs);
+        let devs = parse_json(&devs)?;
+        let room = MAX_DEVICES.saturating_sub(out.len());
+        out.extend(
+            devs.as_array()
+                .ok_or(CloudError::Decode)?
+                .iter()
+                .filter_map(parse_device)
+                .take(room),
+        );
     }
     Ok(out)
 }

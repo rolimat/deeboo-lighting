@@ -147,5 +147,5 @@ With a clock position (spec §6.2.1) the rules above change in five places:
 - Riser bars close on the clock's beat 4, not every 4 beats; a partial bar at start or after a gap never counts.
 - `min_state_beats` does not bind a quick move on a phrase's beat 1; beat 2 confirms it or undoes it.
 - A Build-up drops to Rhythm on a full beat 1 of a bar with a kick jump.
-- Soft break: a phrase's bar 1 (four clocked beats) whose mean kick is 5 dB or more down, sub 3 dB or more down and highs within 2 dB of their reference is Calm from Rhythm (`soft_kick_db`, `soft_sub_db`, `soft_high_db`); that Calm has no slow return and Rhythm comes back with the kick jump or 2 full beats.
+- Soft break: a phrase's bar 1 (four clocked beats) whose mean kick is 5 dB or more down, sub 3 dB or more down and highs within 2 dB of their reference is Calm from Rhythm (`soft_kick_db`, `soft_sub_db`, `soft_high_db`); that Calm has no slow return and Rhythm comes back with the kick jump or 2 full beats. A soft Calm whose texture lasts more than 2 phrases (64 beats without a position) returns to Rhythm and the references restart from the new level.
 - In a phrase's second half 3 rising bars are enough. Measured alone (`--rules riser`) this depends on the phase of the 4-beat counter, because without `aligned_bars` the bars are not clock-aligned.

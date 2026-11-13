@@ -10,10 +10,20 @@ key='(local_?key|(access|refresh|qr)_?token|terminal_?id|user_?code|token)'
 re="${key}[\"']?[[:space:]]*[:=][[:space:]]*[\"']?[^][:space:]\"',}][^[:space:],}]{5,}"   # named secret fields (JSON, k=v, URL query)
 re="${re}|tuyaSmart--qrLogin\\?token="                                  # QR text
 re="${re}|[A-Za-z0-9]{32,}"                                             # bare token / hex run
-# Named values may hold any punctuation (keys do); trade-off: "token: some-word" style prose also hits. "[REDACTED]" does not.
-hits=$(grep -nEi -e "$re" -- "$1" | cut -d: -f1) || true
+# Named values may hold any punctuation (keys do); trade-off: "token: some-word" style prose also hits.
+# grep exits 1 for "no match" and 2+ for an error: only the first is clean (fail closed).
+scan() { local rc=0; grep -n "$@" || rc=$?; [ "$rc" -le 1 ] || { echo "log-scan: grep failed ($rc)" >&2; exit 2; }; }
+# "[REDACTED]" is the logger's own placeholder: blank it before matching so it is never a hit.
+hits=$(sed 's/\[REDACTED\]//g' < "$1" | scan -Ei -e "$re" | cut -d: -f1)
 if [ $# -eq 2 ]; then
-  k=$(sed -n 's/.*"local_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$2" | head -n 1)
-  [ -z "$k" ] || hits=$(printf '%s\n%s' "$hits" "$(grep -nF -e "$k" -- "$1" | cut -d: -f1)" | sed '/^$/d' | sort -nu)
+  # The key as stored in the JSON (escaped: \" and \\) and as a log line would show it (raw).
+  esc=$(sed -En 's/.*"local_key"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\1/p' "$2" | head -n 1)
+  raw=$(printf '%s' "$esc" | sed -e 's/\\"/"/g' -e 's/\\\\/\\/g')
+  for k in "$esc" "$raw"; do
+    [ -z "$k" ] || {
+    kh=$(scan -F -e "$k" -- "$1" | cut -d: -f1)   # own line: a grep error must reach set -e
+    hits=$(printf '%s\n%s' "$hits" "$kh" | sed '/^$/d' | sort -nu)
+    }
+  done
 fi
 [ -z "$hits" ] || { echo "$hits"; exit 1; }

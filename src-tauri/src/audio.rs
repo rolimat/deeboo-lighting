@@ -3,7 +3,7 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
@@ -67,6 +67,8 @@ pub struct Capture {
     _stream: Stream,
     pub name: String,
     overflow: Arc<AtomicU64>,
+    /// Set by the stream's error callback (an atomic store: nothing else runs on the audio thread).
+    dead: Arc<AtomicBool>,
 }
 
 impl Capture {
@@ -95,6 +97,8 @@ impl Capture {
         let (mut prod, cons) = RingBuffer::<f32>::new((rate * RING_SECONDS) as usize);
         let overflow = Arc::new(AtomicU64::new(0));
         let lost = Arc::clone(&overflow);
+        let dead = Arc::new(AtomicBool::new(false));
+        let died = Arc::clone(&dead);
         let stream = dev
             .build_input_stream(
                 &cfg.into(),
@@ -103,7 +107,7 @@ impl Capture {
                     let n = downmix_into(data, channels, &mut prod);
                     lost.fetch_add((frames - n) as u64, Ordering::Relaxed);
                 },
-                |_| {}, // no logging on the audio thread; a dead stream just yields no samples
+                move |_| died.store(true, Ordering::Relaxed), // no logging on the audio thread
                 None,
             )
             .map_err(|_| AudioError::Stream)?;
@@ -114,6 +118,7 @@ impl Capture {
                 _stream: stream,
                 name,
                 overflow,
+                dead,
             },
             cons,
             rate,
@@ -123,6 +128,11 @@ impl Capture {
     #[must_use]
     pub fn overflow(&self) -> u64 {
         self.overflow.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn errored(&self) -> bool {
+        self.dead.load(Ordering::Relaxed)
     }
 }
 
@@ -156,6 +166,10 @@ impl AudioPort for AudioIn {
 
     fn overflow(&self) -> u64 {
         self.open.as_ref().map_or(0, |(c, _)| c.overflow())
+    }
+
+    fn errored(&self) -> bool {
+        self.open.as_ref().is_some_and(|(c, _)| c.errored())
     }
 }
 

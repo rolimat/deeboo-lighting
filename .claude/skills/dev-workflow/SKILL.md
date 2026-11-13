@@ -28,12 +28,13 @@ Spec §10: [docs/superpowers/specs/2026-11-06-deeboo-lighting-design.md](../../.
 | `just tuya-login` | macOS only: Smart Life QR login, lists devices, saves the strip to `.dev/strip.json` (0600) |
 | `just detect-probe <audio> [--labels f.json] [--timeline] [--features [from-to]] [--bpm N] [--realtime] [--downbeat S]... [--phrase 4\|8\|16] [--rules all\|none\|calm,drop,riser,bars,soft]` | macOS only: runs the detector on an MP3/WAV in the live-app event order (recordings stay in ignored `recordings/`); `--features` prints one line per closed beat (position, kick/sub/high dB and vs reference, moment; optional `from-to` range in seconds, only an argument shaped like that counts) before the rest; `--realtime` plays it on the default output; `--downbeat` (seconds, repeatable, snaps to the nearest tracked beat; default: the first tracked beat; past the last beat is an error; each re-anchor leaves the beat before it without a position, like a Start) fixes phrase position, `--rules` switches the position rules (default: the app's `DetectorParams::default().rules`; `--rules all` turns every rule on) |
 | `just tray-frames` | Docker: regenerates the committed menu bar PNGs in `src-tauri/icons/tray` (deterministic; commit the output) |
-| `just ship` | push and wait for the CI run of this exact commit |
+| `just ship` | push and wait for every CI run of this exact commit |
 
 ## Rules
 - Hook: lefthook pre-commit runs `just precommit`. Never `--no-verify`; fix the cause.
 - Conventional Commits (`feat(scope):`, `fix:`, `docs:`, `chore:`, ...).
-- Release: pushing a `v*` tag (user's call) runs `.github/workflows/release.yml`: macOS build job (`contents: read`), then publish job (`contents: write`, `id-token`, `attestations`) with `SHA256SUMS`, build provenance and a GitHub release holding the ad-hoc signed DMG.
+- CI macOS job runs when `src-tauri/`, `crates/`, `tools/`, `ui/`, `Cargo.toml/lock`, toolchain or workflow files change (always on PRs).
+- Release: pushing a `v*` tag (user's call) runs `.github/workflows/release.yml`: macOS build job (`contents: read`; runs `cargo test` and names the DMG space-free with `SHA256SUMS`), then `attest` (`id-token`, `attestations`) and `publish` (`contents: write`, the third-party upload action) as separate jobs: build provenance and a GitHub release holding the ad-hoc signed DMG.
 - Feature branch, never `main`. Ask before pushing any tag.
 - Agent docs have a budget enforced by `scripts/check-agent-docs.sh`: `AGENTS.md` <= 80 lines, each `SKILL.md` <= 100 lines, description <= 250 chars, every `references/*.md` linked from its `SKILL.md`. `rust-engineer` is exempt (vendored unchanged).
 - Convention, command or interface change: update the matching skill in the same commit.
@@ -44,3 +45,4 @@ Spec §10: [docs/superpowers/specs/2026-11-06-deeboo-lighting-design.md](../../.
 ## Checklist
 - [ ] `just precommit` green before commit.
 - [ ] Commit message is Conventional.
+

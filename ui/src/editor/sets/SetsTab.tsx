@@ -1,3 +1,4 @@
+import { DRAG_TYPE } from "../drag";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { MomentName, Status } from "../../api";
 import { Icon } from "../../icons/Icon";
@@ -53,6 +54,10 @@ export function SetsTab({
 }) {
   const { lib, edit } = store;
   const [sel, setSel] = useState<number | null>(null);
+  useEffect(
+    () => store.onRemap((m) => setSel((s) => (s === null ? s : (m.sets.get(s) ?? s)))),
+    [store.onRemap],
+  );
   const [q, setQ] = useState("");
   const [draft, setDraft] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
@@ -233,7 +238,7 @@ export function SetsTab({
   const dragProps = (item: DragItem, name: string) => ({
     draggable: true as const,
     onDragStart: (e: DragEvent) => {
-      e.dataTransfer?.setData("text/plain", name);
+      e.dataTransfer?.setData(DRAG_TYPE, name);
       setDrag({ item, name });
     },
     onDragEnd: () => setDrag(null),

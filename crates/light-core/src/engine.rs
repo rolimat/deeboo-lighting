@@ -208,6 +208,7 @@ struct Preview {
 /// Half a beat at 120 BPM: the pace of a preview while no clock runs.
 const PREVIEW_HALF_US: u64 = 250_000;
 
+#[allow(clippy::struct_excessive_bools)] // independent flags of the beat state machine
 pub struct Engine {
     cfg: EngineConfig,
     preview: Option<Preview>,
@@ -229,6 +230,8 @@ pub struct Engine {
     rebuilds: u64,
     /// The moment the last step was planned for, to see entries and drops.
     rot_moment: Option<Moment>,
+    /// A predicted drop already advanced the at-drop palette; its real drop must not.
+    drop_counted: bool,
     playing: Option<Playing>,
     pos: Option<Position>,
     last_beat_us: Option<u64>,
@@ -254,6 +257,7 @@ impl Engine {
             seed,
             rebuilds: 0,
             rot_moment: None,
+            drop_counted: false,
             cfg,
             clock: ClockTracker::new(cfg.phrase),
             sched: Scheduler::new(cfg.segments),
@@ -352,6 +356,13 @@ impl Engine {
         now_us: u64,
         preview: Option<(Palette, Sequence)>,
     ) -> Vec<PaintCommand> {
+        // A sequence for another segment count would paint out of range: keep what plays now.
+        if preview
+            .as_ref()
+            .is_some_and(|(_, seq)| seq.validate(self.cfg.segments).is_err())
+        {
+            return Vec::new();
+        }
         self.preview = preview.map(|(palette, seq)| Preview { palette, seq });
         self.free_at = None;
         self.playing = None;
@@ -492,10 +503,30 @@ impl Engine {
             self.look = look;
             self.pending = None;
             if self.cfg.lights_on {
-                self.plan_rest(now_us);
+                // A preview or calibration keeps the strip; only the rest scene changes.
+                if self.preview.is_none() && !self.calibrating {
+                    self.plan_rest(now_us);
+                }
             }
         }
         self.sched.due(now_us)
+    }
+
+    /// The strip has another segment count: the plan restarts but the clock (beat count) and the
+    /// forced moment go on. The new library arrives through `set_library` as usual.
+    pub fn resegment(&mut self, segments: u8) {
+        self.cfg.segments = segments;
+        self.sched = Scheduler::new(segments);
+        self.look = Look::builtin(segments);
+        self.pending = None;
+        self.playing = None;
+        self.rot_moment = None;
+        // A preview validated for the old count must not paint out of range.
+        self.preview = None;
+        // The calibration flash was planned for the old count; the UI turns it on again if wanted.
+        self.calibrating = false;
+        self.free_at = None;
+        self.resend = true;
     }
 
     pub fn strip_reconnected(&mut self) {
@@ -556,10 +587,23 @@ impl Engine {
         if start {
             // A Start (also while running) begins a fresh show: rotation counts from here.
             self.rot_moment = None;
+            self.drop_counted = false;
         }
         let entered = self.rot_moment != Some(moment);
-        let dropped =
+        let mut dropped =
             entered && self.rot_moment == Some(Moment::BuildUp) && moment == Moment::Rhythm;
+        if dropped {
+            // A counted prediction suppresses the next drop (also a second, contradicted
+            // prediction, which keeps the flag); only a real drop or a confirmation clears it.
+            dropped = !self.drop_counted;
+            self.drop_counted = self.control.predicted();
+        } else if moment != Moment::BuildUp
+            && self.control.applied() != Moment::BuildUp
+            && !self.control.predicted()
+        {
+            // Confirmed (Rhythm stays) or left for Calm: the next build-up starts a new drop.
+            self.drop_counted = false;
+        }
         self.rot_moment = Some(moment);
         let bar = start || (pos.half && pos.beat_in_bar == 4);
         if entered || bar {

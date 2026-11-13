@@ -60,7 +60,15 @@ export function wizardLine(state: WizardState): string | null {
   }
 }
 
-function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
+function Step({
+  state,
+  onDone,
+  beforeSave,
+}: {
+  state: WizardState;
+  onDone: () => void;
+  beforeSave?: () => Promise<void>;
+}) {
   switch (state.kind) {
     case "idle":
       return <StepUserCode onSubmit={api.wizardStart} />;
@@ -99,11 +107,17 @@ function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
       );
     case "identify":
       return (
-        <StepIdentify
-          detected={state.segments}
-          onPiece={(n) => void api.stripIdentify(n).catch(swallow)}
-          onSave={(wired) => api.wizardSave(wired)}
-        />
+        <div class="space-y-3">
+          <StepIdentify
+            detected={state.segments}
+            onPiece={(n) => void api.stripIdentify(n).catch(swallow)}
+            onSave={async (wired) => {
+              await beforeSave?.(); // a pending edit must not land after the library is rebuilt
+              return api.wizardSave(wired);
+            }}
+          />
+          <CancelButton />
+        </div>
       );
     case "saved":
       return (
@@ -125,14 +139,17 @@ function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
           <p role="alert" class="text-red">
             {state.message}
           </p>
-          <button
-            type="button"
-            onClick={() => void api.wizardRetry().catch(swallow)}
-            {...help(H.wizardRetry)}
-            class="rounded-card bg-green px-4 py-2"
-          >
-            Retry
-          </button>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void api.wizardRetry().catch(swallow)}
+              {...help(H.wizardRetry)}
+              class="rounded-card bg-green px-4 py-2"
+            >
+              Retry
+            </button>
+            <CancelButton />
+          </div>
         </div>
       );
   }
@@ -141,21 +158,39 @@ function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
 export function Wizard({
   onState,
   onDone,
+  beforeSave,
 }: {
   /** Every wizard state, so the header can show it instead of the runtime's. */
   onState?: (s: WizardState) => void;
   /** After the strip is saved: leave the wizard for the shape. */
   onDone?: () => void;
+  /** Saves an edit still on its timer, before the wizard replaces the library. */
+  beforeSave?: () => Promise<void>;
 }) {
   const [state, setState] = useState<WizardState>({ kind: "idle" });
   useEffect(() => onState?.(state), [state]);
   useEffect(() => {
     let off = () => {};
     let gone = false;
-    void api.onWizard(setState).then((un) => {
-      if (gone) un();
-      else off = un;
-    });
+    // A remount (tab switch) while the run continues in Rust: listen first, then ask where it
+    // is; the answer applies only if no event arrived meanwhile (an event is always newer).
+    let heard = false;
+    void api
+      .onWizard((s) => {
+        heard = true;
+        setState(s);
+      })
+      .then((un) => {
+        if (gone) {
+          un();
+          return;
+        }
+        off = un;
+        void api
+          .wizardState()
+          .then((s) => !gone && !heard && setState(s))
+          .catch(swallow);
+      });
     // Closing the window mid-login must revoke the cloud session.
     const cancel = () => void api.wizardCancel().catch(swallow);
     window.addEventListener("beforeunload", cancel);
@@ -165,5 +200,5 @@ export function Wizard({
       window.removeEventListener("beforeunload", cancel);
     };
   }, []);
-  return <Step state={state} onDone={onDone ?? swallow} />;
+  return <Step state={state} onDone={onDone ?? swallow} beforeSave={beforeSave} />;
 }

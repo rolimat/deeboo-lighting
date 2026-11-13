@@ -210,10 +210,10 @@ impl ClockTracker {
             self.tick = 0;
             self.armed = false;
             self.running = true;
-        } else if now_us > self.last_us {
-            self.tick += 1;
+        } else if now_us >= self.last_us {
+            self.tick += 1; // equal timestamps (same microsecond) still count
         } else {
-            return None; // non-increasing timestamp: not a new tick
+            return None; // time went back: not a new tick
         }
         self.last_us = now_us;
         (self.tick.is_multiple_of(12)).then(|| ClockEvent::Pulse {

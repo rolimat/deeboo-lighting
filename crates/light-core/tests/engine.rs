@@ -975,6 +975,24 @@ fn preview_free_runs_without_a_clock_then_restores_the_rest_scene() {
 }
 
 #[test]
+fn preview_that_does_not_fit_the_strip_is_rejected_and_sends_nothing() {
+    let mut s = sim125();
+    let (palette, mut seq) = preview_pair();
+    for step in &mut seq.steps {
+        step.roles.pop(); // one role too few for the strip's segments
+    }
+    let out = s.e.set_preview(s.now, Some((palette, seq)));
+    assert_eq!(out, vec![]);
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 2_000_000);
+    assert!(
+        s.sends
+            .iter()
+            .all(|(_, c)| !matches!(c, PaintCommand::Pencil { color, .. } if color.h == 111))
+    );
+}
+
+#[test]
 fn brightness_repaints_the_preview_without_advancing_it() {
     let mut s = sim125();
     let out = s.e.set_preview(s.now, Some(preview_pair()));
@@ -1190,4 +1208,75 @@ fn brightness_with_lights_off_sends_nothing() {
     s.cmd(UiCommand::Brightness(50));
     s.deadlines_until(at + 10_000_000);
     assert_eq!(s.sends_in(at, u64::MAX), vec![]);
+}
+
+#[test]
+fn a_reverted_predicted_drop_and_the_real_drop_advance_the_palette_once() {
+    use light_core::library::PaletteChange::AtDrop;
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_pal_lib(AtDrop));
+    s.start();
+    // Build-up from beat 4; the phrase-start prediction (beat 15) is contradicted at beat 18,
+    // and the real drop is reported from beat 28.
+    s.beats_of(40, &mut |beat| match beat {
+        4..=27 => Some(BuildUp),
+        _ => Some(Rhythm),
+    });
+    assert_eq!(s.e.status().moment, Rhythm);
+    assert_eq!(
+        s.e.status().palette,
+        Some(2),
+        "one drop is one palette change"
+    );
+}
+
+#[test]
+fn a_confirmed_predicted_drop_does_not_swallow_the_next_drop() {
+    use light_core::library::PaletteChange::AtDrop;
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_pal_lib(AtDrop));
+    s.start();
+    s.beats_of(22, &mut |beat| match beat {
+        4..=17 => Some(BuildUp),
+        _ => Some(Rhythm),
+    });
+    assert_eq!(s.e.status().palette, Some(2));
+    // A second build-up and drop: the palette changes again.
+    s.beats_of(24, &mut |beat| match beat {
+        22..=37 => Some(BuildUp),
+        _ => Some(Rhythm),
+    });
+    assert_eq!(s.e.status().palette, Some(1));
+}
+
+#[test]
+fn saving_the_library_while_stopped_does_not_paint_over_a_preview() {
+    let mut s = sim125();
+    let out = s.e.set_preview(s.now, Some(preview_pair()));
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 600_000);
+    let mark = s.sends.len();
+    let out = s.e.set_library(s.now, &plain(4));
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 700_000);
+    let after = hues(&s.sends[mark..]);
+    assert!(
+        after.iter().all(|h| *h == 111 || *h == 222),
+        "rest scene painted over the preview: {after:?}"
+    );
+}
+
+#[test]
+fn two_contradicted_predictions_and_the_real_drop_advance_the_palette_once() {
+    use light_core::library::PaletteChange::AtDrop;
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_pal_lib(AtDrop));
+    s.start();
+    // Predictions at the phrase starts (beats 15 and 31) are both contradicted; the drop is real at 44.
+    s.beats_of(56, &mut |beat| match beat {
+        4..=43 => Some(BuildUp),
+        _ => Some(Rhythm),
+    });
+    assert_eq!(s.e.status().moment, Rhythm);
+    assert_eq!(s.e.status().palette, Some(2));
 }

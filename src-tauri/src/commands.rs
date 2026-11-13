@@ -15,6 +15,7 @@ use crate::library_store;
 use crate::settings::{self, Settings};
 use crate::strip_store;
 use crate::wizard::session::{Emit, RealLan, Wizard};
+use crate::wizard::state::WizardState;
 use light_core::library::Library;
 use light_core::model::{Sequence, resolve};
 use light_core::scene;
@@ -57,6 +58,9 @@ pub struct MidiStatus {
 #[serde(rename_all = "camelCase")]
 pub struct AudioStatus {
     pub ok: bool,
+    /// The capture could not open or died; retried on the next play.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub failed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
     /// Peak of the last beat in dBFS.
@@ -228,6 +232,8 @@ pub struct AppState {
     popover_shown: AtomicBool,
     editor_shown: AtomicBool,
     wizard: Wizard,
+    /// When the last editor identify went out (see `identify_gate`).
+    identify_at: Mutex<Option<std::time::Instant>>,
 }
 
 impl Default for AppState {
@@ -243,6 +249,7 @@ impl Default for AppState {
             popover_shown: AtomicBool::new(false),
             editor_shown: AtomicBool::new(false),
             wizard: Wizard::default(),
+            identify_at: Mutex::new(None),
         }
     }
 }
@@ -279,7 +286,32 @@ impl AppState {
     }
 
     /// A library that was never saved is just the first-run built-ins: rebuild it for the strip's new
-    /// segment count. A saved one is the user's and stays as it is (the editor adapts it).
+    /// segment count. A saved one is the user's: `adapt_library` resizes it (after a backup).
+    fn adapt_library(&self, segments: u8) -> Result<Option<Library>, String> {
+        if let Some(lib) = self.rebuild_unsaved_library(segments) {
+            return Ok(Some(lib));
+        }
+        let Some(path) = lock(&self.library_path).clone().filter(|p| p.exists()) else {
+            return Ok(None);
+        };
+        let old = self.library();
+        if old.segments() == segments {
+            return Ok(None);
+        }
+        backup_library(&path, old.segments())?;
+        self.save_library(with_wired(&old, segments)).map(Some)
+    }
+
+    /// Tells the engine about the new strip, always with the saved library first: a retried save finds
+    /// the library already adapted, and the engine would rebuild from a stale one.
+    fn hand_over(&self, cfg: strip_store::StripConfig) -> Result<(), String> {
+        self.deliver(Input::Library(Box::new(self.library())));
+        self.send(Input::StripChanged(cfg)).map_err(|e| {
+            log::warn!("strip saved but not reloaded: {e}");
+            "Saved. Restart the app to use the new strip.".to_string()
+        })
+    }
+
     fn rebuild_unsaved_library(&self, segments: u8) -> Option<Library> {
         let path = lock(&self.library_path).clone()?;
         let mut current = lock(&self.library);
@@ -387,7 +419,22 @@ impl AppState {
     }
 
     fn save_settings(&self, new: Settings) -> Result<Settings, String> {
+        // The lock spans swap and write so a concurrent save cannot interleave.
+        Self::persist(self, &mut lock(&self.settings), new)
+    }
+
+    /// Edits the current settings and saves them under one lock: a concurrent edit of another
+    /// field cannot be overwritten by a stale copy.
+    pub fn save_settings_with(&self, edit: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
+        let mut cur = lock(&self.settings);
+        let mut new = cur.clone();
+        edit(&mut new);
+        Self::persist(self, &mut cur, new)
+    }
+
+    fn persist(&self, cur: &mut Settings, mut new: Settings) -> Result<Settings, String> {
         new.validate()?;
+        new.switch_input(cur);
         let path = lock(&self.settings_path)
             .clone()
             .ok_or("settings unavailable")?;
@@ -395,24 +442,23 @@ impl AppState {
             log::warn!("settings not saved: {e}");
             "settings not saved".to_string()
         })?;
-        *lock(&self.settings) = new.clone();
+        *cur = new.clone();
         Ok(new)
     }
 
     /// The engine picked the only MIDI source by itself: keep it (a failed save is logged by
     /// `save_settings`; the choice still holds until restart).
     pub fn remember_midi_source(&self, name: &str) {
-        let mut s = self.settings();
-        s.midi_source = Some(name.to_string());
-        let _ = self.save_settings(s);
+        let _ = self.save_settings_with(|s| s.midi_source = Some(name.to_string()));
     }
 
     /// Saves the Detection panel's thresholds (range-checked by `Settings::validate`); the rest of
     /// the settings stay as they are.
     fn set_thresholds(&self, t: Thresholds) -> Result<Settings, String> {
-        let mut s = self.settings();
-        (s.calm_kick_db, s.calm_high_db, s.riser_db) = (t.calm_kick_db, t.calm_high_db, t.riser_db);
-        self.save_settings(s)
+        self.save_settings_with(|s| {
+            (s.calm_kick_db, s.calm_high_db, s.riser_db) =
+                (t.calm_kick_db, t.calm_high_db, t.riser_db);
+        })
     }
 
     pub fn set_status(&self, s: Status) {
@@ -719,6 +765,22 @@ pub fn preview_generated(
     preview_generated_of(&state.library(), moment, seed)
 }
 
+/// A preview must fit the segments the strip is wired for now (the library's count when no strip is
+/// connected); the engine ignores one that does not, so say so.
+fn fit_strip(
+    p: Box<(light_core::model::Palette, Sequence)>,
+    strip: &StripStatus,
+    lib: &Library,
+) -> Result<Box<(light_core::model::Palette, Sequence)>, String> {
+    let n = match strip {
+        StripStatus::Connected { segments, .. } => *segments,
+        _ => lib.segments(),
+    };
+    p.1.validate(n)
+        .map_err(|_| "That sequence does not fit the strip.".to_string())?;
+    Ok(p)
+}
+
 /// What "Show on strip" plays: the palette as sent (range-checked) with the library's own sequence,
 /// which must fit the library's segments.
 fn preview_palette_of(
@@ -750,7 +812,9 @@ pub fn preview_palette(
     if !on {
         return state.send_off(Input::PreviewPalette(None));
     }
-    let p = Some(preview_palette_of(&state.library(), palette, sequence)?);
+    let lib = state.library();
+    let p = preview_palette_of(&lib, palette, sequence)?;
+    let p = Some(fit_strip(p, &lock(&state.status).strip, &lib)?);
     state.send(Input::PreviewPalette(p))
 }
 
@@ -808,13 +872,9 @@ pub fn preview_sequence(
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(1, |d| u64::try_from(d.as_micros()).unwrap_or(1));
-        Some(preview_sequence_of(
-            &state.library(),
-            palette,
-            sequence,
-            moment,
-            seed,
-        )?)
+        let lib = state.library();
+        let p = preview_sequence_of(&lib, palette, sequence, moment, seed)?;
+        Some(fit_strip(p, &lock(&state.status).strip, &lib)?)
     };
     state.send(Input::PreviewPalette(p))
 }
@@ -838,9 +898,7 @@ pub async fn list_audio_inputs() -> Result<Vec<String>, String> {
 #[allow(clippy::needless_pass_by_value)] // tauri::State is passed by value by the macro
 pub fn ui_command(state: tauri::State<'_, AppState>, cmd: UiCommandDto) -> Result<(), String> {
     if let UiCommandDto::Lights { on } = cmd {
-        let mut s = state.settings();
-        s.lights_on = on;
-        state.save_settings(s)?;
+        state.save_settings_with(|s| s.lights_on = on)?;
     }
     state.send(Input::Ui(cmd.into()))
 }
@@ -860,11 +918,12 @@ pub fn wizard_emit(app: &tauri::AppHandle) -> Emit {
 pub async fn wizard_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-    user_code: String,
+    user_code: secrecy::SecretString,
 ) -> Result<(), String> {
-    let code = tuya_cloud::UserCode::parse(&user_code).map_err(|_| {
-        "Enter the User Code from Smart Life (letters and digits only).".to_string()
-    })?;
+    let code = tuya_cloud::UserCode::parse(secrecy::ExposeSecret::expose_secret(&user_code))
+        .map_err(|_| {
+            "Enter the User Code from Smart Life (letters and digits only).".to_string()
+        })?;
     let handle = app.clone();
     let pause: Arc<dyn Fn(bool) + Send + Sync> =
         Arc::new(move |p| handle.state::<AppState>().send_strip_pause(p));
@@ -895,6 +954,13 @@ pub fn wizard_cancel(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
 }
 
 /// `segment` is 1-based and checked against the strip's segment count.
+/// The wizard's current state, so a remounted view picks up where the run is. Never a secret.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri passes the state by value
+pub fn wizard_state(state: tauri::State<'_, AppState>) -> WizardState {
+    state.wizard.state()
+}
+
 #[tauri::command]
 pub async fn strip_identify(state: tauri::State<'_, AppState>, segment: u8) -> Result<(), String> {
     state.wizard.identify(segment).await
@@ -910,11 +976,28 @@ fn identify_check(strip: &StripStatus, segment: u8) -> Result<(), String> {
     }
 }
 
+/// The strip loses back-to-back messages: an identify inside the engine's gate would be dropped
+/// silently, so the caller hears about it instead.
+fn identify_gate(
+    last: &Mutex<Option<std::time::Instant>>,
+    now: std::time::Instant,
+) -> Result<(), String> {
+    let mut g = lock(last);
+    if g.is_some_and(|t| {
+        now < t + std::time::Duration::from_micros(crate::runtime::IDENTIFY_GATE_US)
+    }) {
+        return Err("Wait a moment and try again.".into());
+    }
+    *g = Some(now);
+    Ok(())
+}
+
 /// Flashes one segment through the app's own strip connection (the shape editor, after pairing).
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn identify_segment(state: tauri::State<'_, AppState>, segment: u8) -> Result<(), String> {
     identify_check(&lock(&state.status).strip, segment)?;
+    identify_gate(&state.identify_at, std::time::Instant::now())?;
     state.send(Input::Identify(segment))
 }
 
@@ -927,17 +1010,54 @@ pub fn wizard_save(
 ) -> Result<(), String> {
     // `Saved` goes out only once the engine has the new strip; if it cannot take the news now, the
     // file is safe on disk and a restart still picks it up.
-    state
-        .wizard
-        .save(&state.strip_path()?, &wizard_emit(&app), wired, |cfg| {
-            if let Some(lib) = state.rebuild_unsaved_library(cfg.segments) {
-                state.deliver(Input::Library(Box::new(lib)));
-            }
-            state.send(Input::StripChanged(cfg)).map_err(|e| {
-                log::warn!("strip saved but not reloaded: {e}");
-                "Saved. Restart the app to use the new strip.".to_string()
-            })
-        })
+    // Library first (as `set_wired` does): a failed backup leaves strip.json and the library as they
+    // were. If the strip write then fails, the adapted library stays (a retry with the same count
+    // finds nothing left to adapt); the backup is kept.
+    state.wizard.save_prepared(
+        &state.strip_path()?,
+        &wizard_emit(&app),
+        wired,
+        |n| state.adapt_library(n).map(drop),
+        |cfg| state.hand_over(cfg),
+    )
+}
+
+/// Copies the saved library to `<file>.pre-<segments>seg` (`.N` appended when taken) before a resize
+/// drops what no longer fits. Never overwrites a copy; a failed copy leaves nothing behind.
+fn backup_library(path: &std::path::Path, segments: u8) -> Result<(), String> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let fail = |e: std::io::Error| {
+        log::warn!("library backup not written: {e}");
+        "Could not back up the library.".to_string()
+    };
+    // Never looser than the library itself.
+    let source_mode = std::fs::metadata(path).map_err(fail)?.permissions().mode() & 0o777;
+    for i in 0..100 {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".pre-{segments}seg"));
+        if i > 0 {
+            name.push(format!(".{i}"));
+        }
+        let target = path.with_file_name(name);
+        let out = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(source_mode)
+            .open(&target);
+        let mut out = match out {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(fail(e)),
+        };
+        let copied =
+            std::fs::File::open(path).and_then(|mut src| std::io::copy(&mut src, &mut out));
+        if let Err(e) = copied {
+            let _ = std::fs::remove_file(&target);
+            return Err(fail(e));
+        }
+        return Ok(());
+    }
+    Err("Too many library backups.".into())
 }
 
 /// The shape with exactly `n` pieces: the first ones stay; new ones continue from the last piece in
@@ -983,6 +1103,15 @@ impl AppState {
             return Err("Wired segments must be between 1 and what the strip reports.".into());
         }
         cfg.segments = n;
+        let old = self.library();
+        if n < old.segments()
+            && lock(&self.library_path)
+                .as_deref()
+                .is_some_and(std::path::Path::exists)
+        {
+            let path = lock(&self.library_path).clone().unwrap_or_default();
+            backup_library(&path, old.segments())?;
+        }
         // Library first: if it fails, strip.json is not left ahead of it.
         let lib = self.save_library(with_wired(&self.library(), n))?;
         strip_store::save(&path, &cfg).map_err(|e| {
@@ -1173,13 +1302,75 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 30);
+        assert_eq!(commands.len(), 31);
         assert_eq!(granted, commands);
         // The popover calls none of these; only the editor may.
         let popover = include_str!("../capabilities/popover.json");
         for unused in ["set-live-set", "list-midi-sources", "list-audio-inputs"] {
             assert!(!popover.contains(unused), "{unused}");
         }
+    }
+
+    #[test]
+    fn saving_another_input_swaps_the_detector_settings_and_persists_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let state = AppState::default();
+        state.init_settings(path.clone());
+        let a = state
+            .save_settings(Settings {
+                audio_input: Some("A".into()),
+                sensitivity: 9,
+                ..state.settings()
+            })
+            .unwrap();
+        assert_eq!(a.sensitivity, 5, "A is new: defaults");
+        state
+            .save_settings(Settings {
+                sensitivity: 9,
+                ..a
+            })
+            .unwrap();
+        let sys = state
+            .save_settings(Settings {
+                audio_input: None,
+                ..state.settings()
+            })
+            .unwrap();
+        assert_eq!(sys.sensitivity, 5);
+        let back = state
+            .save_settings(Settings {
+                audio_input: Some("A".into()),
+                ..state.settings()
+            })
+            .unwrap();
+        assert_eq!(back.sensitivity, 9);
+        assert_eq!(settings::load(&path), back, "persisted");
+    }
+
+    #[test]
+    fn concurrent_settings_edits_do_not_lose_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::default());
+        state.init_settings(dir.path().join("settings.json"));
+        let a = Arc::clone(&state);
+        let source = std::thread::spawn(move || {
+            for _ in 0..50 {
+                a.remember_midi_source("IAC");
+            }
+        });
+        for i in 0..50_u8 {
+            let t = Thresholds {
+                calm_kick_db: 10 + i % 10,
+                calm_high_db: 12,
+                riser_db: 7,
+            };
+            state.set_thresholds(t).unwrap();
+        }
+        source.join().unwrap();
+        let s = state.settings();
+        assert_eq!(s.midi_source.as_deref(), Some("IAC"));
+        assert_eq!(s.calm_kick_db, 10 + 49 % 10);
     }
 
     #[test]
@@ -1251,6 +1442,22 @@ mod tests {
         assert_eq!(
             identify_check(&StripStatus::Connecting, 1),
             Err("Strip not connected.".into())
+        );
+    }
+
+    #[test]
+    fn an_identify_inside_the_gate_is_an_error_not_ok() {
+        let last = Mutex::new(None);
+        let t0 = std::time::Instant::now();
+        assert_eq!(identify_gate(&last, t0), Ok(()));
+        assert_eq!(
+            identify_gate(&last, t0 + std::time::Duration::from_millis(100)),
+            Err("Wait a moment and try again.".into())
+        );
+        // The refused attempt does not extend the wait.
+        assert_eq!(
+            identify_gate(&last, t0 + std::time::Duration::from_millis(300)),
+            Ok(())
         );
     }
 
@@ -1349,6 +1556,110 @@ mod tests {
         assert!(dir.path().join("library.json").exists());
         assert_eq!(state.rebuild_unsaved_library(6), None);
         assert_eq!(state.library(), lib);
+    }
+
+    #[test]
+    fn a_new_segment_count_adapts_the_saved_library_and_backs_it_up() {
+        let (dir, state) = lib_state();
+        let mut mine = state.library();
+        mine.sets[0].name = "Mine".into();
+        state.save_library(mine).unwrap();
+        let before = std::fs::read(dir.path().join("library.json")).unwrap();
+        let lib = state.adapt_library(6).unwrap().expect("adapted");
+        assert_eq!((lib.segments(), lib.validate()), (6, Ok(())));
+        assert_eq!(lib.sets[0].name, "Mine", "the user's show survives");
+        assert!(lib.sequences.iter().all(|(_, s)| s.validate(6).is_ok()));
+        assert_eq!(state.library(), lib);
+        assert_eq!(
+            std::fs::read(dir.path().join("library.json.pre-10seg")).unwrap(),
+            before
+        );
+        assert_eq!(state.adapt_library(6).unwrap(), None, "same count");
+    }
+
+    #[test]
+    fn a_preview_for_another_segment_count_than_the_strip_is_refused() {
+        let lib = Library::builtin(10);
+        let pal = lib.palettes[0].1.clone();
+        let p = preview_palette_of(&lib, pal, lib.sequences[0].0).unwrap();
+        let strip = |segments| StripStatus::Connected {
+            name: "n".into(),
+            segments,
+            reported: 10,
+            ip: None,
+        };
+        assert!(fit_strip(p.clone(), &strip(10), &lib).is_ok());
+        assert_eq!(
+            fit_strip(p.clone(), &strip(6), &lib).unwrap_err(),
+            "That sequence does not fit the strip."
+        );
+        assert!(fit_strip(p, &StripStatus::Connecting, &lib).is_ok());
+    }
+
+    #[test]
+    fn a_failed_backup_leaves_the_library_alone() {
+        let (dir, state) = lib_state();
+        state.save_library(state.library()).unwrap();
+        let path = dir.path().join("library.json");
+        let before = std::fs::read(&path).unwrap();
+        // The copy cannot read its source: a directory stands where the file was.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(state.adapt_library(6).is_err());
+        assert_eq!(state.library().segments(), 10);
+        assert!(
+            !dir.path().join("library.json.pre-10seg").exists(),
+            "no partial copy"
+        );
+        drop(before);
+    }
+
+    #[test]
+    fn shrinking_the_wired_count_backs_the_library_up() {
+        let (dir, state) = state_with_strip(10, 10);
+        state.save_library(state.library()).unwrap();
+        state.set_wired(6).unwrap();
+        assert!(dir.path().join("library.json.pre-10seg").exists());
+    }
+
+    #[test]
+    fn a_retried_save_still_hands_the_engine_the_saved_library() {
+        let (_dir, state) = lib_state();
+        state.save_library(state.library()).unwrap();
+        assert!(state.adapt_library(6).unwrap().is_some());
+        // The retry: the library is already adapted, so there is nothing new to adapt.
+        assert_eq!(state.adapt_library(6).unwrap(), None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        state.set_runtime(RuntimeHandle { tx });
+        let cfg = strip_store::StripConfig {
+            id: "abc".into(),
+            name: "n".into(),
+            local_key: secrecy::SecretString::from("0123456789abcdef"),
+            segments: 6,
+            reported: 10,
+            last_ip: None,
+        };
+        state.hand_over(cfg).unwrap();
+        match rx.recv() {
+            Ok(Input::Library(l)) => assert_eq!(l.segments(), 6),
+            _ => panic!("the library goes first"),
+        }
+        assert!(matches!(rx.recv(), Ok(Input::StripChanged(_))));
+    }
+
+    #[test]
+    fn the_backup_is_never_looser_than_the_library() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, state) = lib_state();
+        state.save_library(state.library()).unwrap();
+        let path = dir.path().join("library.json");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        backup_library(&path, 10).unwrap();
+        let mode = std::fs::metadata(dir.path().join("library.json.pre-10seg"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     fn state_with_strip(n: u8, m: u8) -> (tempfile::TempDir, AppState) {

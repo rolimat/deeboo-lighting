@@ -35,16 +35,16 @@ fn describe(e: &serde_json::Error) -> String {
     format!("{:?} at {}:{}", e.classify(), e.line(), e.column())
 }
 
-/// The first free `.bad`, `.bad.1`, ...; when all are taken, the oldest one (it is overwritten).
-fn bad_slot(path: &Path) -> PathBuf {
+/// The first free `<base>`, `<base>.1`, ...; when all are taken, the oldest one (it is overwritten).
+fn slot(path: &Path, base: &str) -> PathBuf {
     let slots: Vec<PathBuf> = (0..BAD_KEPT)
         .map(|i| {
             sibling(
                 path,
                 &if i == 0 {
-                    ".bad".into()
+                    base.to_string()
                 } else {
-                    format!(".bad.{i}")
+                    format!("{base}.{i}")
                 },
             )
         })
@@ -55,7 +55,7 @@ fn bad_slot(path: &Path) -> PathBuf {
         .find(|p| !p.exists())
         .or_else(|| slots.iter().min_by_key(|p| age(p)))
         .cloned()
-        .unwrap_or_else(|| sibling(path, ".bad"))
+        .unwrap_or_else(|| sibling(path, base))
 }
 
 #[derive(serde::Deserialize)]
@@ -84,7 +84,17 @@ fn parse(path: &Path, text: &str, phrase_bars: u8) -> Result<Library, String> {
     }
     serde_json::from_str::<Library>(text)
         .map_err(|e| describe(&e))
-        .and_then(|l| l.validate().map(|()| l).map_err(|e| e.to_string()))
+        .and_then(|mut l| {
+            // Older files may reference another moment's sequence: keep the original beside it.
+            if l.drop_foreign_refs() {
+                if std::fs::copy(path, slot(path, ".refs")).is_ok() {
+                    log::warn!("library had references to another moment's sequence: dropped");
+                } else {
+                    log::warn!("library references dropped, but the original could not be copied");
+                }
+            }
+            l.validate().map(|()| l).map_err(|e| e.to_string())
+        })
 }
 
 /// Built-ins for `segments` on a missing, corrupt or invalid file. A valid library built for a
@@ -100,7 +110,7 @@ pub fn load(path: &Path, segments: u8, phrase_bars: u8) -> Library {
     parsed.unwrap_or_else(|e| {
         log::warn!("library invalid, using built-ins: {e}");
         // Moved, not copied: a huge file is not duplicated, and the next save cannot overwrite it.
-        if let Err(e) = std::fs::rename(path, bad_slot(path)) {
+        if let Err(e) = std::fs::rename(path, slot(path, ".bad")) {
             log::warn!("cannot keep the invalid library aside: {e}");
         }
         Library::builtin(segments)
@@ -204,6 +214,51 @@ mod tests {
 
     const V1: &str = include_str!("../../crates/light-core/tests/fixtures/library-v1.json");
 
+    /// The editor pairs sent and saved entries by index: renumbering never reorders, adds or drops.
+    #[test]
+    fn assign_ids_keeps_order_and_count_and_changes_only_new_ids() {
+        let prev = Library::builtin(10);
+        let mut new = prev.clone();
+        let (pal, seq, set) = (
+            new.palettes[0].clone(),
+            new.sequences[0].clone(),
+            new.sets[0].clone(),
+        );
+        new.palettes.insert(1, (7_000_001, pal.1));
+        new.sequences.push((7_000_002, seq.1));
+        let mut s = set;
+        s.id = 7_000_003;
+        s.palettes = vec![7_000_001];
+        new.sets.insert(0, s);
+        let before = new.clone();
+        assign_ids(&prev, &mut new).unwrap();
+        let ids = |l: &Library| {
+            (
+                l.palettes.iter().map(|p| p.0).collect::<Vec<_>>(),
+                l.sequences.iter().map(|p| p.0).collect::<Vec<_>>(),
+                l.sets.iter().map(|p| p.id).collect::<Vec<_>>(),
+            )
+        };
+        let (sent_p, sent_q, sent_s) = ids(&before);
+        let (new_p, new_q, new_s) = ids(&new);
+        assert_eq!(
+            (sent_p.len(), sent_q.len(), sent_s.len()),
+            (new_p.len(), new_q.len(), new_s.len())
+        );
+        let known = ids(&prev);
+        for (a, b) in sent_p
+            .iter()
+            .zip(&new_p)
+            .chain(sent_q.iter().zip(&new_q))
+            .chain(sent_s.iter().zip(&new_s))
+        {
+            let temp = *a >= 7_000_000;
+            assert_eq!(a == b, !temp, "only temporary ids change: {a} -> {b}");
+        }
+        assert!(!known.0.contains(&new_p[1]) && !known.2.contains(&new_s[0]));
+        assert_eq!(new.sets[0].palettes, vec![new_p[1]], "references follow");
+    }
+
     #[test]
     fn load_v1_writes_backup_once_and_saves_v2() {
         use std::os::unix::fs::PermissionsExt;
@@ -243,6 +298,62 @@ mod tests {
     }
 
     #[test]
+    fn a_second_refs_cleanup_keeps_its_own_copy() {
+        let (dir, p) = tmp();
+        let text = |n: u32| {
+            with(|v| {
+                let calm = v["sequences"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|s| s[1]["moment"] == "calm")
+                    .unwrap()[0]
+                    .clone();
+                v["sets"][0]["rhythm"]["sequences"] = json!([{ "id": calm }]);
+                v["sets"][0]["name"] = json!(format!("set {n}"));
+            })
+        };
+        std::fs::write(&p, text(1)).unwrap();
+        let _ = load(&p, 10, 8);
+        std::fs::write(&p, text(2)).unwrap();
+        let _ = load(&p, 10, 8);
+        let read = |n: &str| std::fs::read_to_string(dir.path().join(n)).unwrap();
+        assert_eq!(read("library.json.refs"), text(1));
+        assert_eq!(read("library.json.refs.1"), text(2));
+    }
+
+    #[test]
+    fn a_reference_to_another_moments_sequence_is_dropped_on_load() {
+        let (dir, p) = tmp();
+        let text = with(|v| {
+            let calm = v["sequences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s[1]["moment"] == "calm")
+                .unwrap()[0]
+                .clone();
+            v["sets"][0]["rhythm"]["sequences"] = json!([{ "id": calm }]);
+        });
+        std::fs::write(&p, &text).unwrap();
+        let lib = load(&p, 10, 8);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("library.json.refs")).unwrap(),
+            text,
+            "the original is kept byte for byte"
+        );
+        assert_eq!(
+            lib.sets[0].rhythm.sequences,
+            [light_core::library::SeqRef::Generated]
+        );
+        assert_eq!(
+            lib.sequences,
+            Library::builtin(10).sequences,
+            "the rest is kept"
+        );
+    }
+
+    #[test]
     fn invalid_library_is_kept_aside_and_defaults_load() {
         let steps: Vec<Value> = (0..10_000)
             .map(|_| json!({"len":"one","roles":vec!["principal";10]}))
@@ -278,8 +389,6 @@ mod tests {
         big.steps = vec![half; light_core::library::MAX_STEPS];
         lib.sequences = (1..=64).map(|i| (i, big.clone())).collect();
         lib.sets[0].rhythm.sequences = vec![SeqRef::Id(1)];
-        lib.sets[0].calm.sequences = vec![SeqRef::Id(1)];
-        lib.sets[0].buildup.sequences = vec![SeqRef::Id(1)];
         assert_eq!(lib.validate(), Ok(()));
         let (_d, p) = tmp();
         save(&p, &lib).unwrap();

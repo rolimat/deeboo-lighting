@@ -1,3 +1,4 @@
+import { DRAG_TYPE } from "../drag";
 import { useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import type { Palette } from "../api";
@@ -83,7 +84,7 @@ export function ArrangementGrid({
             ...(zoom > 1 ? { minWidth: `${zoom * 100}%` } : {}),
           }}
           onDragOver={(e) => {
-            if (readOnly) return;
+            if (readOnly || !e.dataTransfer?.types.includes(DRAG_TYPE)) return;
             e.preventDefault();
             setOver(true);
           }}
@@ -91,8 +92,9 @@ export function ArrangementGrid({
           onDrop={(e) => {
             e.preventDefault();
             setOver(false);
-            const id = Number(e.dataTransfer?.getData("text/plain"));
-            if (!readOnly && Number.isFinite(id)) onDropPalette(id);
+            const raw = e.dataTransfer?.getData(DRAG_TYPE);
+            const id = Number(raw);
+            if (!readOnly && raw && Number.isFinite(id)) onDropPalette(id);
           }}
         >
           {Array.from({ length: total / 2 }, (_, b) => (

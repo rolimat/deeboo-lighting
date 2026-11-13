@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, type Library } from "../api";
+import { diffIds, isEmpty, remapLibrary, type IdMap } from "./ids";
 import { createHistory, type History } from "./history";
 
 export type SaveState =
@@ -20,6 +21,7 @@ export function useLibrary() {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const gesture = useRef<{ key: string; at: number } | null>(null);
   const rev = useRef(0);
+  const remapFns = useRef(new Set<(m: IdMap) => void>());
   const [, render] = useState(0);
   const [save, setSave] = useState<SaveState>({ state: "saved" });
   const bump = () => render((n) => n + 1);
@@ -33,11 +35,25 @@ export function useLibrary() {
     if (!h) return;
     const sent = rev.current;
     try {
-      const saved = await api.saveLibrary(withLive(h.present));
+      const sentLib = withLive(h.present);
+      const saved = await api.saveLibrary(sentLib);
       live.current = { activeSet: saved.activeSet, activePalette: saved.activePalette };
       // Adopt server-assigned ids unless the user edited meanwhile.
-      if (rev.current === sent) h.replace(saved);
-      if (rev.current === sent) setSave({ state: "saved" });
+      // Entries are paired by index: a save that lost or added any is not adopted (keeps the temp ids).
+      const sameShape =
+        sentLib.sets.length === saved.sets.length &&
+        sentLib.palettes.length === saved.palettes.length &&
+        sentLib.sequences.length === saved.sequences.length;
+      if (rev.current === sent && sameShape) {
+        // Temporary client ids became Rust's: undo/redo states and tab selections follow.
+        const map = diffIds(sentLib, saved);
+        if (!isEmpty(map)) {
+          h.remapStates((l) => remapLibrary(l, map));
+          remapFns.current.forEach((f) => f(map));
+        }
+        h.replace(saved);
+      }
+      if (rev.current === sent && sameShape) setSave({ state: "saved" });
       bump();
     } catch (e) {
       setSave({ state: "error", reason: String(e) });
@@ -70,11 +86,15 @@ export function useLibrary() {
       },
       (e) => alive && setSave({ state: "error", reason: String(e) }),
     );
+    // An edit still on the 400 ms timer is saved when the window or the component goes away.
+    const onUnload = () => void flushNow();
+    window.addEventListener("beforeunload", onUnload);
     return () => {
       alive = false;
-      clearTimeout(timer.current);
+      window.removeEventListener("beforeunload", onUnload);
+      void flushNow();
     };
-  }, []);
+  }, [flushNow]);
 
   const edit = useCallback(
     (fn: (l: Library) => Library, opts?: { coalesce?: string }) => {
@@ -134,7 +154,14 @@ export function useLibrary() {
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo]);
 
+  /** Tabs subscribe to keep their selected id when a save renumbers new entries. */
+  const onRemap = useCallback((fn: (m: IdMap) => void) => {
+    remapFns.current.add(fn);
+    return () => void remapFns.current.delete(fn);
+  }, []);
+
   return {
+    onRemap,
     lib: hist.current?.present ?? null,
     edit,
     reset,

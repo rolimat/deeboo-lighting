@@ -14,6 +14,8 @@ export interface DeviceDto {
   product: string;
   online: boolean;
   supported: boolean;
+  /** Why it can't be chosen, when its data is the cause. */
+  reason?: string | null;
 }
 
 export type WizardStep = "login" | "devices" | "search" | "segments" | "save";
@@ -151,6 +153,8 @@ export const api = {
   wizardChoose: (deviceId: string): Promise<void> => invoke("wizard_choose", { deviceId }),
   wizardRetry: (): Promise<void> => invoke("wizard_retry"),
   wizardCancel: (): Promise<void> => invoke("wizard_cancel"),
+  /** Where the run is now, so the view can pick up after being unmounted. */
+  wizardState: (): Promise<WizardState> => invoke("wizard_state"),
   stripIdentify: (segment: number): Promise<void> => invoke("strip_identify", { segment }),
   /** Flashes a segment (1-based) through the app's own strip connection; rejects with a short message. */
   identifySegment: (segment: number): Promise<void> => invoke("identify_segment", { segment }),

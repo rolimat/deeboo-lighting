@@ -1,3 +1,4 @@
+import { DRAG_TYPE } from "../drag";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, type Library, type PatternName, type Sequence } from "../api";
 import type { MomentName } from "../../api";
@@ -114,7 +115,18 @@ export function SequencesTab({
 }) {
   const { lib, edit } = store;
   const [sel, setSel] = useState<Sel | null>(initial ?? null);
+  useEffect(
+    () =>
+      store.onRemap((m) =>
+        setSel((s) => (s?.k === "seq" ? { k: "seq", id: m.sequences.get(s.id) ?? s.id } : s)),
+      ),
+    [store.onRemap],
+  );
   const [previewId, setPreviewId] = useState<number | null>(null); // UI only, never saved
+  useEffect(
+    () => store.onRemap((m) => setPreviewId((p) => (p === null ? p : (m.palettes.get(p) ?? p)))),
+    [store.onRemap],
+  );
   const [role, setRole] = useState<string>("principal");
   const [zoom, setZoom] = useState(1);
   const [q, setQ] = useState("");
@@ -430,7 +442,7 @@ export function SequencesTab({
                 draggable
                 data-palette={id}
                 {...help(H.previewPaletteItem)}
-                onDragStart={(e) => e.dataTransfer?.setData("text/plain", String(id))}
+                onDragStart={(e) => e.dataTransfer?.setData(DRAG_TYPE, String(id))}
                 onClick={() => setPreviewId(id)}
                 class={itemClass(id === paletteId)}
               >

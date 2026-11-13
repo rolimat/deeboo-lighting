@@ -18,6 +18,8 @@ use tuya_cloud::{
 };
 
 const POLL_EVERY: Duration = Duration::from_secs(2);
+/// Consecutive failed polls that end the login; one dropped request must not.
+const MAX_POLL_FAILURES: u32 = 3;
 const LOGIN_WINDOW: Duration = Duration::from_secs(300);
 /// Keys of every listed device sit in memory while the user chooses.
 const CHOOSE_WINDOW: Duration = Duration::from_secs(600);
@@ -180,22 +182,28 @@ async fn flow(
     });
 
     let deadline = Instant::now() + LOGIN_WINDOW;
+    let mut failures = 0u32;
     let session = loop {
         if Instant::now() >= deadline {
             return Err(login(WizardError::TimedOut));
         }
-        // The wait doubles as the cancel check: no timer thread, no flag polling.
-        match timeout(POLL_EVERY, inputs.recv()).await {
+        // The wait doubles as the cancel check: no timer thread, no flag polling. After a failure
+        // it backs off (4 s, 6 s).
+        match timeout(POLL_EVERY * (1 + failures), inputs.recv()).await {
             Ok(Some(Input::Cancel) | None) => return Err(login(WizardError::Cancelled)),
             Ok(Some(Input::Choose(_))) => continue,
             Err(_elapsed) => {}
         }
         let (t, c, q) = (transport.clone(), code.clone(), qr.clone());
-        if let Some(s) = blocking(move || poll_login(&*t, &c, &q))
-            .await
-            .map_err(login)?
-        {
-            break s;
+        match blocking(move || poll_login(&*t, &c, &q)).await {
+            Ok(Some(s)) => break s,
+            Ok(None) => failures = 0,
+            Err(e) => {
+                failures += 1;
+                if failures >= MAX_POLL_FAILURES {
+                    return Err(login(e));
+                }
+            }
         }
     };
     drop(qr);
@@ -222,14 +230,21 @@ async fn flow(
     let mut entries: Vec<(DeviceDto, SecretString)> = listed
         .into_iter()
         .map(|d| {
+            let usable = d.local_key.is_some();
             let dto = DeviceDto {
-                supported: d.is_light_strip(),
+                supported: d.is_light_strip() && usable,
+                reason: (!usable).then(|| "Not usable: no local key".to_owned()),
                 id: d.id,
                 name: d.name,
                 product: d.product_name,
                 online: d.online,
             };
-            (dto, d.local_key)
+            // Unusable devices carry an empty placeholder: they can never be chosen.
+            (
+                dto,
+                d.local_key
+                    .unwrap_or_else(|| SecretString::from(String::new())),
+            )
         })
         .collect();
     events(WizardState::ChooseStrip {
@@ -282,6 +297,8 @@ mod tests {
     struct Fake {
         seen: Mutex<Vec<(Method, String)>>,
         not_yet: AtomicUsize,
+        /// The next polls fail at the network level.
+        fail_polls: AtomicUsize,
         never: bool,
         fail_revoke: bool,
         on_poll: Mutex<Option<Box<dyn Fn() + Send>>>,
@@ -311,6 +328,10 @@ mod tests {
             if u.contains("/qrcode/tokens/") {
                 if let Some(f) = self.on_poll.lock().unwrap().as_ref() {
                     f();
+                }
+                if self.fail_polls.load(Ordering::SeqCst) > 0 {
+                    self.fail_polls.fetch_sub(1, Ordering::SeqCst);
+                    return Err(CloudError::Network);
                 }
                 if self.never || self.not_yet.load(Ordering::SeqCst) > 0 {
                     self.not_yet.fetch_sub(1, Ordering::SeqCst);
@@ -395,6 +416,85 @@ mod tests {
         assert_eq!(f.count("/terminal/expire"), 1);
         let urls = f.urls();
         assert!(urls.last().unwrap().ends_with("/terminal/expire"));
+    }
+
+    #[test]
+    fn two_failed_polls_do_not_end_the_login() {
+        let f = fake();
+        f.fail_polls.store(2, Ordering::SeqCst);
+        let (out, _) = drive(&f, &["d1"], |_| {});
+        assert_eq!(out.unwrap().0.id, "d1");
+        assert_eq!(f.count("/qrcode/tokens/"), 3);
+    }
+
+    #[test]
+    fn a_good_poll_resets_the_failure_count() {
+        let f = fake();
+        // fail, fail, not yet, fail, success: five polls; without the reset the third failure ends it.
+        f.fail_polls.store(2, Ordering::SeqCst);
+        f.not_yet.store(1, Ordering::SeqCst);
+        let flip = f.clone();
+        *f.on_poll.lock().unwrap() = Some(Box::new(move || {
+            // The 4th poll fails once more, after the not-yet answer of the 3rd.
+            if flip.count("/qrcode/tokens/") == 4 {
+                flip.fail_polls.store(1, Ordering::SeqCst);
+            }
+        }));
+        let (out, _) = drive(&f, &["d1"], |_| {});
+        assert!(out.is_ok());
+        assert_eq!(f.count("/qrcode/tokens/"), 5);
+    }
+
+    #[test]
+    fn three_failed_polls_in_a_row_fail_the_login() {
+        let f = fake();
+        f.fail_polls.store(3, Ordering::SeqCst);
+        let (out, ev) = drive(&f, &[], |_| {});
+        assert_eq!(out.err(), Some(WizardError::Cloud(CloudError::Network)));
+        assert_eq!(f.count("/qrcode/tokens/"), 3);
+        assert!(matches!(
+            ev.lock().unwrap().last(),
+            Some(S::Failed {
+                step: Step::Login,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn choosing_an_unusable_device_is_ignored_and_no_empty_key_leaves() {
+        // d3 has no local key: it is listed but cannot be chosen; the flow waits for a real pick.
+        struct NoKey(Arc<Fake>);
+        impl Transport for NoKey {
+            fn send(&self, req: &HttpRequest) -> Result<String, CloudError> {
+                if req.url.contains("/ha/home/devices") {
+                    let devs = format!(
+                        r#"[{{"id":"d3","name":"Strip","category":"dd","product_name":"J","online":true}},
+                            {{"id":"d1","name":"Strip","category":"dd","product_name":"J","online":true,"local_key":"{KEY_A}"}}]"#
+                    );
+                    return Ok(encrypted_reply(req, REFRESH, &devs));
+                }
+                self.0.send(req)
+            }
+        }
+        let t: Arc<dyn Transport + Send + Sync> = Arc::new(NoKey(fake()));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel(8);
+        let tx2 = tx.clone();
+        let on_event = move |s: WizardState| {
+            if matches!(s, S::ChooseStrip { .. }) {
+                tx2.try_send(Input::Choose("d3".into())).unwrap();
+                tx2.try_send(Input::Choose("d1".into())).unwrap();
+            }
+        };
+        let out = rt.block_on(run(t, UserCode::parse(CODE).unwrap(), on_event, rx));
+        let (dev, key) = out.unwrap();
+        assert_eq!(dev.id, "d1");
+        assert_eq!(key.expose_secret(), KEY_A);
     }
 
     #[test]

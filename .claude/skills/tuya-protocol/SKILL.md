@@ -17,6 +17,13 @@ I/O in `src-tauri`. Pair with the `security` skill for anything network or secre
   redial raced ours and a refused redial looked like a bad key). A paint/identify failure or a resume redials with the
   saved config: 5 attempts, waits 0.5/1/2/4/8 s, then repaints. Only a first connection or exhausted retries report
   `KeyInvalid`/`Error`; Lights on retries from any failure. Nothing clears `strip.json` but the wizard saving a new one.
+- Protocol 3.3 has no handshake: `wait_connected` succeeds against any device on port 6668, and it is unverified
+  whether the strip answers a plain `query()`. So `connect_in` queries after each dial and gets a `Verdict`: `Ours`
+  (decrypted reply with `dps`, no other `devId`), `Foreign` (names another device), `Rejected` (`watch_error()` set:
+  decrypt/CRC/HMAC failure) or `Silent` (3 s, nothing). Saved `last_ip`: kept only on `Ours`; else the device is
+  closed (one LAN client at a time) and discovery by ID runs. The device found by ID is accepted on `Ours` or `Silent`
+  (the broadcast tied the ID to that IP); `Rejected` is `Auth`/`KeyInvalid`, `Foreign` is `NotFound`. A strip confirmed `Silent` by discovery is remembered in memory (id + IP, per session, `SilentCache`): later connects to that same IP accept `Silent` without discovery (`Rejected`/`Foreign` still fall through). A new IP is
+  written to `strip.json` (re-read, `last_ip` only, 0600 helper) and kept in the task's config for redials.
 - The cloud does not advertise the segment DP (only `switch_led`, `work_mode`, `colour_data`, `countdown`) but the strip uses it locally.
 - `raw` DPs travel as base64 inside the JSON.
 
@@ -53,6 +60,8 @@ White is `S=0, V=1000`.
   (`reported` defaults to `segments` in old files). The header always carries M; the strip task paints only
   1..=N (a bucket becomes a pencil on 1..=N), erases N+1..=M once on connect, and identify works on 1..=M.
   Engine and library work in N; the padding happens only in `strip.rs`.
+  A new N (re-pair or wired stepper) resizes the saved library like `with_wired` (a copy goes to
+  `library.json.pre-<old>seg` first); `Engine::set_preview` ignores a sequence that does not fit N.
 
 ## Smart Life QR login (port of `tuya-device-sharing-sdk` 0.2.15, MIT)
 1. `POST https://apigw.iotbing.com/v1.0/m/life/home-assistant/qrcode/tokens?clientid=HA_3y9q4ak7g4ephrvke&usercode=<code>&schema=haauthorize`
@@ -61,7 +70,7 @@ White is `S=0, V=1000`.
 3. Poll `GET .../qrcode/tokens/<token>?clientid=...&usercode=...` (on a timer, with a deadline) until `success`:
    `access_token`, `refresh_token`, `uid`, `expire_time`, `terminal_id`, `endpoint`.
 4. With that session: `GET /v1.0/m/life/users/homes`, then `GET /v1.0/m/life/ha/home/devices?homeId=...`
-   (`id`, `name`, `category`, `product_name`, `local_key`, `online`). These requests are AES-GCM encrypted and
+   (`id`, `name`, `category`, `product_name`, `local_key`, `online`). Parsed per device with optional fields: no id is skipped; a missing, null or non-16-byte `local_key` (hubs, sub-devices) lists the device as unusable (greyed out in the wizard), never an error; max 200 devices. These requests are AES-GCM encrypted and
    HMAC-SHA256 signed (key derived from a `requestId` and the `refresh_token`); port `_secret_generating`,
    `_restful_sign`, `_aes_gcm_encrypt`, `_aex_gcm_decrypt` from `tuya_sharing/customerapi.py` as they are.
 5. Revoke the session (`POST /v1.0/m/token/terminal/expire`) and drop it from memory.

@@ -140,14 +140,15 @@ ship:
     set -euo pipefail
     git push -u origin HEAD
     sha=$(git rev-parse HEAD)
-    id=""
+    ids=""
     for _ in $(seq 1 30); do
-        id=$(gh run list --commit "$sha" --json databaseId -q '.[0].databaseId // empty')
-        [ -n "$id" ] && break
+        ids=$(gh run list --commit "$sha" --json databaseId -q '.[].databaseId')
+        [ -n "$ids" ] && break
         sleep 2
     done
-    [ -n "$id" ] || { echo "no CI run found for $sha" >&2; exit 1; }
-    gh run watch --exit-status "$id"
+    [ -n "$ids" ] || { echo "no CI run found for $sha" >&2; exit 1; }
+    # Every workflow run of this commit, not only the newest.
+    for id in $ids; do gh run watch --exit-status "$id"; done
 
 # Offline detector run on a recording (macOS host, release build): episodes, --timeline, --labels, --bpm, --realtime.
 [positional-arguments]
