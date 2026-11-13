@@ -206,6 +206,10 @@ impl Link for RealLink<'_> {
         // Subscribe before asking so the reply cannot slip past.
         let mut frames = DeviceFrames(device.listener());
         let mut errors = device.watch_error();
+        // A failure published before the subscription is ours: every dial builds a new `Device`.
+        if errors.borrow_and_update().is_some() {
+            return Verdict::Rejected;
+        }
         if device.query().await.is_err() {
             return Verdict::Silent;
         }
@@ -213,13 +217,20 @@ impl Link for RealLink<'_> {
             loop {
                 tokio::select! {
                     f = frames.next() => {
-                        if let Some(ours) = f.and_then(|f| reply_kind(&f, &cfg.id)) {
+                        // `None`: the device stopped; looping again would spin.
+                        let Some(f) = f else { return Verdict::Silent };
+                        if let Some(ours) = reply_kind(&f, &cfg.id) {
                             return if ours { Verdict::Ours } else { Verdict::Foreign };
                         }
                     }
-                    e = errors.changed() => if e.is_ok() && errors.borrow().is_some() {
-                        return Verdict::Rejected;
-                    },
+                    e = errors.changed() => {
+                        if e.is_err() {
+                            return Verdict::Silent; // sender dropped
+                        }
+                        if errors.borrow().is_some() {
+                            return Verdict::Rejected;
+                        }
+                    }
                 }
             }
         };
