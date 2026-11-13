@@ -351,11 +351,28 @@ impl Wizard {
     /// # Errors
     /// Fails outside the identify step, when the file cannot be written, or with `deliver`'s error
     /// (the file is on disk then, and the run is over).
+    #[cfg(test)]
     pub fn save(
         &self,
         path: &Path,
         emit: &Emit,
         wired: u8,
+        deliver: impl FnOnce(StripConfig) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.save_prepared(path, emit, wired, |_| Ok(()), deliver)
+    }
+
+    /// `save`, running `prepare(wired)` after the count is checked and before `strip.json` is written;
+    /// its error stops the save with nothing written and the wizard still ready to retry.
+    ///
+    /// # Errors
+    /// As `save`, plus `prepare`'s.
+    pub fn save_prepared(
+        &self,
+        path: &Path,
+        emit: &Emit,
+        wired: u8,
+        prepare: impl FnOnce(u8) -> Result<(), String>,
         deliver: impl FnOnce(StripConfig) -> Result<(), String>,
     ) -> Result<(), String> {
         let mut g = lock(&self.0);
@@ -366,6 +383,7 @@ impl Wizard {
         if !(1..=r.cfg.reported).contains(&wired) {
             return Err("Wired segments must be between 1 and what the strip reports.".into());
         }
+        prepare(wired)?;
         r.cfg.segments = wired;
         if let Err(e) = strip_store::save(path, &r.cfg) {
             log::warn!("strip file not saved: {e}");
@@ -685,6 +703,20 @@ mod tests {
     #[tokio::test]
     async fn identify_outside_the_identify_step_is_refused() {
         assert!(Wizard::default().identify(1).await.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_prepare_writes_nothing_and_the_save_can_be_retried() {
+        let w = Wizard::default();
+        let l = lan(vec![Ok(IP)], Ok(3));
+        let (emit, _log) = at_identify(&w, &l).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("strip.json");
+        let no = w.save_prepared(&path, &emit, 2, |_| Err("backup".into()), |_| Ok(()));
+        assert_eq!(no, Err("backup".to_string()));
+        assert!(!path.exists());
+        w.save(&path, &emit, 2, |_| Ok(())).unwrap();
+        assert!(path.exists());
     }
 
     #[tokio::test(start_paused = true)]

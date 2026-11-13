@@ -291,25 +291,7 @@ impl AppState {
         if old.segments() == segments {
             return Ok(None);
         }
-        // A copy first (never over an earlier one): the resize drops what no longer fits.
-        let mut backup = None;
-        for i in 0..100 {
-            let mut name = path.file_name().unwrap_or_default().to_os_string();
-            name.push(format!(".pre-{}seg", old.segments()));
-            if i > 0 {
-                name.push(format!(".{i}"));
-            }
-            let candidate = path.with_file_name(name);
-            if !candidate.exists() {
-                backup = Some(candidate);
-                break;
-            }
-        }
-        let backup = backup.ok_or("Too many library backups.")?;
-        std::fs::copy(&path, &backup).map_err(|e| {
-            log::warn!("library backup not written: {e}");
-            "Could not back up the library.".to_string()
-        })?;
+        backup_library(&path, old.segments())?;
         self.save_library(with_wired(&old, segments)).map(Some)
     }
 
@@ -752,6 +734,22 @@ pub fn preview_generated(
     preview_generated_of(&state.library(), moment, seed)
 }
 
+/// A preview must fit the segments the strip is wired for now (the library's count when no strip is
+/// connected); the engine ignores one that does not, so say so.
+fn fit_strip(
+    p: Box<(light_core::model::Palette, Sequence)>,
+    strip: &StripStatus,
+    lib: &Library,
+) -> Result<Box<(light_core::model::Palette, Sequence)>, String> {
+    let n = match strip {
+        StripStatus::Connected { segments, .. } => *segments,
+        _ => lib.segments(),
+    };
+    p.1.validate(n)
+        .map_err(|_| "That sequence does not fit the strip.".to_string())?;
+    Ok(p)
+}
+
 /// What "Show on strip" plays: the palette as sent (range-checked) with the library's own sequence,
 /// which must fit the library's segments.
 fn preview_palette_of(
@@ -783,7 +781,9 @@ pub fn preview_palette(
     if !on {
         return state.send_off(Input::PreviewPalette(None));
     }
-    let p = Some(preview_palette_of(&state.library(), palette, sequence)?);
+    let lib = state.library();
+    let p = preview_palette_of(&lib, palette, sequence)?;
+    let p = Some(fit_strip(p, &lock(&state.status).strip, &lib)?);
     state.send(Input::PreviewPalette(p))
 }
 
@@ -841,13 +841,9 @@ pub fn preview_sequence(
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(1, |d| u64::try_from(d.as_micros()).unwrap_or(1));
-        Some(preview_sequence_of(
-            &state.library(),
-            palette,
-            sequence,
-            moment,
-            seed,
-        )?)
+        let lib = state.library();
+        let p = preview_sequence_of(&lib, palette, sequence, moment, seed)?;
+        Some(fit_strip(p, &lock(&state.status).strip, &lib)?)
     };
     state.send(Input::PreviewPalette(p))
 }
@@ -960,17 +956,64 @@ pub fn wizard_save(
 ) -> Result<(), String> {
     // `Saved` goes out only once the engine has the new strip; if it cannot take the news now, the
     // file is safe on disk and a restart still picks it up.
-    state
-        .wizard
-        .save(&state.strip_path()?, &wizard_emit(&app), wired, |cfg| {
-            if let Some(lib) = state.adapt_library(cfg.segments)? {
+    // Library first (as `set_wired` does): a failed backup leaves strip.json and the library as they
+    // were. If the strip write then fails, the adapted library stays (a retry with the same count
+    // finds nothing left to adapt); the backup is kept.
+    let adapted = std::cell::RefCell::new(None);
+    state.wizard.save_prepared(
+        &state.strip_path()?,
+        &wizard_emit(&app),
+        wired,
+        |n| {
+            *adapted.borrow_mut() = state.adapt_library(n)?;
+            Ok(())
+        },
+        |cfg| {
+            if let Some(lib) = adapted.take() {
                 state.deliver(Input::Library(Box::new(lib)));
             }
             state.send(Input::StripChanged(cfg)).map_err(|e| {
                 log::warn!("strip saved but not reloaded: {e}");
                 "Saved. Restart the app to use the new strip.".to_string()
             })
-        })
+        },
+    )
+}
+
+/// Copies the saved library to `<file>.pre-<segments>seg` (`.N` appended when taken) before a resize
+/// drops what no longer fits. Never overwrites a copy; a failed copy leaves nothing behind.
+fn backup_library(path: &std::path::Path, segments: u8) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let fail = |e: std::io::Error| {
+        log::warn!("library backup not written: {e}");
+        "Could not back up the library.".to_string()
+    };
+    for i in 0..100 {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".pre-{segments}seg"));
+        if i > 0 {
+            name.push(format!(".{i}"));
+        }
+        let target = path.with_file_name(name);
+        let out = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o640)
+            .open(&target);
+        let mut out = match out {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(fail(e)),
+        };
+        let copied =
+            std::fs::File::open(path).and_then(|mut src| std::io::copy(&mut src, &mut out));
+        if let Err(e) = copied {
+            let _ = std::fs::remove_file(&target);
+            return Err(fail(e));
+        }
+        return Ok(());
+    }
+    Err("Too many library backups.".into())
 }
 
 /// The shape with exactly `n` pieces: the first ones stay; new ones continue from the last piece in
@@ -1016,6 +1059,15 @@ impl AppState {
             return Err("Wired segments must be between 1 and what the strip reports.".into());
         }
         cfg.segments = n;
+        let old = self.library();
+        if n < old.segments()
+            && lock(&self.library_path)
+                .as_deref()
+                .is_some_and(std::path::Path::exists)
+        {
+            let path = lock(&self.library_path).clone().unwrap_or_default();
+            backup_library(&path, old.segments())?;
+        }
         // Library first: if it fails, strip.json is not left ahead of it.
         let lib = self.save_library(with_wired(&self.library(), n))?;
         strip_store::save(&path, &cfg).map_err(|e| {
@@ -1401,6 +1453,51 @@ mod tests {
             before
         );
         assert_eq!(state.adapt_library(6).unwrap(), None, "same count");
+    }
+
+    #[test]
+    fn a_preview_for_another_segment_count_than_the_strip_is_refused() {
+        let lib = Library::builtin(10);
+        let pal = lib.palettes[0].1.clone();
+        let p = preview_palette_of(&lib, pal, lib.sequences[0].0).unwrap();
+        let strip = |segments| StripStatus::Connected {
+            name: "n".into(),
+            segments,
+            reported: 10,
+            ip: None,
+        };
+        assert!(fit_strip(p.clone(), &strip(10), &lib).is_ok());
+        assert_eq!(
+            fit_strip(p.clone(), &strip(6), &lib).unwrap_err(),
+            "That sequence does not fit the strip."
+        );
+        assert!(fit_strip(p, &StripStatus::Connecting, &lib).is_ok());
+    }
+
+    #[test]
+    fn a_failed_backup_leaves_the_library_alone() {
+        let (dir, state) = lib_state();
+        state.save_library(state.library()).unwrap();
+        let path = dir.path().join("library.json");
+        let before = std::fs::read(&path).unwrap();
+        // The copy cannot read its source: a directory stands where the file was.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(state.adapt_library(6).is_err());
+        assert_eq!(state.library().segments(), 10);
+        assert!(
+            !dir.path().join("library.json.pre-10seg").exists(),
+            "no partial copy"
+        );
+        drop(before);
+    }
+
+    #[test]
+    fn shrinking_the_wired_count_backs_the_library_up() {
+        let (dir, state) = state_with_strip(10, 10);
+        state.save_library(state.library()).unwrap();
+        state.set_wired(6).unwrap();
+        assert!(dir.path().join("library.json.pre-10seg").exists());
     }
 
     fn state_with_strip(n: u8, m: u8) -> (tempfile::TempDir, AppState) {
