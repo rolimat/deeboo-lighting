@@ -352,6 +352,13 @@ impl Engine {
         now_us: u64,
         preview: Option<(Palette, Sequence)>,
     ) -> Vec<PaintCommand> {
+        // A sequence for another segment count would paint out of range: keep what plays now.
+        if preview
+            .as_ref()
+            .is_some_and(|(_, seq)| seq.validate(self.cfg.segments).is_err())
+        {
+            return Vec::new();
+        }
         self.preview = preview.map(|(palette, seq)| Preview { palette, seq });
         self.free_at = None;
         self.playing = None;

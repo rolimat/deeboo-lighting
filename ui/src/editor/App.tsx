@@ -122,7 +122,11 @@ export function App() {
                 store={store}
                 strip={strip}
                 onRepair={() => setRepair(true)}
-                onWired={() => void refresh()}
+                onWired={(n) =>
+                  // The strip reconnects after a wired change: status reads "connecting" for a while,
+                  // which must not bring the pairing form back.
+                  setStrip((s) => (s?.kind === "connected" ? { ...s, segments: n } : s))
+                }
               />
             ) : (
               <>

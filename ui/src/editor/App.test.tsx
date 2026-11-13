@@ -18,6 +18,7 @@ vi.mock("./api", () => ({
     onWizard: vi.fn(async () => () => {}),
     wizardCancel: vi.fn(),
     saveLibrary: vi.fn(),
+    setWiredSegments: vi.fn(),
     setLiveSet: vi.fn(),
     previewSequence: vi.fn(),
     messageCounts: vi.fn(async () => [1]),
@@ -62,6 +63,35 @@ it("shows_not_connected_when_no_strip", async () => {
   const root = document.createElement("div");
   await mount(root);
   expect(root.querySelector("section")?.textContent).toContain("not connected");
+});
+
+it("strip_tab_stays_on_the_strip_after_a_wired_count_change", async () => {
+  const lib = {
+    shape: { pieces: [] },
+    palettes: [],
+    sequences: [],
+    sets: [],
+  } as unknown as Library;
+  vi.mocked(api.getStatus).mockResolvedValue({
+    kind: "connected",
+    name: "dj lights",
+    segments: 4,
+    reported: 6,
+  });
+  vi.mocked(api.setWiredSegments).mockResolvedValue(lib);
+  const root = document.createElement("div");
+  await mount(root);
+  // The strip reconnects after the change: any status read now says "connecting".
+  vi.mocked(api.getStatus).mockResolvedValue({ kind: "connecting" });
+  const more = root.querySelector<HTMLButtonElement>("[aria-label='More segments']");
+  await act(async () => {
+    more?.click();
+    await new Promise((r) => setTimeout(r, 50));
+  });
+  expect(api.setWiredSegments).toHaveBeenCalledWith(5);
+  const text = root.querySelector("section")?.textContent ?? "";
+  expect(text).toContain("dj lights");
+  expect(text).not.toContain("Smart Life");
 });
 
 it("switches_to_sequences", async () => {

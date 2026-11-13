@@ -279,7 +279,40 @@ impl AppState {
     }
 
     /// A library that was never saved is just the first-run built-ins: rebuild it for the strip's new
-    /// segment count. A saved one is the user's and stays as it is (the editor adapts it).
+    /// segment count. A saved one is the user's: `adapt_library` resizes it (after a backup).
+    fn adapt_library(&self, segments: u8) -> Result<Option<Library>, String> {
+        if let Some(lib) = self.rebuild_unsaved_library(segments) {
+            return Ok(Some(lib));
+        }
+        let Some(path) = lock(&self.library_path).clone().filter(|p| p.exists()) else {
+            return Ok(None);
+        };
+        let old = self.library();
+        if old.segments() == segments {
+            return Ok(None);
+        }
+        // A copy first (never over an earlier one): the resize drops what no longer fits.
+        let mut backup = None;
+        for i in 0..100 {
+            let mut name = path.file_name().unwrap_or_default().to_os_string();
+            name.push(format!(".pre-{}seg", old.segments()));
+            if i > 0 {
+                name.push(format!(".{i}"));
+            }
+            let candidate = path.with_file_name(name);
+            if !candidate.exists() {
+                backup = Some(candidate);
+                break;
+            }
+        }
+        let backup = backup.ok_or("Too many library backups.")?;
+        std::fs::copy(&path, &backup).map_err(|e| {
+            log::warn!("library backup not written: {e}");
+            "Could not back up the library.".to_string()
+        })?;
+        self.save_library(with_wired(&old, segments)).map(Some)
+    }
+
     fn rebuild_unsaved_library(&self, segments: u8) -> Option<Library> {
         let path = lock(&self.library_path).clone()?;
         let mut current = lock(&self.library);
@@ -930,7 +963,7 @@ pub fn wizard_save(
     state
         .wizard
         .save(&state.strip_path()?, &wizard_emit(&app), wired, |cfg| {
-            if let Some(lib) = state.rebuild_unsaved_library(cfg.segments) {
+            if let Some(lib) = state.adapt_library(cfg.segments)? {
                 state.deliver(Input::Library(Box::new(lib)));
             }
             state.send(Input::StripChanged(cfg)).map_err(|e| {
@@ -1349,6 +1382,25 @@ mod tests {
         assert!(dir.path().join("library.json").exists());
         assert_eq!(state.rebuild_unsaved_library(6), None);
         assert_eq!(state.library(), lib);
+    }
+
+    #[test]
+    fn a_new_segment_count_adapts_the_saved_library_and_backs_it_up() {
+        let (dir, state) = lib_state();
+        let mut mine = state.library();
+        mine.sets[0].name = "Mine".into();
+        state.save_library(mine).unwrap();
+        let before = std::fs::read(dir.path().join("library.json")).unwrap();
+        let lib = state.adapt_library(6).unwrap().expect("adapted");
+        assert_eq!((lib.segments(), lib.validate()), (6, Ok(())));
+        assert_eq!(lib.sets[0].name, "Mine", "the user's show survives");
+        assert!(lib.sequences.iter().all(|(_, s)| s.validate(6).is_ok()));
+        assert_eq!(state.library(), lib);
+        assert_eq!(
+            std::fs::read(dir.path().join("library.json.pre-10seg")).unwrap(),
+            before
+        );
+        assert_eq!(state.adapt_library(6).unwrap(), None, "same count");
     }
 
     fn state_with_strip(n: u8, m: u8) -> (tempfile::TempDir, AppState) {

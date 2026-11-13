@@ -60,6 +60,8 @@ White is `S=0, V=1000`.
   (`reported` defaults to `segments` in old files). The header always carries M; the strip task paints only
   1..=N (a bucket becomes a pencil on 1..=N), erases N+1..=M once on connect, and identify works on 1..=M.
   Engine and library work in N; the padding happens only in `strip.rs`.
+  A new N (re-pair or wired stepper) resizes the saved library like `with_wired` (a copy goes to
+  `library.json.pre-<old>seg` first); `Engine::set_preview` ignores a sequence that does not fit N.
 
 ## Smart Life QR login (port of `tuya-device-sharing-sdk` 0.2.15, MIT)
 1. `POST https://apigw.iotbing.com/v1.0/m/life/home-assistant/qrcode/tokens?clientid=HA_3y9q4ak7g4ephrvke&usercode=<code>&schema=haauthorize`

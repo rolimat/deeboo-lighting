@@ -22,7 +22,7 @@ export function StripTab({
   /** Reconnect / Change strip: back into the wizard. */
   onRepair: () => void;
   /** The wired count changed: the strip status is out of date. */
-  onWired: () => void;
+  onWired: (n: number) => void;
 }) {
   const [wired, setWired] = useState(strip.segments);
   const [selected, setSelected] = useState<number | null>(null);
@@ -64,7 +64,7 @@ export function StripTab({
           setWired(n);
           setSelected(null);
           setLit(null);
-          onWired();
+          onWired(n);
         },
         (e: unknown) => setError(String(e)),
       );

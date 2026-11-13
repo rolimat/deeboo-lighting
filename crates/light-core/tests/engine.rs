@@ -975,6 +975,24 @@ fn preview_free_runs_without_a_clock_then_restores_the_rest_scene() {
 }
 
 #[test]
+fn preview_that_does_not_fit_the_strip_is_rejected_and_sends_nothing() {
+    let mut s = sim125();
+    let (palette, mut seq) = preview_pair();
+    for step in &mut seq.steps {
+        step.roles.pop(); // one role too few for the strip's segments
+    }
+    let out = s.e.set_preview(s.now, Some((palette, seq)));
+    assert_eq!(out, vec![]);
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 2_000_000);
+    assert!(
+        s.sends
+            .iter()
+            .all(|(_, c)| !matches!(c, PaintCommand::Pencil { color, .. } if color.h == 111))
+    );
+}
+
+#[test]
 fn brightness_repaints_the_preview_without_advancing_it() {
     let mut s = sim125();
     let out = s.e.set_preview(s.now, Some(preview_pair()));
