@@ -139,3 +139,12 @@ Tried and rejected:
 - A kick-fade Build-up rule: turns three session breaks into Build-ups.
 - A relative drop on stale references: R/C flicker in long session breaks.
 - Kick attack and on-beat pulse features: they do not separate kick from bass.
+
+## Clock positions (plan 10)
+
+With a clock position (spec §6.2.1) the rules above change in four places:
+
+- Riser bars close on the clock's beat 4, not every 4 beats; a partial bar at start or after a gap never counts, so a riser can be up to 3 bars late within a phrase.
+- `min_state_beats` does not bind a quick move on a phrase's beat 1; beat 2 confirms it or undoes it.
+- A Build-up drops to Rhythm on a full beat 1 of a bar.
+- In a phrase's second half 3 rising bars are enough. Measured alone (`--rules riser`) this depends on the phase of the 4-beat counter, because without `aligned_bars` the bars are not clock-aligned.
