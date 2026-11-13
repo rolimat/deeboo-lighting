@@ -80,6 +80,8 @@ impl Windows for AppHandle {
             .inner_size(720.0, 560.0)
             .resizable(true)
             .focused(true)
+            // The native file-drop handler swallows `WKWebView` drops, so HTML5 drag and drop never fires.
+            .disable_drag_drop_handler()
             .build()
             .map(|_| ())
             .map_err(|e| {
@@ -198,5 +200,18 @@ mod tests {
                 "core:event:allow-unlisten"
             ]
         );
+    }
+
+    /// The editor uses HTML5 drag and drop (Sets, Palettes, Sequences); on macOS the native
+    /// file-drop handler takes every drop away from `WKWebView`, so it must stay off.
+    #[test]
+    fn editor_window_keeps_the_native_drop_handler_off() {
+        let src = include_str!("editor_window.rs");
+        let builder = src
+            .split("WebviewWindowBuilder::new")
+            .nth(1)
+            .unwrap_or_default();
+        let builder = builder.split(".build()").next().unwrap_or_default();
+        assert!(builder.contains(".disable_drag_drop_handler()"));
     }
 }
