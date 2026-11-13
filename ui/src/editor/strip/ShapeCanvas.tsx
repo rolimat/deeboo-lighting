@@ -1,6 +1,8 @@
 import { useRef, useState } from "preact/hooks";
 import type { Piece } from "../api";
 import { Icon } from "../../icons/Icon";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import { bounds, endpoints, fits, magnet, normalise, snap, spin, turn } from "./shape";
 
 interface View {
@@ -133,6 +135,7 @@ export function ShapeCanvas(p: {
               tabindex={0}
               role="button"
               aria-label={`Segment ${i + 1}`}
+              {...help(H.piece)}
               class="cursor-grab outline-none"
               onFocus={() => p.onSelect(i)}
               onPointerDown={(e) => {
@@ -181,6 +184,7 @@ export function ShapeCanvas(p: {
             data-handle
             role="button"
             aria-label={`Rotate segment ${p.selected + 1}`}
+            {...help(H.rotateHandle)}
             cx={tip.x + 0.45 * Math.cos(dir)}
             cy={tip.y + 0.45 * Math.sin(dir)}
             r={0.2}
@@ -205,7 +209,7 @@ export function ShapeCanvas(p: {
             type="button"
             class={tool}
             aria-label="Rotate −15°"
-            title="Rotate −15°"
+            {...help(H.rotateLeft)}
             onClick={() => commit(replace(p.selected as number, spin(sel, turn(sel.angle, -15))))}
           >
             <Icon name="rotateccw" />
@@ -214,13 +218,13 @@ export function ShapeCanvas(p: {
             type="button"
             class={tool}
             aria-label="Rotate +15°"
-            title="Rotate +15°"
+            {...help(H.rotateRight)}
             onClick={() => commit(replace(p.selected as number, spin(sel, turn(sel.angle, 15))))}
           >
             <Icon name="rotatecw" />
           </button>
           {p.lit === p.selected && (
-            <span class="grid h-6 w-6 place-items-center text-accent" title="Lit on the strip">
+            <span class="grid h-6 w-6 place-items-center text-accent" {...help(H.litOnStrip)}>
               <Icon name="lightbulb" />
             </span>
           )}

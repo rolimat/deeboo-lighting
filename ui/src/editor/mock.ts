@@ -126,6 +126,7 @@ export function installMock(api: typeof realApi): void {
     calmHighDb: 12,
     riserDb: 6,
     helpTooltips: true,
+    showInDock: "editor",
   };
   let beat = 0;
   let wired = SEGS;

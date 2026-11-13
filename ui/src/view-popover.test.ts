@@ -23,6 +23,7 @@ const settings: Settings = {
   leadMs: 0,
   lightsOn: true,
   helpTooltips: true,
+  showInDock: "editor",
   calmKickDb: 16,
   calmHighDb: 12,
   riserDb: 7,

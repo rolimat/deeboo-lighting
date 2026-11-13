@@ -29,6 +29,7 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   calmKickDb: 14,
   calmHighDb: 10,
   helpTooltips: true,
+  showInDock: "editor",
   riserDb: 6,
   ...over,
 });
@@ -129,6 +130,19 @@ it("threshold_label_in_words", async () => {
   expect(text).toContain("Calm when 10 dB below");
   expect(text).toContain("Build-up when 6 dB above");
   expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("14");
+});
+
+it("threshold_labels_sit_in_a_column_beside_the_waveform", async () => {
+  await mount();
+  push(beat());
+  await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+  const cols = root.querySelectorAll<HTMLElement>("[data-readouts]");
+  expect(cols.length).toBe(3);
+  for (const lane of root.querySelectorAll("[data-lane]"))
+    expect(lane.textContent).not.toMatch(/ dB /);
+  const high = cols[2];
+  expect(high?.textContent).toContain("Build-up when 6 dB above");
+  expect(high?.textContent).toContain("Calm when");
 });
 
 it("moment_lane_shows_what_the_show_used", async () => {

@@ -7,6 +7,7 @@ let resolveGet: ((s: Status) => void) | undefined;
 
 vi.mock("./api", () => ({
   api: {
+    popoverVisible: vi.fn(() => Promise.resolve()),
     onStatus: vi.fn((cb: (s: Status) => void) => {
       push = cb;
       return Promise.resolve(() => {});
@@ -19,6 +20,7 @@ vi.mock("./api", () => ({
     ),
   },
 }));
+import { api } from "./api";
 import { syncStatus } from "./status-sync";
 
 const base: Omit<Status, "strip"> = {
@@ -85,5 +87,64 @@ it("a_push_before_the_initial_read_returns_wins", async () => {
   push?.(connected);
   resolveGet?.(connecting);
   await done;
+  expect(update).toHaveBeenLastCalledWith(connected);
+});
+
+function setVisibility(state: "visible" | "hidden") {
+  Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+it("reports_its_own_visibility_to_the_backend", async () => {
+  vi.mocked(api.popoverVisible).mockClear();
+  const done = syncStatus(vi.fn());
+  await vi.waitFor(() => expect(resolveGet).toBeDefined());
+  resolveGet?.(connecting);
+  await done;
+  setVisibility("visible");
+  expect(api.popoverVisible).toHaveBeenLastCalledWith(true);
+  setVisibility("hidden");
+  expect(api.popoverVisible).toHaveBeenLastCalledWith(false);
+});
+
+it("focus_and_blur_never_report_visibility", async () => {
+  const done = syncStatus(vi.fn());
+  await vi.waitFor(() => expect(resolveGet).toBeDefined());
+  resolveGet?.(connecting);
+  await done;
+  setVisibility("visible");
+  vi.mocked(api.popoverVisible).mockClear();
+  // The tray hid the popover on blur; the page may still say "visible" for a moment.
+  window.dispatchEvent(new Event("blur"));
+  window.dispatchEvent(new Event("focus"));
+  expect(api.popoverVisible).not.toHaveBeenCalled();
+});
+
+it("rereads_the_status_each_time_it_becomes_visible", async () => {
+  const update = vi.fn();
+  const done = syncStatus(update);
+  await vi.waitFor(() => expect(resolveGet).toBeDefined());
+  resolveGet?.(connecting);
+  await done;
+  resolveGet = undefined;
+  setVisibility("visible");
+  await vi.waitFor(() => expect(resolveGet).toBeDefined());
+  (resolveGet as ((s: Status) => void) | undefined)?.(connected);
+  await vi.waitFor(() => expect(update).toHaveBeenLastCalledWith(connected));
+});
+
+it("a_push_during_a_visibility_reread_wins", async () => {
+  const update = vi.fn();
+  const done = syncStatus(update);
+  await vi.waitFor(() => expect(resolveGet).toBeDefined());
+  resolveGet?.(connecting);
+  await done;
+  resolveGet = undefined;
+  setVisibility("visible");
+  await vi.waitFor(() => expect(resolveGet).toBeDefined());
+  push?.(connected);
+  (resolveGet as ((s: Status) => void) | undefined)?.(connecting);
+  await Promise.resolve();
+  await Promise.resolve();
   expect(update).toHaveBeenLastCalledWith(connected);
 });

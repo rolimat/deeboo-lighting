@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, type Hsv, type Palette } from "../api";
 import { Icon } from "../../icons/Icon";
-import { useHelp } from "../shell/Help";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import type { BarActions } from "../sequences/SequencesTab";
 import { css } from "../sequences/RolePicker";
 import { Simulation } from "../sequences/Simulation";
@@ -81,12 +82,6 @@ export function PalettesTab({
     del: () => {},
     guard: () => false,
   });
-  const showHelp = useHelp(
-    "Plays the chosen sequence in this palette on the real strip while you edit.",
-  );
-  const pickHelp = useHelp(
-    "Drag a role onto another to swap. Drop a colour from another palette to copy it.",
-  );
 
   const pickedId =
     sel !== null && lib?.palettes.some(([id]) => id === sel)
@@ -227,6 +222,7 @@ export function PalettesTab({
         <input
           type="search"
           aria-label="Search palettes"
+          {...help(H.search("Palettes"))}
           placeholder="Search"
           value={q}
           onInput={(e) => setQ(e.currentTarget.value)}
@@ -245,7 +241,7 @@ export function PalettesTab({
                       key={r}
                       data-swatch={r}
                       draggable
-                      title={`${p.name}: ${r}`}
+                      {...help(H.swatch(p.name, r))}
                       onDragStart={(e) => {
                         e.dataTransfer?.setData(COLOUR_TYPE, `${id}:${r}`);
                         setDrag({ kind: "colour" });
@@ -259,6 +255,7 @@ export function PalettesTab({
                 <button
                   type="button"
                   aria-current={id === pickedId ? "true" : undefined}
+                  {...help(H.openPalette)}
                   onClick={() => select(id)}
                   class={itemClass(id === pickedId)}
                 >
@@ -270,6 +267,7 @@ export function PalettesTab({
         <button
           type="button"
           disabled={lib.palettes.length >= MAX_PALETTES}
+          {...help(H.newPalette)}
           onClick={() => add(NEW_PALETTE)}
           class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-body text-dim disabled:opacity-40"
         >
@@ -286,6 +284,7 @@ export function PalettesTab({
               </label>
               <input
                 id="pal-name"
+                {...help(H.paletteName)}
                 value={draft ?? palette.name}
                 onInput={(e) => {
                   const name = e.currentTarget.value;
@@ -302,12 +301,13 @@ export function PalettesTab({
                 {notice}
               </p>
             )}
-            <div class="grid grid-cols-3 gap-3" {...pickHelp}>
+            <div class="grid grid-cols-3 gap-3">
               {ROLES.map(([r, title, sub]) => (
                 <button
                   type="button"
                   key={r}
                   data-role={r}
+                  {...help(H.roleCard(title))}
                   draggable
                   aria-pressed={r === role}
                   onClick={() => chooseRole(r)}
@@ -341,6 +341,7 @@ export function PalettesTab({
                   />
                   <input
                     aria-label="Hex colour"
+                    {...help(H.hex)}
                     value={hexDraft ?? toHex(colour)}
                     onInput={(e) => {
                       const text = e.currentTarget.value;
@@ -371,6 +372,7 @@ export function PalettesTab({
                   min={0}
                   max={1000}
                   aria-label="Brightness"
+                  {...help(H.brightness)}
                   value={colour.v}
                   onInput={(e) =>
                     setColour({ ...colour, v: Number(e.currentTarget.value) }, "bright")
@@ -387,6 +389,7 @@ export function PalettesTab({
                       type="button"
                       key={hex}
                       aria-label={`Quick colour ${hex.toUpperCase()}`}
+                      {...help(H.quickColour)}
                       onClick={() => {
                         const c = fromHex(hex);
                         if (c) setColour(c);
@@ -404,6 +407,7 @@ export function PalettesTab({
                   Sequence:
                   <select
                     aria-label="Sequence"
+                    {...help(H.paletteSequence)}
                     value={previewSeq}
                     onChange={(e) => setSeqId(Number(e.currentTarget.value))}
                     class="rounded-md border border-border bg-bg px-2 py-1 text-text"
@@ -421,7 +425,7 @@ export function PalettesTab({
                   aria-pressed={onStrip}
                   onClick={() => setOnStrip((v) => !v)}
                   class={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-body ${onStrip ? "border-accent text-accent" : "border-border text-dim"}`}
-                  {...showHelp}
+                  {...help(H.showOnStrip)}
                 >
                   <Icon name="strip" />
                   Show on strip
@@ -437,6 +441,7 @@ export function PalettesTab({
                       type="button"
                       key={s.id}
                       onClick={() => onGoSets?.()}
+                      {...help(H.usedBy)}
                       class="rounded-lg border border-border bg-card px-2 py-0.5 text-text"
                     >
                       {s.name}

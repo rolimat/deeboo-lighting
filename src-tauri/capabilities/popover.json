@@ -5,6 +5,7 @@
   "windows": ["popover"],
   "permissions": [
     "allow-get-status",
+    "allow-popover-visible",
     "allow-get-settings",
     "allow-save-settings",
     "allow-ui-command",

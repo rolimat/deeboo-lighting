@@ -3,6 +3,7 @@ use tauri_build::{AppManifest, Attributes};
 /// Every command the app exposes; the popover and editor capabilities together list exactly these (see `commands` tests).
 const COMMANDS: &[&str] = &[
     "get_status",
+    "popover_visible",
     "get_settings",
     "get_library",
     "save_library",

@@ -1,4 +1,6 @@
 import { Icon } from "../../icons/Icon";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import type { LibrarySet, Order, PaletteChange, Palette } from "../api";
 import { css } from "../sequences/RolePicker";
 import { canDrop, type DragItem } from "./dnd";
@@ -43,6 +45,7 @@ export function PaletteRow({
         <b class="text-text">Palettes</b> · change
         <select
           aria-label="Palette change"
+          {...help(H.paletteChange)}
           value={value}
           onChange={(e) => {
             const v = e.currentTarget.value;
@@ -76,13 +79,14 @@ export function PaletteRow({
               <Swatch p={p} />
               {p.name}
               {on && (
-                <span class="text-accent" title="Playing now">
+                <span class="text-accent" {...help(H.playingNow)}>
                   <Icon name="play" />
                 </span>
               )}
               <button
                 type="button"
                 aria-label={`Remove ${p.name}`}
+                {...help(H.removePalette)}
                 onClick={() => onRemove(id)}
                 class="grid place-items-center text-dim"
               >
@@ -93,6 +97,7 @@ export function PaletteRow({
         })}
         <div
           data-palette-drop
+          {...help(H.paletteDrop)}
           onDragOver={(e) => ok && drag && e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();

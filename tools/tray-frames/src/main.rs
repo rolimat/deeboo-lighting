@@ -9,14 +9,13 @@ const H: f32 = 18.0;
 const W_GLYPH: usize = 19;
 /// Glyph + moment icon + "F" badge.
 const W_FULL: usize = 37;
-/// Moment icon between beats.
-const DIM: f32 = 0.35;
 
 type Rgb = [u8; 3];
 /// (colour, signed distance to the shape edge, opacity).
 type Shape = Box<dyn Fn(f32, f32) -> (Rgb, f32, f32)>;
 
 const BLACK: Rgb = [0, 0, 0]; // template images: only alpha matters
+const GREEN: Rgb = [45, 212, 191]; // the app accent (`--color-accent`), lights on; not a template
 const GREY: Rgb = [142, 142, 147]; // mid grey: legible on light and dark bars (non-template lost variants)
 const RED: Rgb = [255, 69, 58];
 
@@ -166,7 +165,7 @@ fn glyph(rgb: Rgb) -> Vec<Shape> {
 }
 
 /// The moment icon (24-unit space scaled to 12 px) at x = 20.
-fn moment_icon(kind: &str, rgb: Rgb, opacity: f32) -> Shape {
+fn moment_icon(kind: &str, rgb: Rgb) -> Shape {
     let paths: Vec<Vec<(f32, f32)>> = moment_paths(kind)
         .into_iter()
         .map(|p| {
@@ -180,7 +179,7 @@ fn moment_icon(kind: &str, rgb: Rgb, opacity: f32) -> Shape {
             .iter()
             .map(|p| dist_line(p, x, y))
             .fold(f32::MAX, f32::min);
-        (rgb, d - 0.65, opacity)
+        (rgb, d - 0.65, 1.0)
     })
 }
 
@@ -201,8 +200,12 @@ fn forced_badge(rgb: Rgb) -> Shape {
 }
 
 /// Variant name suffix and the shapes of one image.
-fn image(kind: Option<&str>, forced: bool, dim: bool, lost: bool) -> (usize, Vec<Shape>) {
-    let ink = if lost { GREY } else { BLACK };
+fn image(kind: Option<&str>, forced: bool, on: bool, lost: bool) -> (usize, Vec<Shape>) {
+    let ink = match (on, lost) {
+        (true, _) => GREEN,
+        (false, true) => GREY,
+        (false, false) => BLACK,
+    };
     let mut shapes = glyph(ink);
     if lost {
         // Top-right corner of the glyph, over the bars.
@@ -211,7 +214,7 @@ fn image(kind: Option<&str>, forced: bool, dim: bool, lost: bool) -> (usize, Vec
     let Some(kind) = kind else {
         return (W_GLYPH, shapes);
     };
-    shapes.push(moment_icon(kind, ink, if dim { DIM } else { 1.0 }));
+    shapes.push(moment_icon(kind, ink));
     if forced {
         shapes.push(forced_badge(ink));
     }
@@ -225,20 +228,22 @@ fn frames() -> Vec<(String, Vec<u8>)> {
         let at = if scale == 1 { "" } else { "@2x" };
         for lost in [false, true] {
             let l = if lost { "-lost" } else { "" };
-            let (w, shapes) = image(None, false, false, lost);
-            out.push((
-                format!("tray-stopped{l}{at}.png"),
-                encode(scale, w, &render(scale, w, &shapes)),
-            ));
-            for kind in ["rhythm", "calm", "buildup"] {
-                for (forced, dim) in [(false, false), (false, true), (true, false), (true, true)] {
-                    let name = format!(
-                        "tray-{kind}{}{}{l}{at}.png",
-                        if forced { "-forced" } else { "" },
-                        if dim { "-dim" } else { "" }
-                    );
-                    let (w, shapes) = image(Some(kind), forced, dim, lost);
-                    out.push((name, encode(scale, w, &render(scale, w, &shapes))));
+            for on in [false, true] {
+                let o = if on { "-on" } else { "" };
+                let (w, shapes) = image(None, false, on, lost);
+                out.push((
+                    format!("tray-stopped{o}{l}{at}.png"),
+                    encode(scale, w, &render(scale, w, &shapes)),
+                ));
+                for kind in ["rhythm", "calm", "buildup"] {
+                    for forced in [false, true] {
+                        let name = format!(
+                            "tray-{kind}{}{o}{l}{at}.png",
+                            if forced { "-forced" } else { "" }
+                        );
+                        let (w, shapes) = image(Some(kind), forced, on, lost);
+                        out.push((name, encode(scale, w, &render(scale, w, &shapes))));
+                    }
                 }
             }
         }
@@ -286,21 +291,22 @@ mod tests {
     #[test]
     fn tray_frames_tool_is_deterministic() {
         let a = frames();
-        // (3 moments x forced x dim x lost) + stopped x lost, at two scales
-        assert_eq!(a.len(), 2 * (3 * 8 + 2));
+        // (3 moments x forced + stopped) x on x lost, at two scales
+        assert_eq!(a.len(), 2 * 4 * (3 * 2 + 1));
         assert_eq!(a, frames());
         assert!(
             a.iter()
-                .any(|(n, _)| n == "tray-buildup-forced-dim-lost@2x.png")
+                .any(|(n, _)| n == "tray-buildup-forced-on-lost@2x.png")
         );
         assert!(a.iter().any(|(n, _)| n == "tray-stopped.png"));
         assert!(
-            !a.iter()
-                .any(|(n, _)| n.starts_with("dot-") || n.starts_with("rhythm-"))
+            !a.iter().any(|(n, _)| n.starts_with("dot-")
+                || n.starts_with("rhythm-")
+                || n.contains("-dim"))
         );
     }
 
-    /// Template images: every pixel is black, only alpha varies. Lost variants are grey + red on purpose.
+    /// Template images (lights off, not lost): every pixel is black, only alpha varies. Lost ones carry a red dot; lights-on ones are green.
     #[test]
     fn tray_template_is_monochrome_and_lost_has_red() {
         let all = frames();
@@ -310,8 +316,12 @@ mod tests {
             let red = buf
                 .chunks(4)
                 .any(|p| p[3] > 200 && p[0] > 200 && p[1] < 100);
+            let green = buf.chunks(4).any(|p| p[3] > 200 && p[..3] == GREEN);
+            assert_eq!(green, name.contains("-on"), "{name} green");
             if name.contains("-lost") {
                 assert!(red, "{name} has no red dot");
+            } else if name.contains("-on") {
+                assert!(!red, "{name}");
             } else {
                 assert!(
                     !red && buf.chunks(4).all(|p| p[..3] == [0, 0, 0]),
@@ -332,13 +342,13 @@ mod tests {
         assert!(ws < w1, "stopped is the glyph only");
     }
 
-    /// The glyph is fixed: left part identical across moments and dim states; dim only lowers the icon.
+    /// The glyph is fixed: left part identical across moments; forced adds the badge; lights on keep the shape.
     #[test]
-    fn glyph_fixed_dim_lowers_icon_forced_adds_badge() {
+    fn glyph_fixed_forced_adds_badge_on_keeps_shape() {
         let all = frames();
         let (w, _, rh) = get(&all, "tray-rhythm@2x.png");
         let (_, _, calm) = get(&all, "tray-calm@2x.png");
-        let (_, _, dim) = get(&all, "tray-rhythm-dim@2x.png");
+        let (_, _, on) = get(&all, "tray-rhythm-on@2x.png");
         let (_, _, forced) = get(&all, "tray-rhythm-forced@2x.png");
         let (ws, _, stopped) = get(&all, "tray-stopped@2x.png");
         // glyph columns of the playing images equal the stopped image
@@ -349,10 +359,8 @@ mod tests {
         };
         assert_eq!(rows(&rh, w, ws), stopped);
         assert_eq!(rows(&calm, w, ws), stopped);
-        assert_eq!(rows(&dim, w, ws), stopped);
         assert_ne!(rh, calm);
-        assert!(alpha_sum(&dim) < alpha_sum(&rh));
-        assert!(alpha_sum(&dim) > alpha_sum(&stopped));
+        assert_eq!(alpha_sum(&on), alpha_sum(&rh));
         assert!(alpha_sum(&forced) > alpha_sum(&rh));
     }
 

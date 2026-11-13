@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { Settings, Status } from "../../api";
 import { patchSettings } from "../state/settings";
 import { api, type DetectorEvent, type Thresholds } from "../api";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import { ChangesSlider } from "./ChangesSlider";
 import { pushBeat } from "./history";
 import { Timeline } from "./Timeline";
@@ -83,7 +85,12 @@ function Empty({ s, onGoSetup }: { s: Status | null; onGoSetup: () => void }) {
               {s?.audio.ok ? "level OK" : "no audio"}
             </span>{" "}
             ·{" "}
-            <button type="button" class="text-accent underline" onClick={onGoSetup}>
+            <button
+              type="button"
+              class="text-accent underline"
+              onClick={onGoSetup}
+              {...help(H.changeInSetup)}
+            >
               Change in Setup
             </button>
           </span>
@@ -178,6 +185,7 @@ export function DetectionTab({ onGoSetup }: { onGoSetup: () => void }) {
         <button
           type="button"
           onClick={() => save(DEFAULTS)}
+          {...help(H.resetDefaults)}
           class="ml-auto rounded-card border border-border bg-card px-3 py-1 text-small"
         >
           Reset to defaults

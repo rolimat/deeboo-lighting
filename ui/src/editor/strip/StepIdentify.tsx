@@ -1,4 +1,6 @@
 import { useState } from "preact/hooks";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 
 export function StepIdentify({
   detected,
@@ -31,6 +33,7 @@ export function StepIdentify({
             data-segment-number
             data-wired={String(n <= wired)}
             aria-label={`Segment ${n}`}
+            {...help(H.lightSegment)}
             onClick={() => onPiece(n)}
             class={`h-10 min-w-0 flex-1 rounded-card bg-card ${n <= wired ? "" : "border border-dashed border-border opacity-40"}`}
           >
@@ -46,6 +49,7 @@ export function StepIdentify({
           max={detected}
           value={wired}
           aria-label="Wired segments"
+          {...help(H.wiredCount)}
           onInput={(e) => setWired(clamp(e.currentTarget.valueAsNumber))}
           class="w-16 rounded-lg border border-border bg-bg px-2 py-1"
         />
@@ -55,7 +59,12 @@ export function StepIdentify({
           {error}
         </p>
       )}
-      <button type="button" onClick={save} class="rounded-card bg-green px-4 py-2">
+      <button
+        type="button"
+        onClick={save}
+        class="rounded-card bg-green px-4 py-2"
+        {...help(H.saveStrip)}
+      >
         Save
       </button>
     </div>

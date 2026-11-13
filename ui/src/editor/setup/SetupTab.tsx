@@ -7,7 +7,8 @@ import { api } from "../api";
 import { patchSettings } from "../state/settings";
 import { ChangesSlider } from "../detection/ChangesSlider";
 import { Level } from "../detection/DetectionTab";
-import { useHelp } from "../shell/Help";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 
 const LEAD_MAX = 500; // Rust `Settings::validate`
 const LEAD_STEP = 10;
@@ -89,26 +90,29 @@ export function SetupTab() {
       (l) => alive && setAudio(l),
       () => {},
     );
+    // No blur: looking at the strip or the DJ app must not end it. Rust ends it when the editor closes.
     const off = () => calibrate(false);
-    window.addEventListener("blur", off);
     window.addEventListener("beforeunload", off);
     return () => {
       alive = false;
       offs.forEach((u) => u());
-      window.removeEventListener("blur", off);
       window.removeEventListener("beforeunload", off);
       off();
     };
   }, []);
 
   const playing = !!st && st.playing && st.bpm !== null;
+  const noCalibrate = !st
+    ? ""
+    : st.strip.kind !== "connected"
+      ? "Connect the strip first."
+      : !st.lightsOn
+        ? "Turn the lights on to calibrate."
+        : "";
   useEffect(() => {
-    if (!playing) calibrate(false); // Rust ends it on Stop too
-  }, [playing]);
+    if (noCalibrate) calibrate(false);
+  }, [noCalibrate]);
 
-  const helpMidi = useHelp("Pick the app or device that sends the MIDI clock.");
-  const helpAudio = useHelp("The input the detector listens to.");
-  const helpLead = useHelp("How much earlier the app sends light, in milliseconds.");
   if (!s) return <p class="text-red">{err}</p>;
 
   const apply = (patch: Partial<Settings>) => {
@@ -135,7 +139,7 @@ export function SetupTab() {
             class={`${field} min-w-60`}
             value={s.midiSource ?? ""}
             onChange={(e) => apply({ midiSource: e.currentTarget.value || null })}
-            {...helpMidi}
+            {...help(H.midiInput)}
           >
             <option value="">Virtual port (Deeboo Lighting In)</option>
             {sources.map((m) => (
@@ -169,7 +173,7 @@ export function SetupTab() {
             class={`${field} min-w-60`}
             value={s.audioInput ?? ""}
             onChange={(e) => apply({ audioInput: e.currentTarget.value || null })}
-            {...helpAudio}
+            {...help(H.audioInput)}
           >
             <option value="">System default</option>
             {(s.audioInput && !audio.includes(s.audioInput) ? [s.audioInput, ...audio] : audio).map(
@@ -204,6 +208,7 @@ export function SetupTab() {
             <button
               type="button"
               aria-label="Send 10 ms later"
+              {...help(H.leadLater)}
               class="px-2.5 py-1 hover:bg-card disabled:opacity-40"
               disabled={s.leadMs <= 0}
               onClick={() => setLead(s.leadMs - LEAD_STEP)}
@@ -223,12 +228,13 @@ export function SetupTab() {
                   e.currentTarget.value = String(s.leadMs);
                 } else setLead(n);
               }}
-              {...helpLead}
+              {...help(H.leadInput)}
             />
             <span class="pr-1 text-dim">ms</span>
             <button
               type="button"
               aria-label="Send earlier by 10 ms more"
+              {...help(H.leadEarlier)}
               class="px-2.5 py-1 hover:bg-card disabled:opacity-40"
               disabled={s.leadMs >= LEAD_MAX}
               onClick={() => setLead(s.leadMs + LEAD_STEP)}
@@ -239,20 +245,24 @@ export function SetupTab() {
           <button
             type="button"
             aria-label="Calibrate"
+            {...help(H.calibrate)}
             class={`${btn} ${calibrating ? "border-accent text-accent" : ""}`}
-            disabled={!playing && !calibrating}
+            disabled={!st || (!!noCalibrate && !calibrating)}
             onClick={() => calibrate(!calibrating)}
           >
             {calibrating ? "Stop calibrating" : "Calibrate…"}
           </button>
-          {!playing && <span class="text-small text-dim">Start the MIDI clock to calibrate.</span>}
+          {noCalibrate && <span class="text-small text-dim">{noCalibrate}</span>}
         </Row>
         {calibrating && (
           <div class="flex items-center gap-4 rounded-card border border-border bg-bg p-2.5 text-small">
             <span aria-hidden="true" class="block h-3.5 w-14 rounded-full bg-text" />
             <div>
-              <b>Calibrate:</b> the strip flashes on every beat while the clock plays. Use − / +
-              until the flash lands on the kick you hear. 10 ms per click.
+              <b>Calibrate:</b>{" "}
+              {playing
+                ? "the strip flashes on every beat while the clock plays."
+                : "the strip flashes at 120 BPM until a MIDI clock plays."}{" "}
+              Use − / + until the flash lands on the kick you hear. 10 ms per click.
             </div>
           </div>
         )}
@@ -271,6 +281,7 @@ export function SetupTab() {
                 type="button"
                 role="radio"
                 aria-checked={s.phraseBars === n}
+                {...help(H.phraseBars(n))}
                 class="px-3 py-1"
                 onClick={() => apply({ phraseBars: n })}
               >
@@ -278,6 +289,25 @@ export function SetupTab() {
               </button>
             ))}
           </span>
+        </Row>
+      </Section>
+
+      <Section
+        icon="setup"
+        title="Dock"
+        hint="The menu bar icon is always there. The Dock icon is optional."
+      >
+        <Row label="Show in Dock">
+          <select
+            aria-label="Show in Dock"
+            {...help(H.dock)}
+            class={`${field} min-w-60`}
+            value={s.showInDock}
+            onChange={(e) => apply({ showInDock: e.currentTarget.value as Settings["showInDock"] })}
+          >
+            <option value="editor">While the editor is open</option>
+            <option value="always">Always</option>
+          </select>
         </Row>
       </Section>
 
@@ -293,6 +323,7 @@ export function SetupTab() {
         <button
           type="button"
           aria-label="Quit Deeboo Lighting"
+          {...help(H.quit)}
           class={`${btn} text-red`}
           onClick={() => void api.quit()}
         >

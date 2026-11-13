@@ -63,6 +63,28 @@ pub fn open_at_launch(app: &AppHandle) {
     let _ = open(app, Section::Strip);
 }
 
+/// Dock icon on or off (macOS activation policy); the menu bar item stays either way.
+pub fn apply_dock(app: &AppHandle, editor_open: bool) {
+    let mode = app
+        .state::<crate::commands::AppState>()
+        .settings()
+        .show_in_dock;
+    let visible = crate::settings::dock_visible(mode, editor_open);
+    #[cfg(target_os = "macos")]
+    {
+        let policy = if visible {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        if let Err(e) = app.set_activation_policy(policy) {
+            log::warn!("dock policy not applied: {e}");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = visible;
+}
+
 impl Windows for AppHandle {
     fn focus(&self, section: Section) -> bool {
         let shown = self
@@ -83,7 +105,7 @@ impl Windows for AppHandle {
             // The native file-drop handler swallows `WKWebView` drops, so HTML5 drag and drop never fires.
             .disable_drag_drop_handler()
             .build()
-            .map(|_| ())
+            .map(|_| apply_dock(self, true))
             .map_err(|e| {
                 log::warn!("editor window not created: {e}");
                 "editor unavailable".to_string()

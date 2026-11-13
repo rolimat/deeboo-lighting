@@ -115,5 +115,5 @@ it("setup_tab_undo_hint_does_not_mention_reset", async () => {
   const root = document.createElement("div");
   await mount(root);
   const undo = root.querySelector("button[aria-label=Undo]");
-  expect(undo?.getAttribute("title")).toBe("Settings apply at once.");
+  expect(undo?.getAttribute("data-help")).toBe("Settings apply at once.");
 });

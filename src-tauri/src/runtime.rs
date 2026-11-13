@@ -21,7 +21,7 @@ use crate::midi::{MidiEvent, MidiIn, QUEUE};
 use crate::settings::{Settings, detector_params};
 use crate::strip::{self, StripMsg};
 use crate::strip_store::StripConfig;
-use crate::tray::{TrayInput, TrayView, tray_deadline, tray_view};
+use crate::tray::{TrayInput, TrayView, tray_view};
 
 /// Everything that can wake the engine thread.
 pub enum Input {
@@ -174,6 +174,8 @@ struct Publisher {
     visible: bool,
     dirty: bool,
     last_us: Option<u64>,
+    /// The "update held back, nothing visible" debug line is logged once per hidden period.
+    skip_logged: bool,
 }
 
 impl Publisher {
@@ -185,11 +187,18 @@ impl Publisher {
         if visible && !self.visible {
             self.dirty = true;
         }
+        if visible != self.visible {
+            self.skip_logged = false;
+        }
         self.visible = visible;
     }
 
     /// True once per publish: the caller must send the status now.
     fn due(&mut self, now_us: u64) -> bool {
+        if !self.visible && self.dirty && !self.skip_logged {
+            self.skip_logged = true;
+            log::debug!("status update held back: no window is visible");
+        }
         if !self.visible || !self.dirty || self.deadline().is_some_and(|d| d > now_us) {
             return false;
         }
@@ -265,7 +274,6 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     emit: E,
     last: EngineStatus,
     tray: Option<TrayLink>,
-    tray_due: Option<u64>,
     /// The OS listed the configured source at the last check (popover show or settings change).
     source_present: bool,
     /// The wizard holds the strip: the engine keeps running but sends nothing.
@@ -337,7 +345,6 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             emit,
             last,
             tray: None,
-            tray_due: None,
             source_present,
             strip_paused: false,
             library: None,
@@ -480,9 +487,9 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     }
 
     /// Starts driving the menu bar through `sink`.
-    pub fn set_tray(&mut self, sink: TraySink, now_us: u64) {
+    pub fn set_tray(&mut self, sink: TraySink) {
         self.tray = Some(TrayLink { sink, shown: None });
-        self.update_tray(now_us);
+        self.update_tray();
     }
 
     pub fn set_strip_sink(&mut self, sink: StripSink) {
@@ -532,7 +539,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             || (self.source_present && self.settings.midi_source == self.midi.connected_source())
     }
 
-    fn update_tray(&mut self, now_us: u64) {
+    fn update_tray(&mut self) {
         let midi_ok = self.midi_ok();
         let s = &self.last;
         let Some(link) = &mut self.tray else { return };
@@ -541,16 +548,15 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             strip_ok: matches!(self.strip, StripStatus::Connected { .. }),
             playing: s.playing,
             bpm: s.bpm,
-            last_beat_us: s.last_beat_us,
             moment: s.moment,
             forced: !s.auto,
+            lights_on: s.lights_on,
         };
-        let view = tray_view(&input, now_us);
+        let view = tray_view(&input);
         if link.shown.as_ref() != Some(&view) {
             (link.sink)(link.shown.as_ref(), &view);
             link.shown = Some(view);
         }
-        self.tray_due = tray_deadline(&input, now_us);
     }
 
     pub fn set_visible(&mut self, visible: bool) {
@@ -579,10 +585,10 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             }
             Input::SourcesChanged(list) => self.on_sources(&list),
             Input::Ui(cmd) => {
-                // A rejected key is not retried: only pairing again helps.
+                // Turning the lights on retries any failure with the saved pairing (never forces the wizard).
                 if let (
                     UiCommand::Lights(true),
-                    StripStatus::Error | StripStatus::NotFound,
+                    StripStatus::Error | StripStatus::NotFound | StripStatus::KeyInvalid,
                     Some(tx),
                 ) = (cmd, &self.strip, &self.strip_tx)
                 {
@@ -741,7 +747,6 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         [
             self.engine.next_deadline_us(),
             self.publisher.deadline(),
-            self.tray_due,
             self.identify_at.map(|t| t + IDENTIFY_FLASH_US),
         ]
         .into_iter()
@@ -776,7 +781,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         }
         self.tell_strip();
         self.sync_capture();
-        self.update_tray(now_us);
+        self.update_tray();
         if self.publisher.due(now_us) {
             let status = self.status();
             (self.emit)(&status);
@@ -901,10 +906,9 @@ pub fn spawn(
             core.handle(Input::Library(Box::new(library)), clock.now_us());
             app.state::<AppState>().set_status(core.status());
             let tray_app = app.clone();
-            core.set_tray(
-                Box::new(move |prev, view| crate::tray::apply(&tray_app, prev, view)),
-                clock.now_us(),
-            );
+            core.set_tray(Box::new(move |prev, view| {
+                crate::tray::apply(&tray_app, prev, view);
+            }));
             run(&rx, &clock, &mut core, &visible);
         });
     if let Err(e) = spawned {
@@ -1354,12 +1358,15 @@ mod tests {
     }
 
     #[test]
-    fn key_invalid_and_not_found_show_and_lights_on_retries_only_the_latter() {
+    fn lights_on_retries_a_failed_strip_whatever_the_reason() {
         let (mut c, mut rx, _) = core(true);
         c.handle(Input::StripState(StripStatus::KeyInvalid), 1_000);
         assert_eq!(c.status().strip, StripStatus::KeyInvalid);
         c.handle(Input::Ui(UiCommand::Lights(true)), 2_000);
-        assert!(rx.try_recv().is_err(), "a rejected key is not retried");
+        assert!(
+            matches!(rx.try_recv(), Ok(StripMsg::Connect)),
+            "the saved key is tried again; nothing deletes the pairing"
+        );
         c.handle(Input::StripState(StripStatus::NotFound), 3_000);
         c.handle(Input::Ui(UiCommand::Lights(true)), 4_000);
         assert!(matches!(rx.try_recv(), Ok(StripMsg::Connect)));
@@ -1708,7 +1715,7 @@ mod tests {
         let (mut c, _rx, _) = core(true);
         let paints = Rc::new(RefCell::new(0));
         let p = Rc::clone(&paints);
-        c.set_tray(Box::new(move |_, _| *p.borrow_mut() += 1), 0);
+        c.set_tray(Box::new(move |_, _| *p.borrow_mut() += 1));
         assert_eq!(*paints.borrow(), 1, "first paint");
         assert_eq!(c.deadline(), None);
         c.handle(Input::PopoverShown, 10);
@@ -1723,7 +1730,6 @@ mod tests {
             30,
         );
         assert_eq!(*paints.borrow(), 2, "dot went green");
-        assert_eq!(c.tray_due, None, "stopped: no tray deadline");
     }
 
     /// Feeds half-second beats of an 80 Hz tone, one amplitude each; the last gets `last`.

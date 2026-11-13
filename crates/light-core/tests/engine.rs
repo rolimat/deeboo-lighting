@@ -975,6 +975,23 @@ fn preview_free_runs_without_a_clock_then_restores_the_rest_scene() {
 }
 
 #[test]
+fn brightness_repaints_the_preview_without_advancing_it() {
+    let mut s = sim125();
+    let out = s.e.set_preview(s.now, Some(preview_pair()));
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 600_000); // a step lasts two pulses: 222 is current
+    let due = s.e.next_deadline_us();
+    s.now = T0 + 600_000;
+    let mark = s.sends.len();
+    s.cmd(UiCommand::Brightness(50));
+    s.deadlines_until(s.now + 100_000);
+    assert_eq!(hues(&s.sends[mark..]), vec![222], "same step, not the next");
+    assert!(s.sends[mark..].iter().all(|(_, c)| matches!(c,
+        PaintCommand::Pencil { color, .. } | PaintCommand::Bucket(color) if color.v == 500)));
+    assert_eq!(s.e.next_deadline_us(), due, "cadence untouched");
+}
+
+#[test]
 fn preview_follows_the_clock_when_it_runs() {
     let mut s = sim125();
     s.start();
@@ -1062,19 +1079,49 @@ fn calibrate_flashes_on_beats_and_restores_show() {
 }
 
 #[test]
-fn calibrate_needs_a_clock_and_ends_on_stop() {
+fn calibrate_without_a_clock_flashes_at_120_bpm() {
     let mut s = sim125();
     let out = s.e.calibrate(s.now, true);
-    assert!(out.is_empty(), "no clock, no flash");
-    s.start();
-    s.beats_of(1, &mut none);
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 2_100_000);
+    let flashes: Vec<u64> = s
+        .sends
+        .iter()
+        .filter(|(_, c)| is_white(c))
+        .map(|(t, _)| *t)
+        .collect();
+    assert_eq!(flashes.len(), 5, "{flashes:?}");
+    for w in flashes.windows(2) {
+        assert_eq!(w[1] - w[0], 500_000, "one flash per beat at 120 BPM");
+    }
+    assert!(
+        s.sends
+            .iter()
+            .any(|(_, c)| matches!(c, PaintCommand::Eraser { .. }))
+    );
+    let out = s.e.calibrate(s.now, false);
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.deadlines_until(s.now + 2_000_000);
+    assert!(s.sends[mark..].iter().all(|(_, c)| !is_white(c)), "ended");
+}
+
+#[test]
+fn calibrate_keeps_flashing_across_a_clock_start_and_stop() {
+    let mut s = sim125();
     let out = s.e.calibrate(s.now, true);
     s.record(s.now, out);
-    s.byte(0xFC, &mut none); // Stop
     s.start();
     let mark = s.sends.len();
-    s.beats_of(6, &mut none);
-    assert!(s.sends[mark..].iter().all(|(_, c)| !is_white(c)), "ended");
+    s.beats_of(4, &mut none);
+    assert!(s.sends[mark..].iter().filter(|(_, c)| is_white(c)).count() >= 3);
+    s.byte(0xFC, &mut none); // Stop
+    let mark = s.sends.len();
+    s.deadlines_until(s.now + 2_000_000);
+    assert!(
+        s.sends[mark..].iter().any(|(_, c)| is_white(c)),
+        "free-running again after Stop"
+    );
 }
 
 #[test]
@@ -1097,4 +1144,50 @@ fn detect_gets_the_closed_beat() {
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0], None);
     assert_eq!(seen[1].map(|p| (p.beat, p.half)), Some((0, false)));
+}
+
+#[test]
+fn brightness_repaints_the_playing_step() {
+    let mut s = sim125();
+    s.start();
+    s.cmd(UiCommand::Force(Calm)); // Calm holds a step for bars: only a resend repaints it
+    s.beats_of(6, &mut none);
+    s.ticks(2, &mut none);
+    let at = s.now;
+    s.cmd(UiCommand::Brightness(50));
+    s.ticks(24, &mut none);
+    let sends = s.sends_in(at, u64::MAX);
+    assert!(
+        sends.iter().any(|(_, c)| matches!(c,
+            PaintCommand::Pencil { color, .. } if color.v == 500)
+            || matches!(c, PaintCommand::Bucket(c) if c.v == 500)),
+        "{sends:?}"
+    );
+}
+
+#[test]
+fn brightness_repaints_the_rest_scene() {
+    let mut s = sim125();
+    s.cmd(UiCommand::Lights(true));
+    let at = s.now;
+    s.cmd(UiCommand::Brightness(50));
+    s.deadlines_until(at + 10_000_000);
+    let sends = s.sends_in(at, u64::MAX);
+    assert!(
+        sends
+            .iter()
+            .any(|(_, c)| matches!(c, PaintCommand::Bucket(h) if h.s == 350 && h.v < 1000)),
+        "{sends:?}"
+    );
+}
+
+#[test]
+fn brightness_with_lights_off_sends_nothing() {
+    let mut s = sim125();
+    s.cmd(UiCommand::Lights(false));
+    s.deadlines_until(s.now + 1_000_000);
+    let at = s.now;
+    s.cmd(UiCommand::Brightness(50));
+    s.deadlines_until(at + 10_000_000);
+    assert_eq!(s.sends_in(at, u64::MAX), vec![]);
 }

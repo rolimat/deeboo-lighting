@@ -13,6 +13,10 @@ I/O in `src-tauri`. Pair with the `security` skill for anything network or secre
   It was Bluetooth-only until re-added in Smart Life on 2.4 GHz wifi; that changed its ID and key.
 - Library `rustuya` 0.4.x (MIT, feature `tokio`): `Discovery` finds ID, IP, version, `productKey`;
   `Device::builder(id, key).address(ip).version(V3_3).connect()`; `set_value(dp, value)`; `listener()`.
+- Build devices with `.auto_reconnect(false)`: only `strip::run` redials (strip accepts one LAN client, so rustuya's own
+  redial raced ours and a refused redial looked like a bad key). A paint/identify failure or a resume redials with the
+  saved config: 5 attempts, waits 0.5/1/2/4/8 s, then repaints. Only a first connection or exhausted retries report
+  `KeyInvalid`/`Error`; Lights on retries from any failure. Nothing clears `strip.json` but the wizard saving a new one.
 - The cloud does not advertise the segment DP (only `switch_led`, `work_mode`, `colour_data`, `countdown`) but the strip uses it locally.
 - `raw` DPs travel as base64 inside the JSON.
 

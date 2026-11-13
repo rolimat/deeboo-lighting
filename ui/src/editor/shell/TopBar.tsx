@@ -3,7 +3,8 @@ import type { SaveState } from "../state/library";
 import { Icon } from "../../icons/Icon";
 import type { IconName } from "../../icons";
 import { ConfirmDelete } from "./ConfirmDelete";
-import { HelpToggle, useHelp } from "./Help";
+import { HelpToggle, help } from "./Help";
+import { H } from "../help-texts";
 import { LiveReadout } from "./LiveReadout";
 
 export const TABS = [
@@ -41,7 +42,6 @@ function IconButton(p: {
   hint?: string;
   red?: boolean;
 }) {
-  const help = useHelp(p.hint ?? p.label);
   return (
     <button
       type="button"
@@ -49,7 +49,7 @@ function IconButton(p: {
       disabled={p.disabled}
       onClick={p.onClick}
       class={`grid h-7 w-7 shrink-0 place-items-center rounded-lg border disabled:opacity-40 ${p.red ? "border-red-dark text-red" : "border-border text-dim"}`}
-      {...help}
+      {...help(p.hint ?? p.label)}
     >
       <Icon name={p.name} />
     </button>
@@ -68,6 +68,7 @@ export function TopBar(p: TopBarProps) {
             role="tab"
             key={id}
             aria-selected={id === p.tab}
+            {...help(H.tab[id])}
             onClick={() => p.onTab(id)}
             class={`flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-body ${id === p.tab ? "bg-card text-accent" : "text-dim"}`}
           >
@@ -79,31 +80,35 @@ export function TopBar(p: TopBarProps) {
       <IconButton
         name="undo"
         label="Undo"
-        hint={noUndo ?? "Undo (⌘Z)"}
+        hint={noUndo ?? H.undo}
         disabled={!!noUndo || !p.canUndo}
         onClick={p.onUndo}
       />
       <IconButton
         name="redo"
         label="Redo"
-        hint={noUndo ?? "Redo (⇧⌘Z)"}
+        hint={noUndo ?? H.redo}
         disabled={!!noUndo || !p.canRedo}
         onClick={p.onRedo}
       />
       {(p.onDuplicate || p.onDelete) && (
         <span class="mx-1 h-5 w-px shrink-0 bg-border" role="separator" />
       )}
-      {p.onDuplicate && <IconButton name="duplicate" label="Duplicate" onClick={p.onDuplicate} />}
+      {p.onDuplicate && (
+        <IconButton name="duplicate" label="Duplicate" hint={H.duplicate} onClick={p.onDuplicate} />
+      )}
       {p.onDelete && (
         <IconButton
           name="delete"
           label="Delete"
+          hint={H.delete}
           red
           onClick={() => !p.deleteGuard?.() && setConfirm(true)}
         />
       )}
       <span
         role="status"
+        {...help(H.saveState)}
         class={`ml-auto shrink-0 whitespace-nowrap px-2 text-body ${p.save.state === "error" ? "text-red" : "text-dim"}`}
       >
         {p.save.state === "saving"

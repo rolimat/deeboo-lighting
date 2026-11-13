@@ -12,6 +12,8 @@ import {
 } from "../api";
 import { PATTERNS, type BarActions, type Sel } from "../sequences/SequencesTab";
 import type { useLibrary } from "../state/library";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 import { canDrop, moveRef, type DragItem } from "./dnd";
 import { PaletteRow, Swatch } from "./PaletteRow";
 import { Track } from "./Track";
@@ -252,6 +254,7 @@ export function SetsTab({
         <input
           type="search"
           aria-label="Search sets"
+          {...help(H.search("Sets"))}
           placeholder="Search"
           value={q}
           onInput={(e) => setQ(e.currentTarget.value)}
@@ -268,7 +271,7 @@ export function SetsTab({
                   <button
                     type="button"
                     aria-label={playing ? `Playing ${s.name} live` : `Play ${s.name} live`}
-                    title={playing ? "Playing live" : "Play live"}
+                    {...help(playing ? H.playingLive : H.playLiveRow)}
                     onClick={() => !playing && void playLive(s.id)}
                     class={`grid place-items-center ${playing ? "text-accent [&_svg]:fill-current" : "text-dim"}`}
                   >
@@ -277,6 +280,7 @@ export function SetsTab({
                   <button
                     type="button"
                     aria-current={s.id === set.id ? "true" : undefined}
+                    {...help(H.openSet)}
                     onClick={() => setSel(s.id)}
                     class={`min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-left text-body ${s.id === set.id ? "bg-card text-accent outline outline-1 outline-accent" : ""}`}
                   >
@@ -289,6 +293,7 @@ export function SetsTab({
         <button
           type="button"
           onClick={addSet}
+          {...help(H.newSet)}
           class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-body text-dim"
         >
           <Icon name="plus" />
@@ -307,6 +312,7 @@ export function SetsTab({
                 <div
                   key={id}
                   data-drag-seq={id}
+                  {...help(H.dragSequence)}
                   class={item}
                   {...dragProps({ kind: "sequence", ref: { id }, moment: m }, s.name)}
                 >
@@ -323,7 +329,7 @@ export function SetsTab({
                 <div
                   key={p}
                   data-drag-pattern={p}
-                  title="Generated from your strip"
+                  {...help(H.dragPattern)}
                   class={item}
                   {...dragProps(
                     {
@@ -353,6 +359,7 @@ export function SetsTab({
             <div
               key={id}
               data-drag-palette={id}
+              {...help(H.dragPalette)}
               class={item}
               {...dragProps({ kind: "palette", id }, p.name)}
             >
@@ -370,6 +377,7 @@ export function SetsTab({
           <input
             id="set-name"
             aria-label="Set name"
+            {...help(H.setName)}
             value={draft ?? set.name}
             onInput={(e) => {
               const v = e.currentTarget.value;
@@ -396,6 +404,7 @@ export function SetsTab({
                 <button
                   type="button"
                   aria-label="Play this set live"
+                  {...help(H.playLive)}
                   onClick={() => void playLive(set.id)}
                   class="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1"
                 >

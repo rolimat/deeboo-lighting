@@ -1,4 +1,6 @@
 import type { DeviceDto } from "../api";
+import { help } from "../shell/Help";
+import { H } from "../help-texts";
 
 export function StepChoose({
   devices,
@@ -14,6 +16,7 @@ export function StepChoose({
           <button
             type="button"
             disabled={!d.supported}
+            {...help(d.supported ? H.chooseStrip : H.unsupportedStrip)}
             onClick={() => onChoose(d.id)}
             class="w-full rounded-card bg-card px-3 py-2 text-left disabled:opacity-50"
           >

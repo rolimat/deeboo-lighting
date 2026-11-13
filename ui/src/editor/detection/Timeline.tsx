@@ -1,4 +1,5 @@
 import { useRef } from "preact/hooks";
+import { H } from "../help-texts";
 import type { MomentName } from "../../api";
 import { Icon } from "../../icons/Icon";
 import type { IconName } from "../../icons";
@@ -14,7 +15,7 @@ const MOMENTS: Record<MomentName, [IconName, string]> = {
 /** Lanes span -60 dB (bottom) to 0 dB (top). */
 const FLOOR_DB = 60;
 const yPct = (db: number) => Math.min(100, Math.max(0, (-db / FLOOR_DB) * 100));
-const COL = "grid grid-cols-[120px_1fr]";
+const COL = "grid grid-cols-[120px_1fr_12rem]";
 const HEAD = "border-b border-r border-border bg-card p-2 text-small";
 const BAR_LABELS = ["8 bars ago", "7", "6", "5", "4", "3", "2", "1"];
 
@@ -50,7 +51,7 @@ const LANES: LaneDef[] = [
         min: 8,
         max: 30,
         label: "Calm",
-        hint: "How far the kick must fall below its reference to count as a break.",
+        hint: H.thresholdKick,
       },
     ],
   },
@@ -68,7 +69,7 @@ const LANES: LaneDef[] = [
         min: 3,
         max: 15,
         label: "Build-up",
-        hint: "How far the highs must climb above their reference to count as a riser.",
+        hint: H.thresholdRiser,
       },
       {
         key: "calmHighDb",
@@ -77,7 +78,7 @@ const LANES: LaneDef[] = [
         min: 6,
         max: 24,
         label: "Calm",
-        hint: "How far the highs must fall below their reference to help Calm.",
+        hint: H.thresholdHigh,
       },
     ],
   },
@@ -159,6 +160,17 @@ function Lane(props: {
           );
         })}
       </div>
+      <div data-readouts class="relative h-20 border-b border-l border-border bg-card">
+        {def.lines.map((l) => (
+          <span
+            key={l.key}
+            style={{ top: `${yPct(ref + (l.above ? t[l.key] : -t[l.key]))}%` }}
+            class="absolute left-1.5 -translate-y-1/2 select-none whitespace-nowrap rounded border border-accent bg-card px-1.5 text-small text-accent"
+          >
+            {l.label} when {t[l.key]} dB {l.above ? "above" : "below"}
+          </span>
+        ))}
+      </div>
     </>
   );
 }
@@ -192,6 +204,7 @@ export function Timeline(props: {
           </span>
         ))}
       </div>
+      <div class="border-b border-l border-border bg-card" />
       <div class={HEAD}>
         <b class="t-head">Moment</b>
         <small class="mt-0.5 block text-dim">What the show used</small>
@@ -215,6 +228,7 @@ export function Timeline(props: {
           );
         })}
       </div>
+      <div class="border-b border-l border-border bg-card" />
       {LANES.map((def) => (
         <Lane key={def.id} def={def} ring={props.ring} t={props.t} onChange={props.onChange} />
       ))}

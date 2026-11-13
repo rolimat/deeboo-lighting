@@ -39,6 +39,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(commands::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::popover_visible,
             commands::get_settings,
             commands::get_library,
             commands::save_library,
@@ -83,6 +84,7 @@ pub fn run() -> tauri::Result<()> {
                     let state = app.state::<commands::AppState>();
                     state.set_editor_visible(false);
                     state.editor_closed(&commands::wizard_emit(app));
+                    editor_window::apply_dock(app, false);
                 }
                 _ => {}
             }
@@ -92,6 +94,8 @@ pub fn run() -> tauri::Result<()> {
             let dir = app.path().app_config_dir()?;
             let state = app.state::<commands::AppState>();
             state.init_settings(dir.join("settings.json"));
+            // `tray::setup` made the app Accessory before the setting was known.
+            editor_window::apply_dock(app.handle(), false);
             let strip = strip::load(&dir);
             if editor_window::first_launch_section(strip.is_some()).is_some() {
                 editor_window::open_at_launch(app.handle());

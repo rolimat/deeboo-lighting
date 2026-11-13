@@ -42,3 +42,10 @@ export function setBars(cols: Cols, bars: number): Cols {
   while (out.length < want) out.push(...last.slice(0, want - out.length));
   return out;
 }
+
+/** ×2: repeats the whole sequence once, up to 16 bars. */
+export const doubleBars = (cols: Cols): Cols => [...cols, ...cols].slice(0, MAX_BARS * BAR);
+
+/** ÷2: keeps the first half, at least one bar. */
+export const halveBars = (cols: Cols): Cols =>
+  cols.slice(0, Math.max(1, Math.floor(cols.length / BAR / 2)) * BAR);

@@ -25,6 +25,22 @@ fn read_capped(path: &Path) -> io::Result<Option<String>> {
     Ok((text.len() as u64 <= MAX_BYTES).then_some(text))
 }
 
+/// When the Dock icon shows; anything else is rejected by serde.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShowInDock {
+    /// Only while the editor window is open.
+    #[default]
+    Editor,
+    Always,
+}
+
+/// Whether the app is a regular (Dock) app right now.
+#[must_use]
+pub const fn dock_visible(mode: ShowInDock, editor_open: bool) -> bool {
+    matches!(mode, ShowInDock::Always) || editor_open
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Settings {
@@ -47,6 +63,7 @@ pub struct Settings {
     pub riser_db: u8,
     /// Show the `?` help tooltips in the editor.
     pub help_tooltips: bool,
+    pub show_in_dock: ShowInDock,
 }
 
 pub const CALM_KICK_DB: RangeInclusive<u8> = 8..=30;
@@ -67,6 +84,7 @@ impl Default for Settings {
             calm_high_db: 12,
             riser_db: 7,
             help_tooltips: true,
+            show_in_dock: ShowInDock::Editor,
         }
     }
 }
@@ -200,6 +218,32 @@ mod tests {
         assert!(s.help_tooltips);
         assert_eq!(s.phrase_bars, 4);
         assert!(Settings::default().help_tooltips);
+    }
+
+    #[test]
+    fn show_in_dock_defaults_to_editor_and_old_files_load() {
+        let (_d, p) = tmp();
+        std::fs::write(&p, r#"{"phraseBars":4}"#).unwrap();
+        assert_eq!(load(&p).show_in_dock, ShowInDock::Editor);
+        std::fs::write(&p, r#"{"showInDock":"always"}"#).unwrap();
+        assert_eq!(load(&p).show_in_dock, ShowInDock::Always);
+        assert_eq!(
+            serde_json::to_string(&ShowInDock::Editor).unwrap(),
+            r#""editor""#
+        );
+    }
+
+    #[test]
+    fn unknown_show_in_dock_value_is_rejected() {
+        assert!(serde_json::from_str::<Settings>(r#"{"showInDock":"never"}"#).is_err());
+    }
+
+    #[test]
+    fn dock_is_visible_when_always_or_while_the_editor_is_open() {
+        assert!(dock_visible(ShowInDock::Always, false));
+        assert!(dock_visible(ShowInDock::Always, true));
+        assert!(dock_visible(ShowInDock::Editor, true));
+        assert!(!dock_visible(ShowInDock::Editor, false));
     }
 
     #[test]

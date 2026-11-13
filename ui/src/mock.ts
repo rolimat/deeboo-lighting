@@ -46,6 +46,7 @@ export function installMock(api: typeof realApi): void {
     calmHighDb: 12,
     riserDb: 7,
     helpTooltips: true,
+    showInDock: "editor",
   };
   let set = 0;
   let pal = -1; // -1: Auto
@@ -120,6 +121,7 @@ export function installMock(api: typeof realApi): void {
       return Promise.resolve();
     },
     setWindowHeight: () => Promise.resolve(),
+    popoverVisible: () => Promise.resolve(),
     onStatus: (cb: (s: Status) => void) => {
       listeners.add(cb);
       return Promise.resolve(() => listeners.delete(cb));
