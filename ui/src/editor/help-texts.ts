@@ -24,7 +24,7 @@ export const H = {
   saveState: "Whether your latest changes are saved.",
   helpToggle: "Turn these hover tips on or off.",
   cancelDelete: "Keep it and close this dialog.",
-  confirmDelete: "Delete it for good (⌘Z brings it back).",
+  confirmDelete: "Delete it (⌘Z brings it back).",
   cancelDialog: "Close this dialog without changing anything.",
   changeMoment: "Move the sequence to the new moment; sets that use it drop it from the old track.",
   backToStrip: "Leave the connection steps and return to your connected strip.",

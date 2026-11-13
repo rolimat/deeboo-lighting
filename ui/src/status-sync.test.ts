@@ -132,3 +132,19 @@ it("rereads_the_status_each_time_it_becomes_visible", async () => {
   (resolveGet as ((s: Status) => void) | undefined)?.(connected);
   await vi.waitFor(() => expect(update).toHaveBeenLastCalledWith(connected));
 });
+
+it("a_push_during_a_visibility_reread_wins", async () => {
+  const update = vi.fn();
+  const done = syncStatus(update);
+  await vi.waitFor(() => expect(resolveGet).toBeDefined());
+  resolveGet?.(connecting);
+  await done;
+  resolveGet = undefined;
+  setVisibility("visible");
+  await vi.waitFor(() => expect(resolveGet).toBeDefined());
+  push?.(connected);
+  (resolveGet as ((s: Status) => void) | undefined)?.(connecting);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(update).toHaveBeenLastCalledWith(connected);
+});

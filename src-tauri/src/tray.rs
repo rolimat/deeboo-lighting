@@ -316,7 +316,6 @@ mod tests {
             ..playing()
         };
         assert_eq!(tray_view(&i).image.name(), "tray-rhythm-forced-on");
-        assert_eq!(tray_view(&i).image.name(), "tray-rhythm-forced-on");
     }
 
     #[test]
