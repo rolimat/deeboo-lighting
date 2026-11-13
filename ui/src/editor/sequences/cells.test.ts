@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { Step } from "../api";
-import { fromCells, setBars, toCells } from "./cells";
+import { doubleBars, fromCells, halveBars, setBars, toCells } from "./cells";
 
 const HB: Record<string, number> = { half: 1, one: 2, two: 4, four: 8 };
 const ROLES = ["principal", "contraste", "suave", "off"];
@@ -63,4 +63,19 @@ it("drag_edge_adds_whole_bar_copying_last", () => {
   expect(setBars(grown, 1)).toEqual(cols.slice(0, 8));
   expect(setBars(cols, 0)).toHaveLength(8); // at least one bar
   expect(setBars(cols, 99)).toHaveLength(16 * 8); // at most 16 bars
+});
+
+const two = () => [...Array(8).fill(["principal"]), ...Array(8).fill(["contraste"])];
+
+it("double_repeats_the_steps", () => {
+  const d = doubleBars(two());
+  expect(d).toHaveLength(32);
+  expect(d.slice(16)).toEqual(two());
+  expect(doubleBars(d.concat(d))).toHaveLength(16 * 8); // capped at 16 bars
+});
+
+it("halve_keeps_the_first_half", () => {
+  expect(halveBars(two())).toEqual(two().slice(0, 8));
+  expect(halveBars(two().slice(0, 8))).toHaveLength(8); // never below one bar
+  expect(halveBars(setBars(two(), 3))).toHaveLength(8); // odd: floor
 });

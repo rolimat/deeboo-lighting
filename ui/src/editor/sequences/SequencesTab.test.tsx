@@ -332,3 +332,54 @@ it("dropping_a_palette_changes_the_preview", async () => {
   expect(q<HTMLSelectElement>("select#seq-palette")?.value).toBe("1");
   expect(store.canUndo).toBe(false); // UI-only
 });
+
+const bw = (sel: string) => q<HTMLButtonElement>(`button[aria-label='${sel}']`);
+
+it("double_and_halve_buttons_undoable_with_limits", async () => {
+  await mount();
+  await click(bw("Double length"));
+  expect(q("[data-clip]")?.textContent).toContain("4 bars");
+  expect(role(0, 0)).toBe(role(0, 16)); // content repeated
+  await act(() => store.undo());
+  expect(q("[data-clip]")?.textContent).toContain("2 bars");
+  await click(bw("Halve length"));
+  expect(q("[data-clip]")?.textContent).toContain("1 bar ·");
+  expect(bw("Halve length")?.disabled).toBe(true);
+  await click(bw("Double length"));
+  await click(bw("Double length"));
+  await click(bw("Double length"));
+  await click(bw("Double length"));
+  expect(q("[data-clip]")?.textContent).toContain("16 bars");
+  expect(bw("Double length")?.disabled).toBe(true);
+});
+
+it("drag_reaches_beyond_the_end_and_back_to_original", async () => {
+  await mount();
+  const track = q("[data-clip-track]") as HTMLElement;
+  // 2 bars fill 400px of a 800px grid with room to the right
+  track.getBoundingClientRect = () => ({
+    left: 0,
+    width: 400,
+    right: 400,
+    top: 0,
+    bottom: 0,
+    height: 0,
+    x: 0,
+    y: 0,
+    toJSON() {},
+  });
+  expect(root.querySelectorAll("[data-grid] > div")[0]).toBeTruthy();
+  await fire(q("[role=slider]"), "pointerdown", { clientX: 400 });
+  await fire(document.body, "pointermove", { clientX: 600 });
+  expect(q("[data-clip]")?.textContent).toContain("3 bars");
+  await fire(document.body, "pointermove", { clientX: 400 });
+  expect(q("[data-clip]")?.textContent).toContain("2 bars"); // back to the original length
+  await fire(document.body, "pointerup", { clientX: 400 });
+});
+
+it("grid_leaves_room_to_the_right_of_the_clip", async () => {
+  await mount();
+  const cols = (q("[data-grid]") as HTMLElement).style.gridTemplateColumns;
+  expect(cols).toContain("repeat(24"); // 2 bars + 1 spare
+  expect(root.querySelectorAll("[data-seg='0']")).toHaveLength(16);
+});

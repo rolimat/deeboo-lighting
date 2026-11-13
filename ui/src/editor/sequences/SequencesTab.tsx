@@ -7,7 +7,8 @@ import type { useLibrary } from "../state/library";
 import type { TopBarProps } from "../shell/TopBar";
 import { ArrangementGrid, ROLE_NAMES } from "./ArrangementGrid";
 import { ClipBar } from "./ClipBar";
-import { BAR, fromCells, setBars, toCells } from "./cells";
+import { BAR, MAX_BARS, doubleBars, fromCells, halveBars, setBars, toCells } from "./cells";
+import { useHelp } from "../shell/Help";
 import { css, roleColour } from "./RolePicker";
 import { Simulation } from "./Simulation";
 
@@ -117,6 +118,8 @@ export function SequencesTab({
   const [counts, setCounts] = useState<number[]>([]);
   const [half, setHalf] = useState<number | null>(null);
   const gesture = useRef(0);
+  const helpHalve = useHelp("Halve the length: keeps the first half.");
+  const helpDouble = useHelp("Double the length: repeats the sequence once.");
 
   const picked: Sel | null =
     sel?.k === "seq" && !lib?.sequences.some(([id]) => id === sel.id)
@@ -545,15 +548,47 @@ export function SequencesTab({
                   bars={bars}
                   readOnly={readOnly}
                   onBars={(n) =>
-                    n !== bars &&
+                    // Against the store, not the render: a drag can reverse before a re-render.
                     editSeq(
-                      (s) => ({ ...s, steps: fromCells(setBars(toCells(s.steps), n)) }),
+                      (s) =>
+                        toCells(s.steps).length === n * BAR
+                          ? s
+                          : { ...s, steps: fromCells(setBars(toCells(s.steps), n)) },
                       `bars-${gesture.current}`,
                     )
                   }
                 />
               }
             />
+            {!readOnly && (
+              <div class="flex items-center gap-2 text-body text-dim">
+                Length
+                <button
+                  type="button"
+                  aria-label="Halve length"
+                  disabled={bars <= 1}
+                  {...helpHalve}
+                  onClick={() =>
+                    editSeq((s) => ({ ...s, steps: fromCells(halveBars(toCells(s.steps))) }))
+                  }
+                  class="rounded-md border border-border bg-card px-2 py-1 text-text disabled:opacity-40"
+                >
+                  ÷2
+                </button>
+                <button
+                  type="button"
+                  aria-label="Double length"
+                  disabled={bars >= MAX_BARS}
+                  {...helpDouble}
+                  onClick={() =>
+                    editSeq((s) => ({ ...s, steps: fromCells(doubleBars(toCells(s.steps))) }))
+                  }
+                  class="rounded-md border border-border bg-card px-2 py-1 text-text disabled:opacity-40"
+                >
+                  ×2
+                </button>
+              </div>
+            )}
             <div class="flex flex-wrap items-center gap-2 text-body text-dim">
               Paint
               {PAINT.map((r) => (

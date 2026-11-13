@@ -1,7 +1,7 @@
 import { useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import type { Palette } from "../api";
-import { BAR, type Cols } from "./cells";
+import { BAR, MAX_BARS, type Cols } from "./cells";
 import { roleColour } from "./RolePicker";
 
 export const ROLE_NAMES: Record<string, string> = {
@@ -47,6 +47,8 @@ export function ArrangementGrid({
   const painting = useRef(false);
   const [over, setOver] = useState(false);
   const n = cols.length;
+  // Empty room after the clip (up to one more bar, never past 16) so the handle can be dragged longer.
+  const total = n + Math.min(BAR, Math.max(0, MAX_BARS * BAR - n));
   const segs = cols[0]?.length ?? 0;
   const stop = () => {
     painting.current = false;
@@ -75,7 +77,7 @@ export function ArrangementGrid({
           class={`relative select-none rounded ${over ? "outline outline-2 outline-accent" : ""}`}
           style={{
             display: "grid",
-            gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))`,
+            gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))`,
             ...(zoom > 1 ? { minWidth: `${zoom * 100}%` } : {}),
           }}
           onDragOver={(e) => {
@@ -91,7 +93,7 @@ export function ArrangementGrid({
             if (!readOnly && Number.isFinite(id)) onDropPalette(id);
           }}
         >
-          {Array.from({ length: n / 2 }, (_, b) => (
+          {Array.from({ length: total / 2 }, (_, b) => (
             <div
               key={b}
               style={{ gridColumn: "span 2" }}
@@ -100,14 +102,14 @@ export function ArrangementGrid({
               {b % 4 === 0 ? `Bar ${b / 4 + 1}` : `${Math.floor(b / 4) + 1}.${(b % 4) + 1}`}
             </div>
           ))}
-          <div style={{ gridColumn: "1 / -1" }}>{clip}</div>
+          <div style={{ gridColumn: `1 / span ${n}` }}>{clip}</div>
           <div style={{ gridColumn: "1 / -1" }} class="relative h-[14px]">
             {[...warnings].map(([c, k]) => (
               <span
                 key={c}
                 role="status"
                 data-col={c}
-                style={{ left: `${(c / n) * 100}%` }}
+                style={{ left: `${(c / total) * 100}%` }}
                 class="absolute whitespace-nowrap text-small leading-[14px] text-red"
               >
                 Shown in {k} parts
@@ -161,17 +163,17 @@ export function ArrangementGrid({
             }),
           )}
           <div aria-hidden="true" class="pointer-events-none absolute inset-0">
-            {Array.from({ length: n / 2 }, (_, b) => (
+            {Array.from({ length: total / 2 }, (_, b) => (
               <div
                 key={b}
-                style={{ left: `${((b * 2) / n) * 100}%` }}
+                style={{ left: `${((b * 2) / total) * 100}%` }}
                 class={`absolute inset-y-0 ${b % 4 === 0 ? "w-0.5 bg-[#7a808a]" : "w-px bg-border"}`}
               />
             ))}
             {playhead !== null && (
               <div
                 data-playhead
-                style={{ left: `${playhead * 100}%` }}
+                style={{ left: `${((playhead * n) / total) * 100}%` }}
                 class="absolute -top-1 bottom-0 z-10 w-0.5 bg-accent"
               />
             )}
