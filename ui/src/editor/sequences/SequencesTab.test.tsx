@@ -382,4 +382,17 @@ it("grid_leaves_room_to_the_right_of_the_clip", async () => {
   const cols = (q("[data-grid]") as HTMLElement).style.gridTemplateColumns;
   expect(cols).toContain("repeat(24"); // 2 bars + 1 spare
   expect(root.querySelectorAll("[data-seg='0']")).toHaveLength(16);
+  // every segment row has exactly 3 bars of columns; only the first 2 are paintable
+  const g = q("[data-grid]") as HTMLElement;
+  const kids = Array.from(g.children).filter(
+    (el) => el.matches("button[data-seg]") || el.matches("[data-room]"),
+  );
+  const segs = root.querySelectorAll("[data-col='0'][data-seg]").length;
+  expect(kids).toHaveLength(segs * 24);
+  kids.forEach((el, i) => {
+    const inRoom = i % 24 >= 16;
+    expect(el.matches("[data-room]")).toBe(inRoom);
+    if (!inRoom) expect(Number(el.getAttribute("data-seg"))).toBe(Math.floor(i / 24));
+  });
+  expect(g.querySelectorAll("[data-room] button, button[data-room]")).toHaveLength(0);
 });

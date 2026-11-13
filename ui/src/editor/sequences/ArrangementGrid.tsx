@@ -116,8 +116,8 @@ export function ArrangementGrid({
               </span>
             ))}
           </div>
-          {Array.from({ length: segs }, (_, s) =>
-            cols.map((col, c) => {
+          {Array.from({ length: segs }, (_, s) => [
+            ...cols.map((col, c) => {
               const role = col[s] ?? "off";
               return (
                 <button
@@ -161,7 +161,16 @@ export function ArrangementGrid({
                 />
               );
             }),
-          )}
+            // Empty room after the clip: one placeholder per row so the row never wraps.
+            ...Array.from({ length: total - n }, (_, k) => (
+              <div
+                key={`${s}-room-${k}`}
+                data-room
+                aria-hidden="true"
+                class="h-[18px] rounded-[3px] border border-bg bg-card opacity-30"
+              />
+            )),
+          ])}
           <div aria-hidden="true" class="pointer-events-none absolute inset-0">
             {Array.from({ length: total / 2 }, (_, b) => (
               <div
