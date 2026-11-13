@@ -355,3 +355,19 @@ it("the_live_set_follows_the_status_when_the_popover_changes_it", async () => {
   expect(root.querySelector("[data-playing]")).toBeNull();
   expect(q("[data-live-state]")?.textContent).toContain("Not playing");
 });
+
+it("internal_drags_carry_no_plain_text_for_inputs_to_swallow", async () => {
+  const data = new Map<string, string>();
+  const dt = {
+    setData: (k: string, v: string) => data.set(k, v),
+    getData: () => "",
+    effectAllowed: "",
+  };
+  const item = q("[data-seq]") ?? q("[draggable='true']");
+  await act(() => {
+    const e = Object.assign(new Event("dragstart", { bubbles: true }), { dataTransfer: dt });
+    item?.dispatchEvent(e);
+  });
+  expect(data.size).toBeGreaterThan(0);
+  expect([...data.keys()]).not.toContain("text/plain");
+});

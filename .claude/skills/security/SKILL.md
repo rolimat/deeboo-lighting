@@ -37,6 +37,7 @@ Local network
 - [ ] Network input is untrusted: size limits, errors instead of panics.
 App and webview
 - [ ] Webview loads only bundled files; strict CSP (no inline, no external origins). QR is generated locally.
+- [ ] The editor window has `on_navigation` allowing only `tauri://localhost` (Vite dev URL in debug builds); its native drop handler is off, so the UI cancels stray drops (`installDropGuard`). The popover keeps the native drop handler (it swallows drops).
 - [ ] Minimal Tauri capabilities per window: own commands only; no shell, fs or http plugin exposed to JS.
       All network I/O happens in Rust.
 - [ ] Every IPC input is validated in Rust: types, ranges (segments, DP 61 <= 255 bytes, steps, H/S/V, BPM), text lengths.

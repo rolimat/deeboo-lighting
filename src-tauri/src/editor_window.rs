@@ -34,6 +34,18 @@ fn editor_url(section: Section) -> String {
     format!("editor.html?section={name}")
 }
 
+/// Only the bundled app (`tauri://localhost`) may load in the editor; in debug builds also the Vite dev server.
+/// A dropped file or link, a stray `<a>` or a redirect to anything else is refused.
+fn navigation_allowed(url: &tauri::Url) -> bool {
+    let host = url.host_str();
+    let app = url.scheme() == "tauri" && host == Some("localhost");
+    let dev = cfg!(debug_assertions)
+        && url.scheme() == "http"
+        && host == Some("localhost")
+        && url.port() == Some(5173);
+    app || dev
+}
+
 /// The window manager behind a trait so "open twice" is testable without a display.
 trait Windows {
     /// Focuses the editor on `section` if it exists; false when there is none.
@@ -104,6 +116,13 @@ impl Windows for AppHandle {
             .focused(true)
             // The native file-drop handler swallows `WKWebView` drops, so HTML5 drag and drop never fires.
             .disable_drag_drop_handler()
+            .on_navigation(|url| {
+                let ok = navigation_allowed(url);
+                if !ok {
+                    log::debug!("editor navigation refused: {}://", url.scheme());
+                }
+                ok
+            })
             .build()
             .map(|_| apply_dock(self, true))
             .map_err(|e| {
@@ -222,6 +241,40 @@ mod tests {
                 "core:event:allow-unlisten"
             ]
         );
+    }
+
+    #[test]
+    fn only_the_bundled_app_may_load_in_the_editor() {
+        let url = |s: &str| tauri::Url::parse(s).unwrap();
+        assert!(navigation_allowed(&url(
+            "tauri://localhost/editor.html?section=sets"
+        )));
+        for refused in [
+            "file:///Users/me/Downloads/x.html",
+            "https://example.com/",
+            "http://example.com/",
+            "tauri://evil.example/",
+            "http://localhost:8080/",
+            "https://localhost:5173/",
+            "data:text/html,hi",
+        ] {
+            assert!(!navigation_allowed(&url(refused)), "{refused}");
+        }
+        assert_eq!(
+            navigation_allowed(&url("http://localhost:5173/editor.html")),
+            cfg!(debug_assertions)
+        );
+    }
+
+    #[test]
+    fn editor_window_refuses_foreign_navigation() {
+        let src = include_str!("editor_window.rs");
+        let builder = src
+            .split("WebviewWindowBuilder::new")
+            .nth(1)
+            .unwrap_or_default();
+        let builder = builder.split(".build()").next().unwrap_or_default();
+        assert!(builder.contains(".on_navigation("));
     }
 
     /// The editor uses HTML5 drag and drop (Sets, Palettes, Sequences); on macOS the native

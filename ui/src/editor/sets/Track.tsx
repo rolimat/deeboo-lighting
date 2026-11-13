@@ -1,3 +1,4 @@
+import { DRAG_TYPE } from "../drag";
 import { Icon } from "../../icons/Icon";
 import { help } from "../shell/Help";
 import { H } from "../help-texts";
@@ -181,7 +182,7 @@ export function Track(p: TrackProps) {
               draggable
               {...help(H.clip)}
               onDragStart={(e) => {
-                e.dataTransfer?.setData("text/plain", d.name);
+                e.dataTransfer?.setData(DRAG_TYPE, d.name);
                 p.onDragClip(i);
               }}
               onDragEnd={p.onDragEnd}

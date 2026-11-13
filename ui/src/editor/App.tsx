@@ -12,6 +12,7 @@ import { HelpProvider, help } from "./shell/Help";
 import { H } from "./help-texts";
 import { TopBar, TABS, type Tab } from "./shell/TopBar";
 import { useLibrary } from "./state/library";
+import { installDropGuard } from "./drag";
 
 function describe(s: StripStatus | null): string {
   switch (s?.kind) {
@@ -44,6 +45,7 @@ export function App() {
   const store = useLibrary();
   const [actions, setActions] = useState<BarActions | null>(null);
   const [openSeq, setOpenSeq] = useState<Sel | null>(null);
+  useEffect(installDropGuard, []);
   useEffect(() => {
     let off: (() => void) | undefined;
     let alive = true;

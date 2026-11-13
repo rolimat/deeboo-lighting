@@ -1,3 +1,4 @@
+import { DRAG_TYPE } from "../drag";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { MomentName, Status } from "../../api";
 import { Icon } from "../../icons/Icon";
@@ -233,7 +234,7 @@ export function SetsTab({
   const dragProps = (item: DragItem, name: string) => ({
     draggable: true as const,
     onDragStart: (e: DragEvent) => {
-      e.dataTransfer?.setData("text/plain", name);
+      e.dataTransfer?.setData(DRAG_TYPE, name);
       setDrag({ item, name });
     },
     onDragEnd: () => setDrag(null),

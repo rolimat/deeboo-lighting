@@ -1,3 +1,4 @@
+import { DRAG_TYPE } from "../drag";
 import { useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import type { Palette } from "../api";
@@ -91,7 +92,7 @@ export function ArrangementGrid({
           onDrop={(e) => {
             e.preventDefault();
             setOver(false);
-            const id = Number(e.dataTransfer?.getData("text/plain"));
+            const id = Number(e.dataTransfer?.getData(DRAG_TYPE));
             if (!readOnly && Number.isFinite(id)) onDropPalette(id);
           }}
         >
