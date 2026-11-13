@@ -56,6 +56,8 @@ pub trait MidiPort {
     /// Whether the OS lists a MIDI source called `name` right now (the connection may be stale).
     fn source_available(&self, name: &str) -> bool;
     fn reconnect(&mut self, source: Option<&str>);
+    /// Stamp of the newest clock tick the MIDI callback has queued (0 if none).
+    fn newest_tick_us(&self) -> u64;
     /// Messages lost because the engine fell behind.
     fn dropped(&self) -> u64;
 }
@@ -284,6 +286,8 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     tray: Option<TrayLink>,
     /// The OS listed the configured source at the last check (popover show or settings change).
     source_present: bool,
+    /// Stamp of the newest tick this thread has handled.
+    last_tick_us: u64,
     /// The wizard holds the strip: the engine keeps running but sends nothing.
     strip_paused: bool,
     /// The saved library: kept to rebuild the engine's look after a segment-count change.
@@ -336,7 +340,8 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         let source_present = settings
             .midi_source
             .as_deref()
-            .is_none_or(|n| external(Some(n)).is_none_or(|n| midi.source_available(n)));
+            .filter(|n| *n != crate::midi::VIRTUAL_PORT)
+            .is_none_or(|n| midi.source_available(n));
         let mut core = Self {
             engine,
             segments,
@@ -356,6 +361,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             last,
             tray: None,
             source_present,
+            last_tick_us: 0,
             strip_paused: false,
             library: None,
             identify_at: None,
@@ -393,7 +399,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                     self.source_present = true;
                 }
             }
-            Some(wanted) if external(Some(&wanted)).is_none() => {}
+            Some(wanted) if wanted == crate::midi::VIRTUAL_PORT => {}
             Some(wanted) => {
                 let present = list.contains(&wanted);
                 let stale = !self.source_present
@@ -605,6 +611,9 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         };
         match input {
             Input::Midi(e) => {
+                if e.status == 0xF8 {
+                    self.last_tick_us = e.at_us;
+                }
                 let mut features = None;
                 let cmds = self.engine.on_midi(e.at_us, e.status, |closed| {
                     detect_beat(
@@ -701,7 +710,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     }
 
     /// Re-pairing: the strip task reconnects; the scene is resent when it reports `Connected`.
-    /// A different segment count cannot keep the old plan, so the engine starts over.
+    /// A different segment count cannot keep the old plan: it restarts, the running clock does not.
     fn strip_changed(&mut self, cfg: StripConfig, now_us: u64) {
         if cfg.segments != self.segments {
             log::warn!(
@@ -712,7 +721,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             self.segments = cfg.segments;
             self.engine.resegment(cfg.segments);
             if let Some(lib) = &self.library {
-                // A fresh engine is not playing: the library (or its fallback) applies at once.
+                // The plan restarted: the library (or its fallback) applies at the next bar start.
                 let cmds = self.engine.set_library(now_us, lib);
                 self.flush(cmds);
             }
@@ -797,7 +806,9 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
 
     fn after(&mut self, now_us: u64) {
         // Also after every input: a flood of inputs must not starve the clock timeout.
-        if self.engine.next_deadline_us().is_some_and(|d| d <= now_us) {
+        // A newer tick waiting in the queue means the clock is alive and this thread is late.
+        let stalled = self.midi.newest_tick_us() > self.last_tick_us;
+        if !stalled && self.engine.next_deadline_us().is_some_and(|d| d <= now_us) {
             let cmds = self.engine.on_deadline(now_us);
             self.flush(cmds);
         }
@@ -971,6 +982,8 @@ mod tests {
         present: Option<String>,
         /// What `CoreMIDI` lists.
         ports: Rc<RefCell<Vec<String>>>,
+        /// Newest tick the fake callback has queued.
+        newest: std::cell::Cell<u64>,
     }
 
     impl MidiPort for FakeMidi {
@@ -982,6 +995,9 @@ mod tests {
         }
         fn dropped(&self) -> u64 {
             0
+        }
+        fn newest_tick_us(&self) -> u64 {
+            self.newest.get()
         }
         fn reconnect(&mut self, source: Option<&str>) {
             self.reconnects.borrow_mut().push(source.map(String::from));
@@ -1921,23 +1937,29 @@ mod tests {
             0,
         );
         let at = clock_ticks(&mut c, 10_000, 30);
-        let before = c.status().beat_in_bar;
-        // The thread was stuck 700 ms: the next tick (stamped by the MIDI callback) is handled late.
+        // The thread is stuck 700 ms; two ticks and a UI click queue up behind the stall.
         let late = at + 700_000;
-        c.handle(
-            Input::Midi(MidiEvent {
-                at_us: at,
-                status: 0xF8,
-            }),
-            late,
-        );
-        assert!(c.status().playing, "a stall is not a Stop");
-        assert!(before.is_some());
-        let at = clock_ticks(&mut c, at + 20_000, 5);
+        c.midi.newest.set(at + 20_000);
+        c.handle(Input::Ui(UiCommand::Lights(true)), late);
+        assert!(c.status().playing, "a queued tick means the clock is alive");
+        for t in [at, at + 20_000] {
+            c.handle(
+                Input::Midi(MidiEvent {
+                    at_us: t,
+                    status: 0xF8,
+                }),
+                late,
+            );
+        }
         assert!(c.status().playing);
-        assert!(at > 0);
-        // Beat count continued from tick 31, not from beat 1.
-        assert_eq!(c.status().beat_in_bar, Some(2));
+        assert_eq!(
+            c.status().beat_in_bar,
+            Some(2),
+            "the beat count went on from tick 31"
+        );
+        // Nothing newer is queued and the clock stays silent: the Stop is real.
+        c.tick(late + 600_000);
+        assert!(!c.status().playing);
     }
 
     #[test]

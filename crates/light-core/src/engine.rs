@@ -514,6 +514,9 @@ impl Engine {
         self.pending = None;
         self.playing = None;
         self.rot_moment = None;
+        // A preview validated for the old count must not paint out of range.
+        self.preview = None;
+        self.free_at = None;
         self.resend = true;
     }
 
