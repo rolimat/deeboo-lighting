@@ -295,6 +295,16 @@ impl AppState {
         self.save_library(with_wired(&old, segments)).map(Some)
     }
 
+    /// Tells the engine about the new strip, always with the saved library first: a retried save finds
+    /// the library already adapted, and the engine would rebuild from a stale one.
+    fn hand_over(&self, cfg: strip_store::StripConfig) -> Result<(), String> {
+        self.deliver(Input::Library(Box::new(self.library())));
+        self.send(Input::StripChanged(cfg)).map_err(|e| {
+            log::warn!("strip saved but not reloaded: {e}");
+            "Saved. Restart the app to use the new strip.".to_string()
+        })
+    }
+
     fn rebuild_unsaved_library(&self, segments: u8) -> Option<Library> {
         let path = lock(&self.library_path).clone()?;
         let mut current = lock(&self.library);
@@ -959,35 +969,25 @@ pub fn wizard_save(
     // Library first (as `set_wired` does): a failed backup leaves strip.json and the library as they
     // were. If the strip write then fails, the adapted library stays (a retry with the same count
     // finds nothing left to adapt); the backup is kept.
-    let adapted = std::cell::RefCell::new(None);
     state.wizard.save_prepared(
         &state.strip_path()?,
         &wizard_emit(&app),
         wired,
-        |n| {
-            *adapted.borrow_mut() = state.adapt_library(n)?;
-            Ok(())
-        },
-        |cfg| {
-            if let Some(lib) = adapted.take() {
-                state.deliver(Input::Library(Box::new(lib)));
-            }
-            state.send(Input::StripChanged(cfg)).map_err(|e| {
-                log::warn!("strip saved but not reloaded: {e}");
-                "Saved. Restart the app to use the new strip.".to_string()
-            })
-        },
+        |n| state.adapt_library(n).map(drop),
+        |cfg| state.hand_over(cfg),
     )
 }
 
 /// Copies the saved library to `<file>.pre-<segments>seg` (`.N` appended when taken) before a resize
 /// drops what no longer fits. Never overwrites a copy; a failed copy leaves nothing behind.
 fn backup_library(path: &std::path::Path, segments: u8) -> Result<(), String> {
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let fail = |e: std::io::Error| {
         log::warn!("library backup not written: {e}");
         "Could not back up the library.".to_string()
     };
+    // Never looser than the library itself.
+    let source_mode = std::fs::metadata(path).map_err(fail)?.permissions().mode() & 0o777;
     for i in 0..100 {
         let mut name = path.file_name().unwrap_or_default().to_os_string();
         name.push(format!(".pre-{segments}seg"));
@@ -998,7 +998,7 @@ fn backup_library(path: &std::path::Path, segments: u8) -> Result<(), String> {
         let out = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o640)
+            .mode(source_mode)
             .open(&target);
         let mut out = match out {
             Ok(f) => f,
@@ -1498,6 +1498,46 @@ mod tests {
         state.save_library(state.library()).unwrap();
         state.set_wired(6).unwrap();
         assert!(dir.path().join("library.json.pre-10seg").exists());
+    }
+
+    #[test]
+    fn a_retried_save_still_hands_the_engine_the_saved_library() {
+        let (_dir, state) = lib_state();
+        state.save_library(state.library()).unwrap();
+        assert!(state.adapt_library(6).unwrap().is_some());
+        // The retry: the library is already adapted, so there is nothing new to adapt.
+        assert_eq!(state.adapt_library(6).unwrap(), None);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        state.set_runtime(RuntimeHandle { tx });
+        let cfg = strip_store::StripConfig {
+            id: "abc".into(),
+            name: "n".into(),
+            local_key: secrecy::SecretString::from("0123456789abcdef"),
+            segments: 6,
+            reported: 10,
+            last_ip: None,
+        };
+        state.hand_over(cfg).unwrap();
+        match rx.recv() {
+            Ok(Input::Library(l)) => assert_eq!(l.segments(), 6),
+            _ => panic!("the library goes first"),
+        }
+        assert!(matches!(rx.recv(), Ok(Input::StripChanged(_))));
+    }
+
+    #[test]
+    fn the_backup_is_never_looser_than_the_library() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, state) = lib_state();
+        state.save_library(state.library()).unwrap();
+        let path = dir.path().join("library.json");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        backup_library(&path, 10).unwrap();
+        let mode = std::fs::metadata(dir.path().join("library.json.pre-10seg"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     fn state_with_strip(n: u8, m: u8) -> (tempfile::TempDir, AppState) {
