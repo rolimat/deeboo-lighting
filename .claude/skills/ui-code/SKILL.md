@@ -30,6 +30,7 @@ Two entry points: the popover (`ui/index.html`, `ui/src/*.ts`, plain TS and CSS)
 - Visual review without Tauri: `npm --prefix ui run dev`, open http://localhost:5173/editor.html?mock (in-memory api in `editor/mock.ts`, DEV only; `scripts/check-mock-treeshake.sh` in `just lint` fails if it reaches `ui/dist`).
 - Popover visual review: http://localhost:5173/index.html?mock (`src/mock.ts`, DEV only; flags `&noclock`, `&nostrip`, `&striplost`, `&audiofail`); the same tree-shake check covers it. Status carries the palette in force (`selection.palette`, also under Auto: Rust `Selection::in_force`). Settings live in the editor's Setup tab; the popover has none.
 - Tests are Vitest + jsdom with `api` mocked; see the `writing-tests` skill.
+- Menu bar item (`src-tauri/src/tray.rs`, frames from `just tray-frames`): one item, the glyph never blinks. Lights on: green glyph (accent `#2dd4bf`, names `tray-<moment|stopped>[-forced]-on[-lost]`, not a template); lights off: black template glyph. Lost (no clock or strip): red dot, coloured (grey when the lights are off). Each frame is set with `set_icon_with_as_template` (a separate `set_icon` resets the template flag on macOS). The BPM title and the moment icon stay.
 
 ## Details
 Tokens, component classes and UI strings: [references/styles-and-copy.md](references/styles-and-copy.md) (read before changing styles or copy).

@@ -78,12 +78,13 @@ macro_rules! moment_images {
     ($($kind:literal),*) => {
         // The committed @2x images (`tools/tray-frames`); @1x files exist for non-retina use.
         static IMAGES: &[(&str, &[u8])] = &[
-            entry!("tray-stopped"), entry!("tray-stopped-lost"),
+            entry!("tray-stopped"), entry!("tray-stopped-on"),
+            entry!("tray-stopped-lost"), entry!("tray-stopped-on-lost"),
             $(
-                entry!(concat!("tray-", $kind)), entry!(concat!("tray-", $kind, "-dim")),
-                entry!(concat!("tray-", $kind, "-forced")), entry!(concat!("tray-", $kind, "-forced-dim")),
-                entry!(concat!("tray-", $kind, "-lost")), entry!(concat!("tray-", $kind, "-dim-lost")),
-                entry!(concat!("tray-", $kind, "-forced-lost")), entry!(concat!("tray-", $kind, "-forced-dim-lost")),
+                entry!(concat!("tray-", $kind)), entry!(concat!("tray-", $kind, "-on")),
+                entry!(concat!("tray-", $kind, "-forced")), entry!(concat!("tray-", $kind, "-forced-on")),
+                entry!(concat!("tray-", $kind, "-lost")), entry!(concat!("tray-", $kind, "-on-lost")),
+                entry!(concat!("tray-", $kind, "-forced-lost")), entry!(concat!("tray-", $kind, "-forced-on-lost")),
             )*
         ];
     };
@@ -101,9 +102,8 @@ pub fn apply(app: &AppHandle, prev: Option<&TrayView>, view: &TrayView) {
         return;
     };
     if prev.is_none_or(|p| p.image != view.image) {
-        // Lost images are coloured (grey + red dot): not template.
-        let _ = main.set_icon_as_template(!view.image.lost);
-        let _ = main.set_icon(image(&view.image.name()));
+        // One call: on macOS a separate `set_icon` would reset the template flag.
+        let _ = main.set_icon_with_as_template(image(&view.image.name()), view.image.is_template());
     }
     if prev.is_none_or(|p| p.title != view.title) {
         let _ = main.set_title(Some(view.title.as_str()));
@@ -155,7 +155,8 @@ pub struct TrayInput {
     pub strip_ok: bool,
     pub playing: bool,
     pub bpm: Option<f32>,
-    pub last_beat_us: Option<u64>,
+    /// The strip is lit: green glyph; off: black template glyph.
+    pub lights_on: bool,
     pub moment: Moment,
     pub forced: bool,
 }
@@ -166,8 +167,8 @@ pub struct TrayInput {
 pub struct TrayImage {
     /// `None` when stopped: the glyph alone.
     pub moment: Option<Moment>,
-    /// Full icon on the beat; dimmed between beats.
-    pub lit: bool,
+    /// Lights on: green glyph (not a template image).
+    pub on: bool,
     /// Forced moment: "F" badge.
     pub forced: bool,
     /// No MIDI or no strip: red dot on the glyph.
@@ -175,11 +176,17 @@ pub struct TrayImage {
 }
 
 impl TrayImage {
-    /// `tray-<moment|stopped>[-forced][-dim][-lost]`
+    /// `tray-<moment|stopped>[-forced][-on][-lost]`
     #[must_use]
     pub fn name(self) -> String {
         let kind = match self.moment {
-            None => return format!("tray-stopped{}", if self.lost { "-lost" } else { "" }),
+            None => {
+                return format!(
+                    "tray-stopped{}{}",
+                    if self.on { "-on" } else { "" },
+                    if self.lost { "-lost" } else { "" }
+                );
+            }
             Some(Moment::Rhythm) => "rhythm",
             Some(Moment::Calm) => "calm",
             Some(Moment::BuildUp) => "buildup",
@@ -187,9 +194,17 @@ impl TrayImage {
         format!(
             "tray-{kind}{}{}{}",
             if self.forced { "-forced" } else { "" },
-            if self.lit { "" } else { "-dim" },
+            if self.on { "-on" } else { "" },
             if self.lost { "-lost" } else { "" }
         )
+    }
+}
+
+impl TrayImage {
+    /// Only the black, lights-off glyph adapts to the bar; green and lost images keep their colours.
+    #[must_use]
+    pub fn is_template(self) -> bool {
+        !self.on && !self.lost
     }
 }
 
@@ -199,16 +214,11 @@ pub struct TrayView {
     pub title: String,
 }
 
-/// How long the moment icon stays bright after a beat.
-const BLINK_US: u64 = 120_000;
-
 #[must_use]
-pub fn tray_view(s: &TrayInput, now_us: u64) -> TrayView {
+pub fn tray_view(s: &TrayInput) -> TrayView {
     let image = TrayImage {
         moment: s.playing.then_some(s.moment),
-        lit: s.playing
-            && s.last_beat_us
-                .is_some_and(|t| now_us.saturating_sub(t) < BLINK_US),
+        on: s.lights_on,
         forced: s.playing && s.forced,
         lost: !(s.midi_ok && s.strip_ok),
     };
@@ -218,15 +228,6 @@ pub fn tray_view(s: &TrayInput, now_us: u64) -> TrayView {
         |b| format!("{:\u{2007}>5}", format!("{b:.1}")),
     );
     TrayView { image, title }
-}
-
-/// The next instant the view changes by itself (the blink going dim); none when stopped.
-#[must_use]
-pub fn tray_deadline(s: &TrayInput, now_us: u64) -> Option<u64> {
-    if !s.playing {
-        return None;
-    }
-    s.last_beat_us.map(|t| t + BLINK_US).filter(|&d| d > now_us)
 }
 
 #[cfg(test)]
@@ -239,16 +240,15 @@ mod tests {
             strip_ok: true,
             playing: false,
             bpm: None,
-            last_beat_us: None,
             moment: Moment::Rhythm,
             forced: false,
+            lights_on: false,
         }
     }
 
     fn playing() -> TrayInput {
         TrayInput {
             playing: true,
-            last_beat_us: Some(1_000_000),
             ..input()
         }
     }
@@ -262,41 +262,66 @@ mod tests {
     }
 
     #[test]
-    fn moment_icon_blinks_on_beat() {
-        let i = playing();
-        assert_eq!(tray_view(&i, 1_119_999).image.name(), "tray-rhythm");
-        assert_eq!(tray_view(&i, 1_120_000).image.name(), "tray-rhythm-dim");
-        assert_eq!(tray_deadline(&i, 1_100_000), Some(1_120_000));
-        // between beats nothing changes by itself until the next beat event
-        assert_eq!(tray_deadline(&i, 1_130_000), None);
+    fn glyph_never_blinks_with_the_beat() {
+        let i = TrayInput {
+            lights_on: true,
+            ..playing()
+        };
+        // the view takes no time and no beat: nothing can change it between beats
+        assert_eq!(tray_view(&i).image.name(), "tray-rhythm-on");
         let calm = TrayInput {
             moment: Moment::Calm,
             ..i.clone()
         };
-        assert_eq!(tray_view(&calm, 1_000_000).image.name(), "tray-calm");
+        assert_eq!(tray_view(&calm).image.name(), "tray-calm-on");
         let up = TrayInput {
             moment: Moment::BuildUp,
+            lights_on: false,
             ..i
         };
-        assert_eq!(tray_view(&up, 1_200_000).image.name(), "tray-buildup-dim");
+        assert_eq!(tray_view(&up).image.name(), "tray-buildup");
+    }
+
+    #[test]
+    fn colour_follows_the_lights_and_only_off_is_a_template() {
+        for playing in [false, true] {
+            let off = TrayInput { playing, ..input() };
+            let on = TrayInput {
+                lights_on: true,
+                ..off.clone()
+            };
+            assert!(tray_view(&off).image.is_template());
+            assert!(!tray_view(&on).image.is_template());
+            assert_ne!(tray_view(&off).image, tray_view(&on).image);
+        }
+        // lost: coloured whatever the lights do (grey or green, red dot)
+        let lost = TrayInput {
+            strip_ok: false,
+            ..input()
+        };
+        assert!(!tray_view(&lost).image.is_template());
+        assert_eq!(tray_view(&lost).image.name(), "tray-stopped-lost");
+        let lost_on = TrayInput {
+            lights_on: true,
+            ..lost
+        };
+        assert_eq!(tray_view(&lost_on).image.name(), "tray-stopped-on-lost");
     }
 
     #[test]
     fn forced_shows_badge() {
         let i = TrayInput {
             forced: true,
+            lights_on: true,
             ..playing()
         };
-        assert_eq!(tray_view(&i, 1_000_000).image.name(), "tray-rhythm-forced");
-        assert_eq!(
-            tray_view(&i, 1_500_000).image.name(),
-            "tray-rhythm-forced-dim"
-        );
+        assert_eq!(tray_view(&i).image.name(), "tray-rhythm-forced-on");
+        assert_eq!(tray_view(&i).image.name(), "tray-rhythm-forced-on");
     }
 
     #[test]
     fn stopped_shows_dash() {
-        let v = tray_view(&input(), 5);
+        let v = tray_view(&input());
         assert_eq!(v.image.name(), "tray-stopped");
         assert_eq!(v.title, "\u{2014}");
         // forced while stopped shows no moment, so no badge either
@@ -304,7 +329,7 @@ mod tests {
             forced: true,
             ..input()
         };
-        assert_eq!(tray_view(&f, 5).image.name(), "tray-stopped");
+        assert_eq!(tray_view(&f).image.name(), "tray-stopped");
     }
 
     #[test]
@@ -315,31 +340,19 @@ mod tests {
                 strip_ok: s,
                 ..input()
             };
-            assert_eq!(tray_view(&i, 0).image.name(), "tray-stopped-lost");
+            assert_eq!(tray_view(&i).image.name(), "tray-stopped-lost");
         }
         let i = TrayInput {
             strip_ok: false,
             forced: true,
             ..playing()
         };
-        assert_eq!(
-            tray_view(&i, 1_500_000).image.name(),
-            "tray-rhythm-forced-dim-lost"
-        );
-    }
-
-    #[test]
-    fn no_deadline_when_stopped() {
-        let i = TrayInput {
-            last_beat_us: Some(1_000_000),
-            ..input()
-        };
-        assert_eq!(tray_deadline(&i, 1_050_000), None);
+        assert_eq!(tray_view(&i).image.name(), "tray-rhythm-forced-lost");
     }
 
     #[test]
     fn bpm_title_padding_and_dash() {
-        let t = |bpm| tray_view(&TrayInput { bpm, ..input() }, 0).title;
+        let t = |bpm| tray_view(&TrayInput { bpm, ..input() }).title;
         assert_eq!(t(Some(125.0)), "125.0");
         assert_eq!(t(Some(9.5)), "\u{2007}\u{2007}9.5");
         assert_eq!(t(Some(99.94)), "\u{2007}99.9");
@@ -355,14 +368,15 @@ mod tests {
             Some(Moment::Calm),
             Some(Moment::BuildUp),
         ] {
-            for (forced, lit, lost) in [
+            for (forced, on, lost) in [
                 (false, true, false),
                 (true, false, true),
+                (true, true, true),
                 (false, false, false),
             ] {
                 let name = TrayImage {
                     moment,
-                    lit,
+                    on,
                     forced: forced && moment.is_some(),
                     lost,
                 }

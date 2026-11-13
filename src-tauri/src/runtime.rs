@@ -21,7 +21,7 @@ use crate::midi::{MidiEvent, MidiIn, QUEUE};
 use crate::settings::{Settings, detector_params};
 use crate::strip::{self, StripMsg};
 use crate::strip_store::StripConfig;
-use crate::tray::{TrayInput, TrayView, tray_deadline, tray_view};
+use crate::tray::{TrayInput, TrayView, tray_view};
 
 /// Everything that can wake the engine thread.
 pub enum Input {
@@ -274,7 +274,6 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     emit: E,
     last: EngineStatus,
     tray: Option<TrayLink>,
-    tray_due: Option<u64>,
     /// The OS listed the configured source at the last check (popover show or settings change).
     source_present: bool,
     /// The wizard holds the strip: the engine keeps running but sends nothing.
@@ -346,7 +345,6 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             emit,
             last,
             tray: None,
-            tray_due: None,
             source_present,
             strip_paused: false,
             library: None,
@@ -489,9 +487,9 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     }
 
     /// Starts driving the menu bar through `sink`.
-    pub fn set_tray(&mut self, sink: TraySink, now_us: u64) {
+    pub fn set_tray(&mut self, sink: TraySink) {
         self.tray = Some(TrayLink { sink, shown: None });
-        self.update_tray(now_us);
+        self.update_tray();
     }
 
     pub fn set_strip_sink(&mut self, sink: StripSink) {
@@ -541,7 +539,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             || (self.source_present && self.settings.midi_source == self.midi.connected_source())
     }
 
-    fn update_tray(&mut self, now_us: u64) {
+    fn update_tray(&mut self) {
         let midi_ok = self.midi_ok();
         let s = &self.last;
         let Some(link) = &mut self.tray else { return };
@@ -550,16 +548,15 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             strip_ok: matches!(self.strip, StripStatus::Connected { .. }),
             playing: s.playing,
             bpm: s.bpm,
-            last_beat_us: s.last_beat_us,
             moment: s.moment,
             forced: !s.auto,
+            lights_on: s.lights_on,
         };
-        let view = tray_view(&input, now_us);
+        let view = tray_view(&input);
         if link.shown.as_ref() != Some(&view) {
             (link.sink)(link.shown.as_ref(), &view);
             link.shown = Some(view);
         }
-        self.tray_due = tray_deadline(&input, now_us);
     }
 
     pub fn set_visible(&mut self, visible: bool) {
@@ -750,7 +747,6 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         [
             self.engine.next_deadline_us(),
             self.publisher.deadline(),
-            self.tray_due,
             self.identify_at.map(|t| t + IDENTIFY_FLASH_US),
         ]
         .into_iter()
@@ -785,7 +781,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         }
         self.tell_strip();
         self.sync_capture();
-        self.update_tray(now_us);
+        self.update_tray();
         if self.publisher.due(now_us) {
             let status = self.status();
             (self.emit)(&status);
@@ -910,10 +906,9 @@ pub fn spawn(
             core.handle(Input::Library(Box::new(library)), clock.now_us());
             app.state::<AppState>().set_status(core.status());
             let tray_app = app.clone();
-            core.set_tray(
-                Box::new(move |prev, view| crate::tray::apply(&tray_app, prev, view)),
-                clock.now_us(),
-            );
+            core.set_tray(Box::new(move |prev, view| {
+                crate::tray::apply(&tray_app, prev, view);
+            }));
             run(&rx, &clock, &mut core, &visible);
         });
     if let Err(e) = spawned {
@@ -1720,7 +1715,7 @@ mod tests {
         let (mut c, _rx, _) = core(true);
         let paints = Rc::new(RefCell::new(0));
         let p = Rc::clone(&paints);
-        c.set_tray(Box::new(move |_, _| *p.borrow_mut() += 1), 0);
+        c.set_tray(Box::new(move |_, _| *p.borrow_mut() += 1));
         assert_eq!(*paints.borrow(), 1, "first paint");
         assert_eq!(c.deadline(), None);
         c.handle(Input::PopoverShown, 10);
@@ -1735,7 +1730,6 @@ mod tests {
             30,
         );
         assert_eq!(*paints.borrow(), 2, "dot went green");
-        assert_eq!(c.tray_due, None, "stopped: no tray deadline");
     }
 
     /// Feeds half-second beats of an 80 Hz tone, one amplitude each; the last gets `last`.
