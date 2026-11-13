@@ -204,8 +204,10 @@ fn unique_ids<'a>(field: &str, ids: impl Iterator<Item = &'a u32>) -> Result<(),
 
 impl Library {
     /// Removes references to another moment's sequence (a track left empty falls back to
-    /// `Generated`): old files may hold them and `validate` rejects them.
-    pub fn drop_foreign_refs(&mut self) {
+    /// `Generated`): old files may hold them and `validate` rejects them. Returns whether
+    /// anything changed.
+    pub fn drop_foreign_refs(&mut self) -> bool {
+        let mut changed = false;
         let seqs = &self.sequences;
         for set in &mut self.sets {
             for (m, moment) in [
@@ -218,11 +220,13 @@ impl Library {
                     SeqRef::Id(id) => !seqs.iter().any(|(s, q)| s == id && q.moment != moment),
                     _ => true,
                 });
+                changed |= m.sequences.len() != before;
                 if m.sequences.is_empty() && before > 0 {
                     m.sequences.push(SeqRef::Generated);
                 }
             }
         }
+        changed
     }
 
     /// First-run library (spec §6.3): the 8 built-in palettes, the 10 built-in sequences for a row of

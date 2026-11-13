@@ -509,7 +509,7 @@ fn dropping_foreign_refs_keeps_the_rest_and_leaves_a_track_never_empty() {
         .0;
     l.sets[0].calm.sequences = vec![SeqRef::Id(rhythm_id)];
     l.sets[0].rhythm.sequences = vec![SeqRef::Id(rhythm_id), SeqRef::Generated];
-    l.drop_foreign_refs();
+    assert!(l.drop_foreign_refs());
     assert_eq!(l.sets[0].calm.sequences, [SeqRef::Generated]);
     assert_eq!(
         l.sets[0].rhythm.sequences,

@@ -171,7 +171,7 @@ pub fn migrate_v1(v1: LibraryV1, phrase_bars: u8) -> Result<Library, LibraryErro
         active_set: v1.active_set,
         active_palette: None,
     };
-    lib.drop_foreign_refs();
+    let _ = lib.drop_foreign_refs(); // a v1 file is backed up whole by the caller
     lib.validate()?;
     Ok(lib)
 }

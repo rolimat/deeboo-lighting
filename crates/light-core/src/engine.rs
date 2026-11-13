@@ -590,9 +590,10 @@ impl Engine {
         let entered = self.rot_moment != Some(moment);
         let mut dropped =
             entered && self.rot_moment == Some(Moment::BuildUp) && moment == Moment::Rhythm;
-        if dropped && self.drop_counted {
-            (dropped, self.drop_counted) = (false, false);
-        } else if dropped {
+        if dropped {
+            // A counted prediction suppresses the next drop (also a second, contradicted
+            // prediction, which keeps the flag); only a real drop or a confirmation clears it.
+            dropped = !self.drop_counted;
             self.drop_counted = self.control.predicted();
         } else if moment != Moment::BuildUp
             && self.control.applied() != Moment::BuildUp

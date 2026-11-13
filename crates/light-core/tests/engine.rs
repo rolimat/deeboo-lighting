@@ -1265,3 +1265,18 @@ fn saving_the_library_while_stopped_does_not_paint_over_a_preview() {
         "rest scene painted over the preview: {after:?}"
     );
 }
+
+#[test]
+fn two_contradicted_predictions_and_the_real_drop_advance_the_palette_once() {
+    use light_core::library::PaletteChange::AtDrop;
+    let mut s = sim125();
+    s.e.set_library(s.now, &two_pal_lib(AtDrop));
+    s.start();
+    // Predictions at the phrase starts (beats 15 and 31) are both contradicted; the drop is real at 44.
+    s.beats_of(56, &mut |beat| match beat {
+        4..=43 => Some(BuildUp),
+        _ => Some(Rhythm),
+    });
+    assert_eq!(s.e.status().moment, Rhythm);
+    assert_eq!(s.e.status().palette, Some(2));
+}

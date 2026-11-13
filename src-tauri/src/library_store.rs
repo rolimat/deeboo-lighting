@@ -85,7 +85,15 @@ fn parse(path: &Path, text: &str, phrase_bars: u8) -> Result<Library, String> {
     serde_json::from_str::<Library>(text)
         .map_err(|e| describe(&e))
         .and_then(|mut l| {
-            l.drop_foreign_refs(); // older files may reference another moment's sequence
+            // Older files may reference another moment's sequence: keep the original beside it.
+            if l.drop_foreign_refs() {
+                let copy = sibling(path, ".refs");
+                if copy.exists() || std::fs::copy(path, &copy).is_ok() {
+                    log::warn!("library had references to another moment's sequence: dropped");
+                } else {
+                    log::warn!("library references dropped, but the original could not be copied");
+                }
+            }
             l.validate().map(|()| l).map_err(|e| e.to_string())
         })
 }
@@ -292,7 +300,7 @@ mod tests {
 
     #[test]
     fn a_reference_to_another_moments_sequence_is_dropped_on_load() {
-        let (_d, p) = tmp();
+        let (dir, p) = tmp();
         let text = with(|v| {
             let calm = v["sequences"]
                 .as_array()
@@ -303,8 +311,13 @@ mod tests {
                 .clone();
             v["sets"][0]["rhythm"]["sequences"] = json!([{ "id": calm }]);
         });
-        std::fs::write(&p, text).unwrap();
+        std::fs::write(&p, &text).unwrap();
         let lib = load(&p, 10, 8);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("library.json.refs")).unwrap(),
+            text,
+            "the original is kept byte for byte"
+        );
         assert_eq!(
             lib.sets[0].rhythm.sequences,
             [light_core::library::SeqRef::Generated]
