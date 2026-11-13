@@ -626,6 +626,7 @@ impl MomentDetector {
         let soft = p.rules.soft_break
             && self.soft_bar(closed, [kd, sd, hd])
             && self.moment == Moment::Rhythm
+            && self.in_state >= p.min_state_beats
             && next == Moment::Rhythm;
         if soft {
             next = Moment::Calm;
@@ -1518,6 +1519,83 @@ mod tests {
             Some(Position::at(i as u64, false, PhraseBars::Eight))
         });
         moments(&o)
+    }
+
+    /// Groove, a kick-less Calm over beats 40..64, full beats 64 and 65 (a drop on phrase bar 1, Rhythm at 65),
+    /// then a soft texture on beats 66 and 67. `closed(i)` gives each beat's clock position.
+    fn soft_after_a_return(closed: impl Fn(usize) -> Option<Position>) -> Vec<Moment> {
+        let lens = beats(128.0, 72);
+        let sig = synth_gain(
+            &lens,
+            |k| match k {
+                40..64 => 0.0,
+                66.. => 0.2,
+                _ => 1.0,
+            },
+            |k| k < 66,
+            |_| 0.0,
+        );
+        moments(&drive_with(&sig, &lens, all_rules(), closed))
+    }
+
+    fn at(i: usize) -> Position {
+        Position::at(i as u64, false, PhraseBars::Eight)
+    }
+
+    #[test]
+    fn soft_break_waits_for_min_state_after_a_return() {
+        let m = soft_after_a_return(|i| Some(at(i)));
+        assert_eq!(m[63], Moment::Calm, "{m:?}");
+        assert_eq!(m[65], Moment::Rhythm, "return at 65: {m:?}");
+        assert_eq!(m[67], Moment::Rhythm, "{m:?}");
+    }
+
+    #[test]
+    fn soft_bar_with_a_missing_position_is_ignored() {
+        let m = soft_run_with(|i| if i == 34 { None } else { Some(at(i)) });
+        assert!(m.iter().all(|&x| x == Moment::Rhythm), "{m:?}");
+    }
+
+    #[test]
+    fn soft_bar_with_a_clock_gap_is_ignored() {
+        // Beat 34 closes at clock beat 35 and beat 35 at 36: bar 1 loses a beat.
+        let m = soft_run_with(|i| Some(at(if i >= 34 { i + 1 } else { i })));
+        assert!(m.iter().all(|&x| x == Moment::Rhythm), "{m:?}");
+    }
+
+    #[test]
+    fn soft_mark_clears_after_leaving_calm() {
+        // Soft Calm at 35, two full beats back to Rhythm, then a normal Calm (kick gone) whose slow
+        // return must work again: the soft mark is gone.
+        let lens = beats(128.0, 120);
+        let sig = synth_gain(
+            &lens,
+            |k| match k {
+                32..40 => 0.4,
+                48..52 => 0.0,
+                52..96 => 0.5,
+                _ => 1.0,
+            },
+            |k| !(32..40).contains(&k),
+            |_| 0.0,
+        );
+        let m = moments(&drive_with(&sig, &lens, all_rules(), |i| Some(at(i))));
+        assert_eq!(m[35], Moment::Calm, "{m:?}");
+        assert_eq!(m[41], Moment::Rhythm, "{m:?}");
+        assert_eq!(m[49], Moment::Calm, "{m:?}");
+        assert!(m[50..96].contains(&Moment::Rhythm), "{m:?}");
+    }
+
+    fn soft_run_with(closed: impl Fn(usize) -> Option<Position>) -> Vec<Moment> {
+        let lens = beats(128.0, 80);
+        let soft = |k: usize| (32..36).contains(&k);
+        let sig = synth_gain(
+            &lens,
+            |k| if soft(k) { 0.4 } else { 1.0 },
+            |k| !soft(k),
+            |k| if soft(k) { 3.0 } else { 0.0 },
+        );
+        moments(&drive_with(&sig, &lens, all_rules(), closed))
     }
 
     #[test]
