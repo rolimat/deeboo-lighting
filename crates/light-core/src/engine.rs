@@ -213,6 +213,8 @@ pub struct Engine {
     preview: Option<Preview>,
     /// Latency calibration: every wired segment flashes white on each beat instead of the show.
     calibrating: bool,
+    /// Clock-less calibration: the strip is white now (it alternates every `PREVIEW_HALF_US`).
+    cal_white: bool,
     /// When the clock-less preview shows its next step.
     free_at: Option<u64>,
     clock: ClockTracker,
@@ -246,6 +248,7 @@ impl Engine {
         Self {
             preview: None,
             calibrating: false,
+            cal_white: false,
             free_at: None,
             generator: Generator::new(seed),
             seed,
@@ -285,7 +288,11 @@ impl Engine {
             self.stopped(now_us);
         }
         if self.free_deadline().is_some_and(|t| t <= now_us) {
-            self.preview_step(now_us);
+            if self.calibrating {
+                self.calibrate_step(now_us);
+            } else {
+                self.preview_step(now_us);
+            }
         }
         self.sched.due(now_us)
     }
@@ -355,20 +362,43 @@ impl Engine {
         self.sched.due(now_us)
     }
 
-    /// Latency calibration: while the clock plays, a short white flash on every beat (dark between)
-    /// replaces the show. It never persists: `false`, a clock Stop or no clock at all ends it.
+    /// Latency calibration: a short white flash on every beat (dark between) replaces the show; with
+    /// no clock it flashes at 120 BPM. It never persists: only `false` (or leaving Setup) ends it.
     pub fn calibrate(&mut self, now_us: u64, on: bool) -> Vec<PaintCommand> {
-        let on = on && self.clock.running();
         if on != self.calibrating {
             self.calibrating = on;
             self.playing = None;
             self.resend = true;
+            self.free_at = None;
+            if !self.clock.running() && self.cfg.lights_on {
+                self.rest_or_preview(now_us);
+            }
         }
         self.sched.due(now_us)
     }
 
+    /// One half beat of the clock-less calibration flash.
+    fn calibrate_step(&mut self, now_us: u64) {
+        self.free_at = None;
+        if !self.cfg.lights_on {
+            return;
+        }
+        self.cal_white = !self.cal_white;
+        let role = if self.cal_white {
+            Role::White
+        } else {
+            Role::Off
+        };
+        let desired = self.scene(std::iter::repeat_n(role, usize::from(self.cfg.segments)));
+        self.plan_now(now_us, &desired);
+        self.free_at = Some(now_us + PREVIEW_HALF_US);
+    }
+
     fn rest_or_preview(&mut self, now_us: u64) {
-        if self.preview.is_some() {
+        if self.calibrating {
+            self.cal_white = false;
+            self.calibrate_step(now_us);
+        } else if self.preview.is_some() {
             self.preview_step(now_us);
         } else {
             self.plan_rest(now_us);
@@ -626,7 +656,6 @@ impl Engine {
     }
 
     fn stopped(&mut self, now: u64) {
-        self.calibrating = false;
         self.playing = None;
         self.rot_moment = None;
         self.pos = None;

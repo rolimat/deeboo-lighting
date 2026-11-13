@@ -89,22 +89,28 @@ export function SetupTab() {
       (l) => alive && setAudio(l),
       () => {},
     );
+    // No blur: looking at the strip or the DJ app must not end it. Rust ends it when the editor closes.
     const off = () => calibrate(false);
-    window.addEventListener("blur", off);
     window.addEventListener("beforeunload", off);
     return () => {
       alive = false;
       offs.forEach((u) => u());
-      window.removeEventListener("blur", off);
       window.removeEventListener("beforeunload", off);
       off();
     };
   }, []);
 
   const playing = !!st && st.playing && st.bpm !== null;
+  const noCalibrate = !st
+    ? ""
+    : st.strip.kind !== "connected"
+      ? "Connect the strip first."
+      : !st.lightsOn
+        ? "Turn the lights on to calibrate."
+        : "";
   useEffect(() => {
-    if (!playing) calibrate(false); // Rust ends it on Stop too
-  }, [playing]);
+    if (noCalibrate) calibrate(false);
+  }, [noCalibrate]);
 
   const helpMidi = useHelp("Pick the app or device that sends the MIDI clock.");
   const helpAudio = useHelp("The input the detector listens to.");
@@ -240,19 +246,22 @@ export function SetupTab() {
             type="button"
             aria-label="Calibrate"
             class={`${btn} ${calibrating ? "border-accent text-accent" : ""}`}
-            disabled={!playing && !calibrating}
+            disabled={!st || (!!noCalibrate && !calibrating)}
             onClick={() => calibrate(!calibrating)}
           >
             {calibrating ? "Stop calibrating" : "Calibrate…"}
           </button>
-          {!playing && <span class="text-small text-dim">Start the MIDI clock to calibrate.</span>}
+          {noCalibrate && <span class="text-small text-dim">{noCalibrate}</span>}
         </Row>
         {calibrating && (
           <div class="flex items-center gap-4 rounded-card border border-border bg-bg p-2.5 text-small">
             <span aria-hidden="true" class="block h-3.5 w-14 rounded-full bg-text" />
             <div>
-              <b>Calibrate:</b> the strip flashes on every beat while the clock plays. Use − / +
-              until the flash lands on the kick you hear. 10 ms per click.
+              <b>Calibrate:</b>{" "}
+              {playing
+                ? "the strip flashes on every beat while the clock plays."
+                : "the strip flashes at 120 BPM until a MIDI clock plays."}{" "}
+              Use − / + until the flash lands on the kick you hear. 10 ms per click.
             </div>
           </div>
         )}

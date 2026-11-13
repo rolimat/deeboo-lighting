@@ -1079,19 +1079,49 @@ fn calibrate_flashes_on_beats_and_restores_show() {
 }
 
 #[test]
-fn calibrate_needs_a_clock_and_ends_on_stop() {
+fn calibrate_without_a_clock_flashes_at_120_bpm() {
     let mut s = sim125();
     let out = s.e.calibrate(s.now, true);
-    assert!(out.is_empty(), "no clock, no flash");
-    s.start();
-    s.beats_of(1, &mut none);
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 2_100_000);
+    let flashes: Vec<u64> = s
+        .sends
+        .iter()
+        .filter(|(_, c)| is_white(c))
+        .map(|(t, _)| *t)
+        .collect();
+    assert_eq!(flashes.len(), 5, "{flashes:?}");
+    for w in flashes.windows(2) {
+        assert_eq!(w[1] - w[0], 500_000, "one flash per beat at 120 BPM");
+    }
+    assert!(
+        s.sends
+            .iter()
+            .any(|(_, c)| matches!(c, PaintCommand::Eraser { .. }))
+    );
+    let out = s.e.calibrate(s.now, false);
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.deadlines_until(s.now + 2_000_000);
+    assert!(s.sends[mark..].iter().all(|(_, c)| !is_white(c)), "ended");
+}
+
+#[test]
+fn calibrate_keeps_flashing_across_a_clock_start_and_stop() {
+    let mut s = sim125();
     let out = s.e.calibrate(s.now, true);
     s.record(s.now, out);
-    s.byte(0xFC, &mut none); // Stop
     s.start();
     let mark = s.sends.len();
-    s.beats_of(6, &mut none);
-    assert!(s.sends[mark..].iter().all(|(_, c)| !is_white(c)), "ended");
+    s.beats_of(4, &mut none);
+    assert!(s.sends[mark..].iter().filter(|(_, c)| is_white(c)).count() >= 3);
+    s.byte(0xFC, &mut none); // Stop
+    let mark = s.sends.len();
+    s.deadlines_until(s.now + 2_000_000);
+    assert!(
+        s.sends[mark..].iter().any(|(_, c)| is_white(c)),
+        "free-running again after Stop"
+    );
 }
 
 #[test]

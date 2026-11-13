@@ -158,28 +158,48 @@ it("latency_stepper_10ms_within_range", async () => {
   expect(input.value).toBe("500");
 });
 
+const connected = { kind: "connected", name: "Strip", segments: 4, reported: 4 } as const;
+
 it("calibrate_toggles_and_stops_on_leave", async () => {
-  await mount();
-  expect(root.textContent).not.toContain("the strip flashes on every beat");
+  await mount(status({ strip: connected }));
+  expect(root.textContent).not.toContain("the strip flashes");
   await click(q("button[aria-label='Calibrate']"));
   expect(api.calibrateLatency).toHaveBeenLastCalledWith(true);
   expect(root.textContent).toContain(
     "the strip flashes on every beat while the clock plays. Use − / + until the flash lands on the kick you hear. 10 ms per click.",
   );
-  await act(async () => void pushStatus(status({ playing: false, bpm: null })));
-  expect(api.calibrateLatency).toHaveBeenLastCalledWith(false);
-  expect(root.textContent).not.toContain("the strip flashes on every beat");
-  await act(async () => void pushStatus(status()));
-  await click(q("button[aria-label='Calibrate']"));
   vi.mocked(api.calibrateLatency).mockClear();
+  await act(async () => void window.dispatchEvent(new Event("blur")));
+  expect(api.calibrateLatency).not.toHaveBeenCalled(); // looking at the strip or the DJ app keeps it on
   await act(async () => render(null, root));
   expect(api.calibrateLatency).toHaveBeenCalledWith(false);
 });
 
-it("calibrate_needs_the_clock", async () => {
-  await mount(status({ playing: false, bpm: null }));
+it("calibrate_without_a_clock_says_it_flashes_at_120", async () => {
+  await mount(status({ strip: connected, playing: false, bpm: null }));
+  const btn = q<HTMLButtonElement>("button[aria-label='Calibrate']");
+  expect(btn.disabled).toBe(false);
+  await click(btn);
+  expect(api.calibrateLatency).toHaveBeenLastCalledWith(true);
+  expect(root.textContent).toContain("flashes at 120 BPM until a MIDI clock plays");
+  await act(async () => void pushStatus(status({ strip: connected })));
+  expect(api.calibrateLatency).toHaveBeenLastCalledWith(true); // a clock arriving keeps it on
+});
+
+it("calibrate_explains_what_is_missing", async () => {
+  await mount(status({ strip: { kind: "notFound" } }));
   expect(q<HTMLButtonElement>("button[aria-label='Calibrate']").disabled).toBe(true);
-  expect(root.textContent).toContain("Start the MIDI clock to calibrate.");
+  expect(root.textContent).toContain("Connect the strip first.");
+  await act(async () => void pushStatus(status({ strip: connected, lightsOn: false })));
+  expect(q<HTMLButtonElement>("button[aria-label='Calibrate']").disabled).toBe(true);
+  expect(root.textContent).toContain("Turn the lights on to calibrate.");
+});
+
+it("calibrate_stops_when_the_lights_go_off", async () => {
+  await mount(status({ strip: connected }));
+  await click(q("button[aria-label='Calibrate']"));
+  await act(async () => void pushStatus(status({ strip: connected, lightsOn: false })));
+  expect(api.calibrateLatency).toHaveBeenLastCalledWith(false);
 });
 
 it("phrase_bars_4_8_16", async () => {
