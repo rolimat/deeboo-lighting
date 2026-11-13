@@ -41,7 +41,7 @@ export interface Status {
   predicted: boolean;
   lightsOn: boolean;
   midi: { source: string | null; ok: boolean };
-  audio: { ok: boolean; device?: string; levelDb?: number };
+  audio: { ok: boolean; failed?: boolean; device?: string; levelDb?: number };
   selection: Selection;
   /** The entry of the live set's list playing now, with the loop position in half beats. */
   clip: { moment: MomentName; index: number; elapsed: number; total: number } | null;

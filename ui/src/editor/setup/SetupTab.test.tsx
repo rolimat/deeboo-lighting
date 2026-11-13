@@ -125,6 +125,12 @@ it("midi_list_updates_on_sources_event", async () => {
   expect(saved()?.midiSource).toBe("Late Source");
 });
 
+it("a_failed_capture_is_named_in_setup", async () => {
+  await mount();
+  await act(async () => void pushStatus(status({ audio: { ok: false, failed: true } })));
+  expect(root.textContent).toContain("Capture failed");
+});
+
 it("audio_level_and_permission_status", async () => {
   await mount();
   expect(q("[role=meter]").getAttribute("aria-valuenow")).toBe("-20");

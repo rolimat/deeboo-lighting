@@ -188,16 +188,32 @@ it("status_dots_open_setup", () => {
   );
   for (const k of ["Clock", "Audio", "Strip"])
     expect(root.querySelector(`[aria-label^="${k}"] .dot`)?.getAttribute("data-state")).toBe("ok");
-  view.update(st({ audio: { ok: false, device: "Loopback" }, strip: { kind: "error" } }));
+  view.update(st({ audio: { ok: false, failed: true }, strip: { kind: "error" } }));
   const audio = root.querySelector<HTMLElement>('[aria-label^="Audio"]') as HTMLElement;
   expect(audio.querySelector(".dot")?.getAttribute("data-state")).toBe("bad");
   expect(audio.title).toMatch(/Setup/);
   const strip = root.querySelector<HTMLElement>('[aria-label^="Strip"]') as HTMLElement;
   expect(strip.querySelector(".dot")?.getAttribute("data-state")).toBe("bad");
   strip.click();
-  expect(api.openEditor).toHaveBeenLastCalledWith("setup");
+  expect(api.openEditor).toHaveBeenLastCalledWith("strip");
   view.update(st({ strip: { kind: "connecting" } }));
   expect(strip.querySelector(".dot")?.getAttribute("data-state")).toBe("off");
+});
+
+it("strip_help_points_to_the_strip_tab_not_setup", () => {
+  for (const kind of ["notConfigured", "keyInvalid", "notFound"] as const) {
+    view.update(st({ strip: { kind } }));
+    const title = root.querySelector<HTMLElement>('[aria-label^="Strip"]')?.title ?? "";
+    expect(title, kind).toMatch(/Strip tab/);
+    expect(title, kind).not.toMatch(/Setup/);
+  }
+});
+
+it("clock_dot_is_red_when_the_chosen_midi_source_is_missing", () => {
+  view.update(st({ playing: true, bpm: 120, midi: { source: "IAC Bus", ok: false } }));
+  const dot = root.querySelector('[aria-label^="Clock"] .dot');
+  expect(dot?.getAttribute("data-state")).toBe("bad");
+  expect(root.querySelector<HTMLElement>('[aria-label^="Clock"]')?.title).toMatch(/Setup/);
 });
 
 it("footer_opens_editor_and_quits", () => {

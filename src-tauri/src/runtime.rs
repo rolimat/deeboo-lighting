@@ -76,12 +76,17 @@ pub trait AudioPort {
     fn drain(&mut self, buf: &mut Vec<f32>);
     /// Samples lost because the engine fell behind.
     fn overflow(&self) -> u64;
+    /// The device reported a stream error (unplugged, taken over by another app).
+    fn errored(&self) -> bool;
 }
 
 /// The microphone is open only while there is something to follow.
 fn capture_wanted(playing: bool, auto: bool, lights_on: bool) -> bool {
     playing && auto && lights_on
 }
+
+/// Beats without a single sample before an open capture counts as dead.
+const STALL_BEATS: u8 = 8;
 
 #[derive(Clone, PartialEq)]
 enum Capture {
@@ -277,6 +282,8 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     parked: std::collections::HashMap<Option<String>, Detect>,
     buf: Vec<f32>,
     level_db: Option<f32>,
+    /// Beats in a row the open capture delivered no samples.
+    silent_beats: u8,
     settings: Settings,
     strip: StripStatus,
     strip_tx: Option<UnboundedSender<StripMsg>>,
@@ -353,6 +360,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             parked: std::collections::HashMap::new(),
             buf: Vec::new(),
             level_db: None,
+            silent_beats: 0,
             settings,
             strip,
             strip_tx,
@@ -452,8 +460,13 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                     ok: true,
                     device: Some(name.clone()),
                     level_db: self.level_db,
+                    ..AudioStatus::default()
                 },
-                _ => AudioStatus::default(),
+                Capture::Failed => AudioStatus {
+                    failed: true,
+                    ..AudioStatus::default()
+                },
+                Capture::Closed => AudioStatus::default(),
             },
             selection: self.library.as_ref().map_or_else(
                 || Selection::of(&Library::builtin(self.segments)),
@@ -490,6 +503,26 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         }
     }
 
+    /// A capture that reports an error, or delivers nothing for `STALL_BEATS` beats while the clock
+    /// plays, is dead: closed and shown as failed until the next play reopens it.
+    fn check_capture(&mut self, silent: bool) {
+        if !matches!(self.capture, Capture::Open(_)) {
+            return;
+        }
+        self.silent_beats = if silent {
+            self.silent_beats.saturating_add(1)
+        } else {
+            0
+        };
+        if self.audio.errored() || self.silent_beats >= STALL_BEATS {
+            log::warn!("audio capture stopped delivering");
+            self.audio.close();
+            self.capture = Capture::Failed;
+            self.level_db = None;
+            self.publisher.touch();
+        }
+    }
+
     fn sync_capture(&mut self) {
         let s = &self.last;
         if capture_wanted(s.playing, s.auto, s.lights_on) {
@@ -506,6 +539,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                         d.fresh = true;
                     }
                     self.buf = Vec::with_capacity((info.rate * RING_SECONDS) as usize);
+                    self.silent_beats = 0;
                     self.capture = Capture::Open(info.name);
                 }
                 Err(e) => {
@@ -615,17 +649,23 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                     self.last_tick_us = e.at_us;
                 }
                 let mut features = None;
+                let mut beat_silent = None;
                 let cmds = self.engine.on_midi(e.at_us, e.status, |closed| {
-                    detect_beat(
+                    let m = detect_beat(
                         &mut self.audio,
                         &mut self.detect,
                         &mut self.buf,
                         &mut self.level_db,
                         &mut features,
                         closed,
-                    )
+                    );
+                    beat_silent = Some(m.is_none());
+                    m
                 });
                 self.flush(cmds);
+                if let Some(silent) = beat_silent {
+                    self.check_capture(silent);
+                }
                 if let Some((f, moment)) = features {
                     self.meter(&f, moment, now_us);
                 }
@@ -1013,6 +1053,7 @@ mod tests {
         opens: Rc<RefCell<u32>>,
         closes: Rc<RefCell<u32>>,
         samples: Vec<f32>,
+        errored: bool,
     }
 
     impl AudioPort for FakeAudio {
@@ -1034,6 +1075,9 @@ mod tests {
         }
         fn overflow(&self) -> u64 {
             0
+        }
+        fn errored(&self) -> bool {
+            self.errored
         }
     }
 
@@ -1660,6 +1704,57 @@ mod tests {
         c.handle(Input::Ui(UiCommand::Lights(false)), 2_000_000);
         assert_eq!(*closes.borrow(), 1);
         assert!(!c.status().audio.ok);
+    }
+
+    fn beats(c: &mut TestCore, from: u64, n: u64) {
+        for i in from..from + 24 * n {
+            let at = i * 20_000;
+            c.handle(
+                Input::Midi(MidiEvent {
+                    at_us: at,
+                    status: 0xF8,
+                }),
+                at,
+            );
+        }
+    }
+
+    #[test]
+    fn a_stream_error_reports_failed_audio_and_the_next_play_reopens() {
+        let (mut c, _rx, _) = core(false);
+        let (opens, closes) = (Rc::clone(&c.audio.opens), Rc::clone(&c.audio.closes));
+        start(&mut c);
+        assert!(c.status().audio.ok);
+        c.audio.errored = true;
+        beats(&mut c, 49, 1);
+        let a = c.status().audio;
+        assert!(!a.ok && a.failed, "{a:?}");
+        assert_eq!(*closes.borrow(), 1);
+        assert_eq!(*opens.borrow(), 1, "no retry storm while playing");
+        c.audio.errored = false;
+        c.handle(
+            Input::Midi(MidiEvent {
+                at_us: 2_000_000,
+                status: 0xFC,
+            }),
+            2_000_000,
+        );
+        start(&mut c);
+        assert_eq!(*opens.borrow(), 2);
+        assert!(c.status().audio.ok && !c.status().audio.failed);
+    }
+
+    #[test]
+    fn a_stream_that_delivers_nothing_for_many_beats_reports_failed_audio() {
+        let (mut c, _rx, _) = core(false);
+        start(&mut c);
+        beats(&mut c, 49, 4);
+        assert!(
+            c.status().audio.ok,
+            "a few quiet beats are not a dead stream"
+        );
+        beats(&mut c, 49 + 96, 6);
+        assert!(c.status().audio.failed);
     }
 
     #[test]

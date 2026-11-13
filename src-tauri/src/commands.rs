@@ -58,6 +58,9 @@ pub struct MidiStatus {
 #[serde(rename_all = "camelCase")]
 pub struct AudioStatus {
     pub ok: bool,
+    /// The capture could not open or died; retried on the next play.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub failed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
     /// Peak of the last beat in dBFS.

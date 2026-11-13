@@ -190,8 +190,8 @@ export function SetupTab() {
             )}
           </select>
           {level !== undefined && <Level db={level} />}
-          <span class={st?.audio.ok ? "text-accent" : "text-dim"}>
-            {st?.audio.ok ? "Level OK" : "Not listening"}
+          <span class={st?.audio.ok ? "text-accent" : st?.audio.failed ? "text-red" : "text-dim"}>
+            {st?.audio.ok ? "Level OK" : st?.audio.failed ? "Capture failed" : "Not listening"}
           </span>
         </Row>
         {/* shortcut: no reliable permission signal (capture opens only while the clock plays), so

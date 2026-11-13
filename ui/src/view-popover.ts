@@ -85,9 +85,10 @@ function stripName(s: StripStatus): string {
   }
 }
 
-type Dot = { state: "ok" | "off" | "bad"; help: string };
+type Dot = { state: "ok" | "off" | "bad"; help: string; section?: "strip" };
 
 function clockDot(s: Status): Dot {
+  if (!s.midi.ok) return { state: "bad", help: "MIDI source not found — pick another in Setup." };
   return s.playing || s.bpm !== null
     ? { state: "ok", help: "Receiving MIDI clock." }
     : { state: "off", help: "No MIDI clock — start playback in your clock source." };
@@ -95,7 +96,7 @@ function clockDot(s: Status): Dot {
 
 function audioDot(s: Status): Dot {
   if (s.audio.ok) return { state: "ok", help: "Listening to the music." };
-  return s.audio.device
+  return s.audio.failed
     ? { state: "bad", help: "Audio capture failed — check the input in Setup." }
     : { state: "off", help: "Audio is off — it starts when the music plays." };
 }
@@ -103,20 +104,33 @@ function audioDot(s: Status): Dot {
 function stripDot(s: Status): Dot {
   switch (s.strip.kind) {
     case "connected":
-      return { state: "ok", help: "Strip connected." };
+      return { state: "ok", help: "Strip connected.", section: "strip" };
     case "notConfigured":
-      return { state: "off", help: "No strip yet — connect one in Setup." };
+      return {
+        state: "off",
+        help: "No strip yet — connect one in the Strip tab.",
+        section: "strip",
+      };
     case "connecting":
-      return { state: "off", help: "Connecting to the strip…" };
+      return { state: "off", help: "Connecting to the strip…", section: "strip" };
     case "keyInvalid":
-      return { state: "bad", help: "The strip's key is no longer valid — reconnect it in Setup." };
+      return {
+        state: "bad",
+        help: "The strip's key is no longer valid — reconnect it in the Strip tab.",
+        section: "strip",
+      };
     case "notFound":
       return {
         state: "bad",
-        help: "Strip not found — check its power and Wi-Fi, then open Setup.",
+        help: "Strip not found — check its power and Wi-Fi, then open the Strip tab.",
+        section: "strip",
       };
     case "error":
-      return { state: "bad", help: "Strip connection lost — check its power and Wi-Fi." };
+      return {
+        state: "bad",
+        help: "Strip connection lost — check its power and Wi-Fi.",
+        section: "strip",
+      };
   }
 }
 
@@ -214,8 +228,9 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
     const b = el("button", "dot-btn");
     const dot = el("span", "dot");
     b.append(dot, el("span", "", name));
-    b.onclick = () => void run(api.openEditor("setup"));
-    return { b, dot, name };
+    const target = { section: "setup" as "setup" | "strip" };
+    b.onclick = () => void run(api.openEditor(target.section));
+    return { b, dot, name, target };
   };
   const dots = [dotBtn("Clock"), dotBtn("Audio"), dotBtn("Strip")];
   const openEditor = el("button", "open-editor", "Open editor");
@@ -258,7 +273,8 @@ export function mountPopover(root: HTMLElement): { update: (status: Status) => v
       showSel(s.selection);
 
       [clockDot(s), audioDot(s), stripDot(s)].forEach((d, i) => {
-        const { b, dot, name } = dots[i] as (typeof dots)[number];
+        const { b, dot, name, target } = dots[i] as (typeof dots)[number];
+        target.section = d.section ?? "setup";
         setAttr(dot, "data-state", d.state);
         setAttr(b, "title", d.help);
         setAttr(b, "aria-label", `${name}: ${d.help}`);
