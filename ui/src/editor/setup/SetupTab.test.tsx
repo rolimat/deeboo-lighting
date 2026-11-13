@@ -32,6 +32,7 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   riserDb: 6,
   helpTooltips: true,
   showInDock: "editor",
+  detectorByInput: {},
   ...over,
 });
 const hsv = { h: 0, s: 0, v: 0 };

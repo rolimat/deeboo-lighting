@@ -47,6 +47,7 @@ export function installMock(api: typeof realApi): void {
     riserDb: 7,
     helpTooltips: true,
     showInDock: "editor",
+    detectorByInput: {},
   };
   let set = 0;
   let pal = -1; // -1: Auto

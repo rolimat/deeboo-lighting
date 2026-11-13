@@ -417,7 +417,9 @@ impl AppState {
 
     fn save_settings(&self, mut new: Settings) -> Result<Settings, String> {
         new.validate()?;
-        new.switch_input(&lock(&self.settings));
+        // The lock spans swap and write so a concurrent save cannot interleave.
+        let mut cur = lock(&self.settings);
+        new.switch_input(&cur);
         let path = lock(&self.settings_path)
             .clone()
             .ok_or("settings unavailable")?;
@@ -425,7 +427,7 @@ impl AppState {
             log::warn!("settings not saved: {e}");
             "settings not saved".to_string()
         })?;
-        *lock(&self.settings) = new.clone();
+        *cur = new.clone();
         Ok(new)
     }
 

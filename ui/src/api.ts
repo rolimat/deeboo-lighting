@@ -67,6 +67,11 @@ export interface Settings {
   helpTooltips: boolean;
   /** Dock icon: only while the editor is open, or always. */
   showInDock: "editor" | "always";
+  /** Owned by Rust: the other inputs' detector values; the UI only passes it back. */
+  detectorByInput: Record<
+    string,
+    { sensitivity: number; calmKickDb: number; calmHighDb: number; riserDb: number }
+  >;
 }
 
 export type MomentName = "rhythm" | "calm" | "buildUp";

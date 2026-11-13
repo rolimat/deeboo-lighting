@@ -24,6 +24,7 @@ const settings: Settings = {
   lightsOn: true,
   helpTooltips: true,
   showInDock: "editor",
+  detectorByInput: {},
   calmKickDb: 16,
   calmHighDb: 12,
   riserDb: 7,

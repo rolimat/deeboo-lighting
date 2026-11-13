@@ -30,6 +30,7 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   calmHighDb: 10,
   helpTooltips: true,
   showInDock: "editor",
+  detectorByInput: {},
   riserDb: 6,
   ...over,
 });

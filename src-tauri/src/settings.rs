@@ -208,8 +208,17 @@ impl Settings {
         let cfg = map
             .remove(&Self::input_key(self.audio_input.as_ref()))
             .unwrap_or_default();
+        // Never evict System default or the entry just stored.
+        let keep = Self::input_key(prev.audio_input.as_ref());
         while map.len() > MAX_INPUTS {
-            map.pop_first();
+            let Some(k) = map
+                .keys()
+                .find(|k| **k != keep && *k != SYSTEM_DEFAULT)
+                .cloned()
+            else {
+                break;
+            };
+            map.remove(&k);
         }
         (
             self.sensitivity,
@@ -238,6 +247,7 @@ pub fn load(path: &Path) -> Settings {
         Err(e) => {
             if e.kind() != io::ErrorKind::NotFound {
                 log::warn!("settings unreadable, using defaults: {e}");
+                keep_aside(path);
             }
             return Settings::default();
         }
@@ -356,6 +366,43 @@ mod tests {
         assert_eq!(load(&path), Settings::default());
         let kept = dir.path().join("settings.json.bad");
         assert_eq!(std::fs::read(&kept).unwrap(), b"{not json");
+    }
+
+    #[test]
+    fn non_utf8_file_is_kept_aside_before_defaults() {
+        let (d, p) = tmp();
+        std::fs::write(&p, [0xff, 0xfe, 0x00, 0x80]).unwrap();
+        assert_eq!(load(&p), Settings::default());
+        assert_eq!(
+            std::fs::read(d.path().join("settings.json.bad")).unwrap(),
+            [0xff, 0xfe, 0x00, 0x80]
+        );
+    }
+
+    #[test]
+    fn eviction_keeps_system_default_and_the_key_just_stored() {
+        // "" and "zz" sort around the evictable keys; both must survive a full map.
+        let mut cur = on(None);
+        for i in 0..MAX_INPUTS + 3 {
+            let next = Settings {
+                audio_input: Some(format!("in{i:02}")),
+                ..cur.clone()
+            };
+            cur = saved(&cur, next);
+        }
+        let last = Settings {
+            audio_input: Some("zz".into()),
+            ..cur.clone()
+        };
+        cur = saved(&cur, last);
+        let back = Settings {
+            audio_input: Some("in00".into()),
+            ..cur.clone()
+        };
+        cur = saved(&cur, back);
+        assert!(cur.detector_by_input.contains_key(SYSTEM_DEFAULT));
+        assert!(cur.detector_by_input.contains_key("zz"));
+        assert!(cur.detector_by_input.len() <= MAX_INPUTS);
     }
 
     #[test]
