@@ -274,6 +274,8 @@ pub struct MomentDetector {
     /// Clock beat and state of a quick entry on a phrase's first beat (`phrase_quick`): the very next
     /// clock beat confirms it or undoes it.
     quick: Option<(u64, Moment)>,
+    /// `in_state` of the Rhythm a quick entry interrupted: an undo gives it back.
+    quick_in_state: u32,
     /// Deficit sums (kick, sub, highs) of the beats of the phrase's bar 1, the count and the last clock beat.
     soft_sum: [f32; 3],
     soft_beats: u32,
@@ -321,6 +323,7 @@ impl MomentDetector {
             entry_high: 0.0,
             in_state: params.min_state_beats,
             quick: None,
+            quick_in_state: 0,
             soft_sum: [0.0; 3],
             soft_beats: 0,
             soft_last: 0,
@@ -497,6 +500,7 @@ impl MomentDetector {
                 return (next, false);
             };
             self.quick = Some((c.beat, to));
+            self.quick_in_state = self.in_state;
             return (to, false);
         }
         (next, false)
@@ -647,7 +651,8 @@ impl MomentDetector {
             }
             self.moment = next;
             self.soft = soft;
-            self.in_state = 0;
+            // An undone quick move never happened: the Rhythm it interrupted keeps its age.
+            self.in_state = if undo { self.quick_in_state + 1 } else { 0 };
             self.near_run = 0;
         }
         (
@@ -1548,6 +1553,26 @@ mod tests {
         assert_eq!(m[63], Moment::Calm, "{m:?}");
         assert_eq!(m[65], Moment::Rhythm, "return at 65: {m:?}");
         assert_eq!(m[67], Moment::Rhythm, "{m:?}");
+    }
+
+    #[test]
+    fn soft_break_after_a_quick_undo_on_beat_two() {
+        let lens = beats(128.0, 48);
+        let soft = |k: usize| (32..36).contains(&k);
+        let sig = synth_gain(
+            &lens,
+            |k| match k {
+                32 => 0.4,
+                33..36 => 0.3,
+                _ => 1.0,
+            },
+            |k| !soft(k),
+            |k| if k == 32 { 10.0 } else { 0.0 },
+        );
+        let m = moments(&drive_with(&sig, &lens, all_rules(), |i| Some(at(i))));
+        assert_eq!(m[32], Moment::BuildUp, "{m:?}");
+        assert_eq!(m[33], Moment::Rhythm, "{m:?}");
+        assert_eq!(m[35], Moment::Calm, "{m:?}");
     }
 
     #[test]
