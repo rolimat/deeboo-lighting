@@ -17,6 +17,7 @@ vi.mock("./api", () => ({
     onSection: vi.fn(async () => () => {}),
     onWizard: vi.fn(async () => () => {}),
     wizardCancel: vi.fn(),
+    wizardState: vi.fn(async () => ({ kind: "idle" })),
     saveLibrary: vi.fn(),
     setWiredSegments: vi.fn(),
     setLiveSet: vi.fn(),

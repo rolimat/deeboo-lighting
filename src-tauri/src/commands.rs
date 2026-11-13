@@ -15,6 +15,7 @@ use crate::library_store;
 use crate::settings::{self, Settings};
 use crate::strip_store;
 use crate::wizard::session::{Emit, RealLan, Wizard};
+use crate::wizard::state::WizardState;
 use light_core::library::Library;
 use light_core::model::{Sequence, resolve};
 use light_core::scene;
@@ -228,6 +229,8 @@ pub struct AppState {
     popover_shown: AtomicBool,
     editor_shown: AtomicBool,
     wizard: Wizard,
+    /// When the last editor identify went out (see `identify_gate`).
+    identify_at: Mutex<Option<std::time::Instant>>,
 }
 
 impl Default for AppState {
@@ -243,6 +246,7 @@ impl Default for AppState {
             popover_shown: AtomicBool::new(false),
             editor_shown: AtomicBool::new(false),
             wizard: Wizard::default(),
+            identify_at: Mutex::new(None),
         }
     }
 }
@@ -935,6 +939,13 @@ pub fn wizard_cancel(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
 }
 
 /// `segment` is 1-based and checked against the strip's segment count.
+/// The wizard's current state, so a remounted view picks up where the run is. Never a secret.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri passes the state by value
+pub fn wizard_state(state: tauri::State<'_, AppState>) -> WizardState {
+    state.wizard.state()
+}
+
 #[tauri::command]
 pub async fn strip_identify(state: tauri::State<'_, AppState>, segment: u8) -> Result<(), String> {
     state.wizard.identify(segment).await
@@ -950,11 +961,28 @@ fn identify_check(strip: &StripStatus, segment: u8) -> Result<(), String> {
     }
 }
 
+/// The strip loses back-to-back messages: an identify inside the engine's gate would be dropped
+/// silently, so the caller hears about it instead.
+fn identify_gate(
+    last: &Mutex<Option<std::time::Instant>>,
+    now: std::time::Instant,
+) -> Result<(), String> {
+    let mut g = lock(last);
+    if g.is_some_and(|t| {
+        now < t + std::time::Duration::from_micros(crate::runtime::IDENTIFY_GATE_US)
+    }) {
+        return Err("Wait a moment and try again.".into());
+    }
+    *g = Some(now);
+    Ok(())
+}
+
 /// Flashes one segment through the app's own strip connection (the shape editor, after pairing).
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn identify_segment(state: tauri::State<'_, AppState>, segment: u8) -> Result<(), String> {
     identify_check(&lock(&state.status).strip, segment)?;
+    identify_gate(&state.identify_at, std::time::Instant::now())?;
     state.send(Input::Identify(segment))
 }
 
@@ -1259,7 +1287,7 @@ mod tests {
         granted.sort();
         granted.dedup();
         commands.sort();
-        assert_eq!(commands.len(), 30);
+        assert_eq!(commands.len(), 31);
         assert_eq!(granted, commands);
         // The popover calls none of these; only the editor may.
         let popover = include_str!("../capabilities/popover.json");
@@ -1374,6 +1402,22 @@ mod tests {
         assert_eq!(
             identify_check(&StripStatus::Connecting, 1),
             Err("Strip not connected.".into())
+        );
+    }
+
+    #[test]
+    fn an_identify_inside_the_gate_is_an_error_not_ok() {
+        let last = Mutex::new(None);
+        let t0 = std::time::Instant::now();
+        assert_eq!(identify_gate(&last, t0), Ok(()));
+        assert_eq!(
+            identify_gate(&last, t0 + std::time::Duration::from_millis(100)),
+            Err("Wait a moment and try again.".into())
+        );
+        // The refused attempt does not extend the wait.
+        assert_eq!(
+            identify_gate(&last, t0 + std::time::Duration::from_millis(300)),
+            Ok(())
         );
     }
 

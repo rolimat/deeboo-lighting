@@ -230,6 +230,7 @@ mod tests {
                 "allow-wizard-choose",
                 "allow-wizard-retry",
                 "allow-wizard-cancel",
+                "allow-wizard-state",
                 "allow-strip-identify",
                 "allow-identify-segment",
                 "allow-wizard-save",

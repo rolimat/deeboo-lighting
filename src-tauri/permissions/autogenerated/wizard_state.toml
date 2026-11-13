@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wizard-state"
+description = "Enables the wizard_state command without any pre-configured scope."
+commands.allow = ["wizard_state"]
+
+[[permission]]
+identifier = "deny-wizard-state"
+description = "Denies the wizard_state command without any pre-configured scope."
+commands.deny = ["wizard_state"]

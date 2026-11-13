@@ -24,12 +24,15 @@ use crate::wizard::state::{DeviceDto, Step, WizardState};
 /// One discovery attempt; after the first miss the UI shows the Bluetooth / 2.4 GHz help.
 pub const FIND_WINDOW: Duration = Duration::from_secs(30);
 pub const LISTEN_WINDOW: Duration = Duration::from_secs(90);
+/// How long the identify step may sit untouched before it releases the strip.
+pub const IDENTIFY_WINDOW: Duration = Duration::from_secs(120);
 /// Pause after a failed attempt so a broken socket cannot spin the loop.
 const RETRY_PAUSE: Duration = Duration::from_secs(1);
 
 const NO_PAINT: &str = "No paint data received. The strip may not be compatible.";
 const UNUSABLE: &str =
     "Smart Life sent unusable data for this strip. Check it in Smart Life and try again.";
+const IDENTIFY_TIMED_OUT: &str = "Took too long to finish. Try again.";
 const SAVE_FAILED: &str = "Could not save the strip. Try again.";
 
 pub type Emit = Arc<dyn Fn(WizardState) + Send + Sync>;
@@ -109,11 +112,18 @@ struct Inner {
     waiters: Vec<std::sync::mpsc::Sender<()>>,
     /// Keeps the app's own strip connection paused while the LAN steps run.
     hold: Option<Box<dyn Send>>,
+    /// Dropped with the run's state (cancel, save): ends the run that waits in the identify step.
+    identify_done: Option<oneshot::Sender<()>>,
 }
 
 /// The one wizard of the app. Cheap to clone; all clones share the run.
 #[derive(Clone, Default)]
-pub struct Wizard(Arc<Mutex<Inner>>, Arc<tokio::sync::Mutex<Option<Instant>>>);
+pub struct Wizard(
+    Arc<Mutex<Inner>>,
+    Arc<tokio::sync::Mutex<Option<Instant>>>,
+    /// The last state announced, for a view that mounts later (`state`).
+    Arc<Mutex<WizardState>>,
+);
 
 fn lock(m: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -133,10 +143,29 @@ fn store_name(name: &str) -> String {
 }
 
 impl Wizard {
+    /// The step the run is at, for a view that was unmounted meanwhile. Never a secret.
+    #[must_use]
+    pub fn state(&self) -> WizardState {
+        self.2
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// `emit` that also remembers the state it announces.
+    fn recording(&self, emit: &Emit) -> Emit {
+        let (emit, last) = (emit.clone(), self.2.clone());
+        Arc::new(move |s| {
+            *last.lock().unwrap_or_else(PoisonError::into_inner) = s.clone();
+            emit(s);
+        })
+    }
+
     /// Starts a run: cloud login, then the LAN steps. Progress goes out through `emit`.
     ///
     /// # Errors
     /// Fails if a run is already in progress.
+    #[allow(clippy::needless_pass_by_value)] // callers hand the emitter over, as `drive` is spawned
     pub fn start<L: Lan>(
         &self,
         lan: Arc<L>,
@@ -144,6 +173,7 @@ impl Wizard {
         code: UserCode,
         emit: Emit,
     ) -> Result<(), String> {
+        let emit = self.recording(&emit);
         let (tx, rx) = channel(8);
         {
             let mut g = lock(&self.0);
@@ -157,7 +187,7 @@ impl Wizard {
             };
         }
         let me = self.clone();
-        tokio::spawn(async move { me.drive(lan, transport, code, emit, rx).await });
+        tokio::spawn(async move { me.drive(lan, transport, code, &emit, rx).await });
         Ok(())
     }
 
@@ -166,7 +196,7 @@ impl Wizard {
         lan: Arc<L>,
         transport: Transp,
         code: UserCode,
-        emit: Emit,
+        emit: &Emit,
         rx: Receiver<Input>,
     ) {
         let e = emit.clone();
@@ -199,35 +229,51 @@ impl Wizard {
                 self.finish();
                 return;
             }
-            match done {
+            let failure = match done {
                 Ok(Ok(ready)) => {
-                    let mut g = lock(&self.0);
-                    g.phase = Phase::Identify;
-                    g.inputs = None;
-                    g.lan = None;
-                    g.ready = Some(ready);
-                    return;
-                }
-                Ok(Err((step, message))) => {
-                    let (tx, wait) = oneshot::channel();
+                    let (done, ended) = oneshot::channel::<()>();
                     {
                         let mut g = lock(&self.0);
-                        g.phase = Phase::Failed;
+                        g.phase = Phase::Identify;
+                        g.inputs = None;
                         g.lan = None;
-                        g.hold = None;
-                        g.retry = Some(tx);
+                        g.ready = Some(ready);
+                        g.identify_done = Some(done);
                     }
-                    emit(WizardState::Failed { step, message });
-                    // A dropped sender is a cancel, which has already reset the state.
-                    if wait.await.is_err() {
+                    // Nothing is ever sent: the sender dropping (cancel, save) ends the run.
+                    if tokio::time::timeout(IDENTIFY_WINDOW, ended).await.is_ok() {
                         return;
                     }
+                    // Untouched for too long: let the strip go and offer Retry or Cancel.
+                    let mut g = lock(&self.0);
+                    if g.phase != Phase::Identify {
+                        return;
+                    }
+                    g.ready = None;
+                    g.identify_done = None;
+                    drop(g);
+                    (Step::Segments, IDENTIFY_TIMED_OUT.to_owned())
                 }
+                Ok(Err(failure)) => failure,
                 Err(_aborted) => {
                     emit(WizardState::Idle);
                     self.finish();
                     return;
                 }
+            };
+            let (step, message) = failure;
+            let (tx, wait) = oneshot::channel();
+            {
+                let mut g = lock(&self.0);
+                g.phase = Phase::Failed;
+                g.lan = None;
+                g.hold = None;
+                g.retry = Some(tx);
+            }
+            emit(WizardState::Failed { step, message });
+            // A dropped sender is a cancel, which has already reset the state.
+            if wait.await.is_err() {
+                return;
             }
         }
     }
@@ -253,6 +299,7 @@ impl Wizard {
 
     /// Cancels whatever is running; always ends in `Idle`.
     pub fn cancel(&self, emit: &Emit) {
+        let emit = &self.recording(emit);
         let mut g = lock(&self.0);
         if g.phase == Phase::Running {
             // The running flow revokes the cloud session and emits `Idle` itself.
@@ -273,6 +320,7 @@ impl Wizard {
     /// After a failure: repeats the failed LAN step with the key already held, or, when nothing is
     /// held (a cloud step failed), goes back to the first step.
     pub fn retry(&self, emit: &Emit) {
+        let emit = &self.recording(emit);
         let mut g = lock(&self.0);
         match g.phase {
             Phase::Failed => {
@@ -375,6 +423,7 @@ impl Wizard {
         prepare: impl FnOnce(u8) -> Result<(), String>,
         deliver: impl FnOnce(StripConfig) -> Result<(), String>,
     ) -> Result<(), String> {
+        let emit = &self.recording(emit);
         let mut g = lock(&self.0);
         if g.phase != Phase::Identify {
             return Err("Not ready to save.".into());
@@ -776,6 +825,100 @@ mod tests {
         assert!(lock(&w.0).ready.is_none());
         assert_eq!(log.lock().unwrap().last(), Some(&WizardState::Idle));
         assert!(w.identify(1).await.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn state_reports_the_current_step_for_a_remounted_view() {
+        let l = Arc::new(lan(vec![Ok(IP)], Ok(4)));
+        let w = Wizard::default();
+        assert_eq!(w.state(), WizardState::Idle);
+        let (rec, log) = recorder();
+        let emit = choosing(&w, rec);
+        let code = UserCode::parse("abc123").unwrap();
+        w.start(l, Arc::new(Cloud::default()), code, emit.clone())
+            .unwrap();
+        wait_for(&log, |s| matches!(s, WizardState::Identify { .. })).await;
+        assert!(matches!(
+            w.state(),
+            WizardState::Identify { segments: 4, .. }
+        ));
+        w.cancel(&emit);
+        assert_eq!(w.state(), WizardState::Idle);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancel_at_identify_wipes_the_run_and_a_new_one_can_start() {
+        let l = Arc::new(lan(vec![Ok(IP), Ok(IP)], Ok(4)));
+        l.listen.lock().unwrap().push_back(Ok(4));
+        let w = Wizard::default();
+        let (rec, log) = recorder();
+        let emit = choosing(&w, rec);
+        let code = UserCode::parse("abc123").unwrap();
+        w.start(l.clone(), Arc::new(Cloud::default()), code, emit.clone())
+            .unwrap();
+        wait_for(&log, |s| matches!(s, WizardState::Identify { .. })).await;
+        w.cancel(&emit);
+        {
+            let g = lock(&w.0);
+            assert!(g.ready.is_none() && g.hold.is_none() && g.identify_done.is_none());
+        }
+        assert_eq!(*l.holds.lock().unwrap(), [true, false]);
+        // The run's task ended too: the wizard is free.
+        let code = UserCode::parse("abc123").unwrap();
+        assert!(w.start(l, Arc::new(Cloud::default()), code, emit).is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn identify_times_out_releases_the_strip_and_offers_retry_or_cancel() {
+        let l = Arc::new(lan(vec![Ok(IP), Ok(IP)], Ok(4)));
+        l.listen.lock().unwrap().push_back(Ok(4));
+        let w = Wizard::default();
+        let (rec, log) = recorder();
+        let emit = choosing(&w, rec);
+        let code = UserCode::parse("abc123").unwrap();
+        w.start(l.clone(), Arc::new(Cloud::default()), code, emit.clone())
+            .unwrap();
+        wait_for(&log, |s| matches!(s, WizardState::Identify { .. })).await;
+        tokio::time::sleep(IDENTIFY_WINDOW + Duration::from_secs(1)).await;
+        wait_for(&log, |s| matches!(s, WizardState::Failed { .. })).await;
+        assert_eq!(lock(&w.0).phase, Phase::Failed);
+        assert!(lock(&w.0).ready.is_none());
+        assert_eq!(*l.holds.lock().unwrap(), [true, false]);
+        assert!(w.identify(1).await.is_err());
+        // Retry goes back through the LAN steps with the key still held.
+        w.retry(&emit);
+        let identifies = || {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|s| matches!(s, WizardState::Identify { .. }))
+                .count()
+        };
+        for _ in 0..100 {
+            if identifies() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(identifies(), 2);
+        w.cancel(&emit);
+        assert_eq!(w.state(), WizardState::Idle);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancel_from_failed_ends_the_run_and_wipes_it() {
+        let l = Arc::new(lan(vec![Ok(IP)], Err(StripError::NoSegments)));
+        let w = Wizard::default();
+        let (rec, log) = recorder();
+        let emit = choosing(&w, rec);
+        let code = UserCode::parse("abc123").unwrap();
+        w.start(l, Arc::new(Cloud::default()), code, emit.clone())
+            .unwrap();
+        wait_for(&log, |s| matches!(s, WizardState::Failed { .. })).await;
+        assert!(matches!(w.state(), WizardState::Failed { .. }));
+        w.cancel(&emit);
+        assert_eq!(w.state(), WizardState::Idle);
+        assert_eq!(lock(&w.0).phase, Phase::Idle);
     }
 
     #[test]

@@ -9,6 +9,7 @@ vi.mock("../api", () => ({
     wizardChoose: vi.fn(),
     wizardRetry: vi.fn(),
     wizardCancel: vi.fn(),
+    wizardState: vi.fn(),
     stripIdentify: vi.fn(),
     wizardSave: vi.fn(),
     onWizard: vi.fn(),
@@ -72,6 +73,7 @@ beforeEach(() => {
   ]) {
     vi.mocked(f).mockResolvedValue();
   }
+  vi.mocked(api.wizardState).mockResolvedValue({ kind: "idle" });
 });
 
 afterEach(async () => {
@@ -269,6 +271,48 @@ it("renders_failed_step_with_retry", async () => {
     await settle();
   });
   expect(api.wizardRetry).toHaveBeenCalled();
+});
+
+it("failed_step_offers_cancel_too", async () => {
+  await mount();
+  await emit({ kind: "failed", step: "segments", message: "Took too long to finish." });
+  await act(async () => {
+    button("Cancel").click();
+    await settle();
+  });
+  expect(api.wizardCancel).toHaveBeenCalled();
+});
+
+it("identify_step_has_cancel", async () => {
+  await mount();
+  await emit({ kind: "identify", device: dev("a"), segments: 3 });
+  await act(async () => {
+    button("Cancel").click();
+    await settle();
+  });
+  expect(api.wizardCancel).toHaveBeenCalled();
+});
+
+it("a_remounted_view_restores_the_step_from_rust", async () => {
+  vi.mocked(api.wizardState).mockResolvedValue({
+    kind: "identify",
+    device: dev("a"),
+    segments: 3,
+  });
+  await mount();
+  expect(root.querySelector("[data-piece]")).not.toBeNull();
+});
+
+it("an_event_that_arrives_first_beats_the_restored_state", async () => {
+  let resolve: (s: WizardState) => void = () => {};
+  vi.mocked(api.wizardState).mockReturnValue(new Promise((r) => (resolve = r)));
+  await mount();
+  await emit({ kind: "chooseStrip", devices: [dev("a")] });
+  await act(async () => {
+    resolve({ kind: "idle" });
+    await settle();
+  });
+  expect(root.textContent).toContain("Strip a");
 });
 
 it("cancel_on_close_calls_wizard_cancel", async () => {

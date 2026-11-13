@@ -236,6 +236,7 @@ export function installMock(api: typeof realApi): void {
     onWizard: async () => () => {},
     onSection: async () => () => {},
     wizardCancel: async () => {},
+    wizardState: async () => ({ kind: "idle" as const }),
     identifySegment: async () => {},
     previewPalette: async () => {},
     previewSequence: async () => {},

@@ -58,6 +58,7 @@ pub fn run() -> tauri::Result<()> {
             commands::wizard_choose,
             commands::wizard_retry,
             commands::wizard_cancel,
+            commands::wizard_state,
             commands::strip_identify,
             commands::identify_segment,
             commands::wizard_save,

@@ -29,13 +29,14 @@ pub struct DeviceDto {
     pub reason: Option<String>,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
 pub enum WizardState {
+    #[default]
     Idle,
     WaitingScan {
         qr: QrMatrix,

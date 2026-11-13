@@ -99,11 +99,14 @@ function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
       );
     case "identify":
       return (
-        <StepIdentify
-          detected={state.segments}
-          onPiece={(n) => void api.stripIdentify(n).catch(swallow)}
-          onSave={(wired) => api.wizardSave(wired)}
-        />
+        <div class="space-y-3">
+          <StepIdentify
+            detected={state.segments}
+            onPiece={(n) => void api.stripIdentify(n).catch(swallow)}
+            onSave={(wired) => api.wizardSave(wired)}
+          />
+          <CancelButton />
+        </div>
       );
     case "saved":
       return (
@@ -125,14 +128,17 @@ function Step({ state, onDone }: { state: WizardState; onDone: () => void }) {
           <p role="alert" class="text-red">
             {state.message}
           </p>
-          <button
-            type="button"
-            onClick={() => void api.wizardRetry().catch(swallow)}
-            {...help(H.wizardRetry)}
-            class="rounded-card bg-green px-4 py-2"
-          >
-            Retry
-          </button>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void api.wizardRetry().catch(swallow)}
+              {...help(H.wizardRetry)}
+              class="rounded-card bg-green px-4 py-2"
+            >
+              Retry
+            </button>
+            <CancelButton />
+          </div>
         </div>
       );
   }
@@ -152,6 +158,12 @@ export function Wizard({
   useEffect(() => {
     let off = () => {};
     let gone = false;
+    // A remount (tab switch) while the run continues in Rust: ask where it is. An event that
+    // arrived first is newer and wins.
+    void api
+      .wizardState()
+      .then((s) => !gone && setState((cur) => (cur.kind === "idle" ? s : cur)))
+      .catch(swallow);
     void api.onWizard(setState).then((un) => {
       if (gone) un();
       else off = un;

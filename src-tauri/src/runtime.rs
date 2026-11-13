@@ -162,7 +162,7 @@ const MIDI_SOURCES_EVENT: &str = "midi-sources";
 /// How long an identify flash stays before the scene is repainted.
 const IDENTIFY_FLASH_US: u64 = 1_200_000;
 /// A new identify inside this window is dropped: the strip loses back-to-back messages.
-const IDENTIFY_GATE_US: u64 = 300_000;
+pub(crate) const IDENTIFY_GATE_US: u64 = 300_000;
 
 /// The popover gets at most 30 updates per second.
 const MIN_PUBLISH_GAP_US: u64 = 33_333;

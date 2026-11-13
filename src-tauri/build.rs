@@ -20,6 +20,7 @@ const COMMANDS: &[&str] = &[
     "wizard_start",
     "wizard_choose",
     "wizard_retry",
+    "wizard_state",
     "wizard_cancel",
     "strip_identify",
     "identify_segment",
