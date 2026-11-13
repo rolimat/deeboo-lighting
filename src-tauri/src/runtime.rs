@@ -646,7 +646,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         match input {
             Input::Midi(e) => {
                 if e.status == 0xF8 {
-                    self.last_tick_us = e.at_us;
+                    self.last_tick_us = self.last_tick_us.max(e.at_us);
                 }
                 let mut features = None;
                 let mut beat_silent = None;
@@ -2019,6 +2019,34 @@ mod tests {
             at += 20_000;
         }
         at
+    }
+
+    #[test]
+    fn a_tick_stamped_out_of_order_does_not_freeze_stop_detection() {
+        let (mut c, _rx, _) = core(false);
+        c.handle(
+            Input::Midi(MidiEvent {
+                at_us: 0,
+                status: 0xFA,
+            }),
+            0,
+        );
+        let at = clock_ticks(&mut c, 10_000, 30);
+        let newest = at - 20_000;
+        // Another source stamped an older tick after the newest one was handled.
+        c.handle(
+            Input::Midi(MidiEvent {
+                at_us: newest - 5_000,
+                status: 0xF8,
+            }),
+            at,
+        );
+        c.midi.newest.set(newest);
+        c.tick(at + 700_000);
+        assert!(
+            !c.status().playing,
+            "no newer tick is queued: the clock stopped"
+        );
     }
 
     #[test]

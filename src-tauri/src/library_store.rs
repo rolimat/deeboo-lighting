@@ -35,16 +35,16 @@ fn describe(e: &serde_json::Error) -> String {
     format!("{:?} at {}:{}", e.classify(), e.line(), e.column())
 }
 
-/// The first free `.bad`, `.bad.1`, ...; when all are taken, the oldest one (it is overwritten).
-fn bad_slot(path: &Path) -> PathBuf {
+/// The first free `<base>`, `<base>.1`, ...; when all are taken, the oldest one (it is overwritten).
+fn slot(path: &Path, base: &str) -> PathBuf {
     let slots: Vec<PathBuf> = (0..BAD_KEPT)
         .map(|i| {
             sibling(
                 path,
                 &if i == 0 {
-                    ".bad".into()
+                    base.to_string()
                 } else {
-                    format!(".bad.{i}")
+                    format!("{base}.{i}")
                 },
             )
         })
@@ -55,7 +55,7 @@ fn bad_slot(path: &Path) -> PathBuf {
         .find(|p| !p.exists())
         .or_else(|| slots.iter().min_by_key(|p| age(p)))
         .cloned()
-        .unwrap_or_else(|| sibling(path, ".bad"))
+        .unwrap_or_else(|| sibling(path, base))
 }
 
 #[derive(serde::Deserialize)]
@@ -87,8 +87,7 @@ fn parse(path: &Path, text: &str, phrase_bars: u8) -> Result<Library, String> {
         .and_then(|mut l| {
             // Older files may reference another moment's sequence: keep the original beside it.
             if l.drop_foreign_refs() {
-                let copy = sibling(path, ".refs");
-                if copy.exists() || std::fs::copy(path, &copy).is_ok() {
+                if std::fs::copy(path, slot(path, ".refs")).is_ok() {
                     log::warn!("library had references to another moment's sequence: dropped");
                 } else {
                     log::warn!("library references dropped, but the original could not be copied");
@@ -111,7 +110,7 @@ pub fn load(path: &Path, segments: u8, phrase_bars: u8) -> Library {
     parsed.unwrap_or_else(|e| {
         log::warn!("library invalid, using built-ins: {e}");
         // Moved, not copied: a huge file is not duplicated, and the next save cannot overwrite it.
-        if let Err(e) = std::fs::rename(path, bad_slot(path)) {
+        if let Err(e) = std::fs::rename(path, slot(path, ".bad")) {
             log::warn!("cannot keep the invalid library aside: {e}");
         }
         Library::builtin(segments)
@@ -296,6 +295,31 @@ mod tests {
         );
         assert!(!dir.path().join("library.json.v1").exists());
         assert!(!p.exists());
+    }
+
+    #[test]
+    fn a_second_refs_cleanup_keeps_its_own_copy() {
+        let (dir, p) = tmp();
+        let text = |n: u32| {
+            with(|v| {
+                let calm = v["sequences"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|s| s[1]["moment"] == "calm")
+                    .unwrap()[0]
+                    .clone();
+                v["sets"][0]["rhythm"]["sequences"] = json!([{ "id": calm }]);
+                v["sets"][0]["name"] = json!(format!("set {n}"));
+            })
+        };
+        std::fs::write(&p, text(1)).unwrap();
+        let _ = load(&p, 10, 8);
+        std::fs::write(&p, text(2)).unwrap();
+        let _ = load(&p, 10, 8);
+        let read = |n: &str| std::fs::read_to_string(dir.path().join(n)).unwrap();
+        assert_eq!(read("library.json.refs"), text(1));
+        assert_eq!(read("library.json.refs.1"), text(2));
     }
 
     #[test]

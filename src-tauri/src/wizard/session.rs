@@ -143,7 +143,8 @@ fn store_name(name: &str) -> String {
 }
 
 impl Wizard {
-    /// The step the run is at, for a view that was unmounted meanwhile. Never a secret.
+    /// The step the run is at, for a view that was unmounted meanwhile: nothing the event stream did not
+    /// already send (it can carry the QR, which is not a stored secret).
     #[must_use]
     pub fn state(&self) -> WizardState {
         // A run that ended (saved, cancelled, finished) is Idle whatever was announced last.

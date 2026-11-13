@@ -418,11 +418,23 @@ impl AppState {
         lock(&self.settings).clone()
     }
 
-    fn save_settings(&self, mut new: Settings) -> Result<Settings, String> {
-        new.validate()?;
+    fn save_settings(&self, new: Settings) -> Result<Settings, String> {
         // The lock spans swap and write so a concurrent save cannot interleave.
+        Self::persist(self, &mut lock(&self.settings), new)
+    }
+
+    /// Edits the current settings and saves them under one lock: a concurrent edit of another
+    /// field cannot be overwritten by a stale copy.
+    pub fn save_settings_with(&self, edit: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
         let mut cur = lock(&self.settings);
-        new.switch_input(&cur);
+        let mut new = cur.clone();
+        edit(&mut new);
+        Self::persist(self, &mut cur, new)
+    }
+
+    fn persist(&self, cur: &mut Settings, mut new: Settings) -> Result<Settings, String> {
+        new.validate()?;
+        new.switch_input(cur);
         let path = lock(&self.settings_path)
             .clone()
             .ok_or("settings unavailable")?;
@@ -437,17 +449,16 @@ impl AppState {
     /// The engine picked the only MIDI source by itself: keep it (a failed save is logged by
     /// `save_settings`; the choice still holds until restart).
     pub fn remember_midi_source(&self, name: &str) {
-        let mut s = self.settings();
-        s.midi_source = Some(name.to_string());
-        let _ = self.save_settings(s);
+        let _ = self.save_settings_with(|s| s.midi_source = Some(name.to_string()));
     }
 
     /// Saves the Detection panel's thresholds (range-checked by `Settings::validate`); the rest of
     /// the settings stay as they are.
     fn set_thresholds(&self, t: Thresholds) -> Result<Settings, String> {
-        let mut s = self.settings();
-        (s.calm_kick_db, s.calm_high_db, s.riser_db) = (t.calm_kick_db, t.calm_high_db, t.riser_db);
-        self.save_settings(s)
+        self.save_settings_with(|s| {
+            (s.calm_kick_db, s.calm_high_db, s.riser_db) =
+                (t.calm_kick_db, t.calm_high_db, t.riser_db);
+        })
     }
 
     pub fn set_status(&self, s: Status) {
@@ -887,9 +898,7 @@ pub async fn list_audio_inputs() -> Result<Vec<String>, String> {
 #[allow(clippy::needless_pass_by_value)] // tauri::State is passed by value by the macro
 pub fn ui_command(state: tauri::State<'_, AppState>, cmd: UiCommandDto) -> Result<(), String> {
     if let UiCommandDto::Lights { on } = cmd {
-        let mut s = state.settings();
-        s.lights_on = on;
-        state.save_settings(s)?;
+        state.save_settings_with(|s| s.lights_on = on)?;
     }
     state.send(Input::Ui(cmd.into()))
 }
@@ -1337,6 +1346,31 @@ mod tests {
             .unwrap();
         assert_eq!(back.sensitivity, 9);
         assert_eq!(settings::load(&path), back, "persisted");
+    }
+
+    #[test]
+    fn concurrent_settings_edits_do_not_lose_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::default());
+        state.init_settings(dir.path().join("settings.json"));
+        let a = Arc::clone(&state);
+        let source = std::thread::spawn(move || {
+            for _ in 0..50 {
+                a.remember_midi_source("IAC");
+            }
+        });
+        for i in 0..50_u8 {
+            let t = Thresholds {
+                calm_kick_db: 10 + i % 10,
+                calm_high_db: 12,
+                riser_db: 7,
+            };
+            state.set_thresholds(t).unwrap();
+        }
+        source.join().unwrap();
+        let s = state.settings();
+        assert_eq!(s.midi_source.as_deref(), Some("IAC"));
+        assert_eq!(s.calm_kick_db, 10 + 49 % 10);
     }
 
     #[test]

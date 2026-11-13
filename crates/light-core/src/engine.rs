@@ -523,6 +523,8 @@ impl Engine {
         self.rot_moment = None;
         // A preview validated for the old count must not paint out of range.
         self.preview = None;
+        // The calibration flash was planned for the old count; the UI turns it on again if wanted.
+        self.calibrating = false;
         self.free_at = None;
         self.resend = true;
     }
