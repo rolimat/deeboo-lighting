@@ -236,6 +236,8 @@ pub struct MomentDetector {
     bar_beats: u32,
     /// The partial bar began with a clock position (a bar never mixes clocked and unclocked beats).
     bar_clocked: bool,
+    /// Clock beat of the last beat added to the partial bar.
+    bar_last_beat: u64,
     since_return: u32,
     since_collapse: u32,
     collapse_run: u32,
@@ -280,6 +282,7 @@ impl MomentDetector {
             bar_sum: 0.0,
             bar_beats: 0,
             bar_clocked: false,
+            bar_last_beat: 0,
             // The start of the track in Rhythm is not a return.
             since_return: u32::MAX,
             since_collapse: u32::MAX,
@@ -330,7 +333,8 @@ impl MomentDetector {
     #[allow(clippy::cast_precision_loss)]
     fn riser(&mut self, high_db: f32, high_ref_db: f32, closed: Option<Position>) -> bool {
         let clock = closed.filter(|_| self.p.rules.aligned_bars);
-        if clock.is_some_and(|c| c.beat_in_bar == 1) || clock.is_some() != self.bar_clocked {
+        let gap = clock.is_some_and(|c| c.beat != self.bar_last_beat.wrapping_add(1));
+        if clock.is_some_and(|c| c.beat_in_bar == 1) || clock.is_some() != self.bar_clocked || gap {
             // A bar that began before the detector (or after a gap) never counts.
             self.bar_sum = 0.0;
             self.bar_beats = 0;
@@ -339,6 +343,7 @@ impl MomentDetector {
         self.bar_sum += high_db;
         self.bar_beats += 1;
         if let Some(c) = clock {
+            self.bar_last_beat = c.beat;
             if c.beat_in_bar != 4 {
                 return false;
             }
@@ -1082,6 +1087,17 @@ mod tests {
         });
         assert_eq!(m[90], Moment::Calm, "{m:?}");
         assert_eq!(m[91], Moment::BuildUp, "{m:?}");
+    }
+
+    #[test]
+    fn a_gap_of_four_beats_never_completes_a_bar() {
+        let mut d = MomentDetector::new(DetectorParams::default(), 0.0);
+        let at = |b: u64| Some(Position::at(b, false, PhraseBars::Eight));
+        // Bar 1 beats 1-2, then a capture gap, then bar 2 beats 3-4: four beats, not one bar.
+        for b in [0, 1, 6, 7] {
+            d.riser(0.0, 0.0, at(b));
+        }
+        assert_eq!(d.bars.len(), 0);
     }
 
     #[test]
