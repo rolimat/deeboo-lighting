@@ -182,6 +182,10 @@ impl Strip {
     /// Fails if the command does not encode or the message cannot be queued.
     pub async fn paint(&self, segments: u8, cmd: &PaintCommand) -> Result<(), StripError> {
         let bytes = encode(segments, cmd).map_err(|_| StripError::Encode)?;
+        // A closed device fails at once instead of after rustuya's send timeout.
+        if !self.device.is_connected() {
+            return Err(StripError::Send);
+        }
         self.device
             .set_value(PAINT_DP, STANDARD.encode(bytes))
             .await
@@ -561,6 +565,7 @@ pub async fn run<P, Fut>(
                 Err(None) => return,
                 Err(Some(Control::Configure(new))) => {
                     cfg = Some(Arc::new(new));
+                    retries = 0;
                     continue;
                 }
                 Err(Some(Control::Pause(p))) => {
@@ -582,6 +587,7 @@ pub async fn run<P, Fut>(
                     let restart = newer.is_some() || paused;
                     if let Some(new) = newer {
                         cfg = Some(Arc::new(new));
+                        retries = 0;
                     }
                     if restart {
                         continue;
@@ -624,8 +630,7 @@ pub async fn run<P, Fut>(
                     }
                     if let Err(e) = p.paint(c.reported, &wired_cmd(&c, &cmd)).await {
                         log::warn!("strip paint failed: {e}");
-                        report(StripStatus::Error);
-                        painter = None;
+                        painter = None; // redials at once; `Connecting` is reported, not a red blip
                         retries = REDIAL_BACKOFF.len();
                         continue 'connect;
                     }
@@ -633,8 +638,7 @@ pub async fn run<P, Fut>(
                 (Some(p), StripMsg::Identify(n)) => {
                     if let Err(e) = identify_via(p, n, c.reported).await {
                         log::warn!("strip identify failed: {e}");
-                        report(StripStatus::Error);
-                        painter = None;
+                        painter = None; // redials at once; `Connecting` is reported, not a red blip
                         retries = REDIAL_BACKOFF.len();
                         continue 'connect;
                     }
@@ -780,7 +784,6 @@ mod tests {
             vec![
                 StripStatus::Connecting,
                 connected10(),
-                StripStatus::Error,
                 StripStatus::Connecting,
                 connected10()
             ]
@@ -819,6 +822,58 @@ mod tests {
             assert_eq!(dials.lock().unwrap().len(), 7);
         });
         assert_eq!(r.last(), Some(&StripStatus::Error));
+    }
+
+    #[test]
+    fn a_new_config_mid_redial_never_retries_a_wrong_key() {
+        let n = Arc::new(AtomicUsize::new(0));
+        let n2 = Arc::clone(&n);
+        let r = drive_task(
+            Some(cfg("dj", None)),
+            move |_| match n2.fetch_add(1, Ordering::SeqCst) {
+                0 => Box::pin(async { Ok(Fake(Arc::new(AtomicUsize::new(0)))) }),
+                1 => Box::pin(std::future::pending()),
+                _ => Box::pin(async { Err(StripError::Auth) }),
+            },
+            async |tx, _| {
+                settle().await;
+                tx.send(a_paint()).unwrap_or_default();
+                tx.send(a_paint()).unwrap_or_default(); // fails: redial 1 hangs
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                tx.send(StripMsg::Configure(cfg("new", None)))
+                    .unwrap_or_default();
+                a_while().await;
+            },
+        );
+        assert_eq!(n.load(Ordering::SeqCst), 3, "the new config dials once");
+        assert_eq!(r.last(), Some(&StripStatus::KeyInvalid));
+    }
+
+    #[test]
+    fn configure_or_pause_cancels_a_backoff_wait() {
+        for pause in [false, true] {
+            let (dials, connect) = scripted(vec![
+                None,
+                Some(StripError::Connect),
+                Some(StripError::Connect),
+            ]);
+            let _ = drive_task(Some(cfg("dj", None)), connect, async |tx, _| {
+                settle().await;
+                tx.send(a_paint()).unwrap_or_default();
+                tx.send(a_paint()).unwrap_or_default();
+                // Dial 2 fails at 0.5 s; the next wait is 1 s.
+                tokio::time::sleep(Duration::from_millis(700)).await;
+                assert_eq!(dials.lock().unwrap().len(), 2);
+                let m = if pause {
+                    StripMsg::Pause(true)
+                } else {
+                    StripMsg::Configure(cfg("new", None))
+                };
+                tx.send(m).unwrap_or_default();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert_eq!(dials.lock().unwrap().len(), if pause { 2 } else { 3 });
+            });
+        }
     }
 
     // --- finding the strip and learning its segments (fakes, simulated time) ---
