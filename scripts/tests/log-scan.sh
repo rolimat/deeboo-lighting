@@ -24,6 +24,12 @@ mkdir "$d/../fakebin"; printf '#!/bin/sh\nexit 2\n' > "$d/../fakebin/grep"; chmo
 rc=0; PATH="$d/../fakebin:$PATH" "$s" "$d/clean.log" >/dev/null 2>&1 || rc=$?
 rm -rf "$d/../fakebin"
 [ "$rc" = 2 ] || { echo "grep error: expected exit 2, got $rc" >&2; exit 1; }
+# Same, when only the fixed-string key search fails (-F): the real grep serves every other call.
+real=$(command -v grep); mkdir "$d/../fakebin"
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = -F ] && exit 2; done\nexec %s "$@"\n' "$real" > "$d/../fakebin/grep"; chmod +x "$d/../fakebin/grep"
+rc=0; PATH="$d/../fakebin:$PATH" "$s" "$d/../bare.tmp.log" "$d/../strip.tmp.json" >/dev/null 2>&1 || rc=$?
+rm -rf "$d/../fakebin"
+[ "$rc" = 2 ] || { echo "grep -F error: expected exit 2, got $rc" >&2; exit 1; }
 # The recipe must survive paths with spaces (the real strip file lives under "Application Support").
 sp=$(mktemp -d)/"with space"; mkdir -p "$sp"
 trap 'rm -f "$d/../strip.tmp.json" "$d/../bare.tmp.log" "$d/../q.tmp.json" "$d/../q.tmp.log"; rm -rf "$(dirname "$sp")"' EXIT

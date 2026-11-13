@@ -20,7 +20,10 @@ if [ $# -eq 2 ]; then
   esc=$(sed -En 's/.*"local_key"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\1/p' "$2" | head -n 1)
   raw=$(printf '%s' "$esc" | sed -e 's/\\"/"/g' -e 's/\\\\/\\/g')
   for k in "$esc" "$raw"; do
-    [ -z "$k" ] || hits=$(printf '%s\n%s' "$hits" "$(scan -F -e "$k" -- "$1" | cut -d: -f1)" | sed '/^$/d' | sort -nu)
+    [ -z "$k" ] || {
+    kh=$(scan -F -e "$k" -- "$1" | cut -d: -f1)   # own line: a grep error must reach set -e
+    hits=$(printf '%s\n%s' "$hits" "$kh" | sed '/^$/d' | sort -nu)
+    }
   done
 fi
 [ -z "$hits" ] || { echo "$hits"; exit 1; }
