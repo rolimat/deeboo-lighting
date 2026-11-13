@@ -127,11 +127,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, CliError> {
                 a.rules = live::parse_rules(&v).map_err(CliError::Usage)?;
             }
             "--features" => {
-                // The range is optional: only a digit-led next argument is one.
-                let range = if it
-                    .peek()
-                    .is_some_and(|v| v.starts_with(|c: char| c.is_ascii_digit()))
-                {
+                // The range is optional: only a next argument shaped like from-to is one.
+                let range = if it.peek().is_some_and(|v| live::looks_like_range(v)) {
                     let v = it.next().unwrap_or_default();
                     Some(live::parse_range(&v).map_err(CliError::Usage)?)
                 } else {
@@ -183,7 +180,11 @@ fn run(args: &Args) -> Result<(), CliError> {
             tracked.bpm()
         );
     }
-    let positions = live::positions(&tracked.beats, &args.downbeats, args.phrase);
+    if args.downbeats.is_empty() {
+        eprintln!("downbeat: first tracked beat");
+    }
+    let positions =
+        live::positions(&tracked.beats, &args.downbeats, args.phrase).map_err(CliError::Usage)?;
     let params = DetectorParams {
         rules: args.rules,
         ..DetectorParams::default()
@@ -327,5 +328,23 @@ fn main() -> ExitCode {
             eprintln!("error: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(a: &[&str]) -> Result<Args, CliError> {
+        parse_args(a.iter().map(|s| (*s).to_string()))
+    }
+
+    #[test]
+    fn features_does_not_eat_a_digit_audio_path() {
+        let a = parse(&["--features", "3-song.mp3"]).unwrap();
+        assert!(a.features && a.features_range.is_none());
+        assert_eq!(a.audio, PathBuf::from("3-song.mp3"));
+        let a = parse(&["--features", "160-215", "x.mp3"]).unwrap();
+        assert_eq!(a.features_range, Some((160.0, 215.0)));
     }
 }

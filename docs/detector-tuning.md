@@ -38,7 +38,7 @@ A *deficit* is a beat's level minus its reference.
 | Rhythm to Build-up: kick ducked, highs up, 2 beats | `groove_buildup_kick_db` 6, `groove_buildup_high_db` 8 | Build-ups that start inside the groove: kick pulls back while the hats open. |
 | Build-up to Calm: highs fall back without a drop | `collapse_db` 8 | The riser was abandoned. |
 | Build-up to Rhythm: same drop rule, exempt from `min_state_beats` | `buildup_max_beats` off (removed in B1) | A drop must be immediate; timeouts cost more than they saved. |
-| No change within 4 beats of the last one | `min_state_beats` 4 | Avoids flicker. |
+| No change within 4 beats of the last one (a quick move on a phrase's beat 1 and its beat-2 confirm/undo are exempt, see Clock positions) | `min_state_beats` 4 | Avoids flicker. |
 
 The editor's Detection panel stores `calm_kick_db` (8-30), `calm_high_db` (6-24) and `riser_db` (3-15) in
 settings (defaults 16 / 12 / 7, whole dB); the popover's sensitivity then shifts the two calm ones by `5 - s` dB
@@ -139,3 +139,13 @@ Tried and rejected:
 - A kick-fade Build-up rule: turns three session breaks into Build-ups.
 - A relative drop on stale references: R/C flicker in long session breaks.
 - Kick attack and on-beat pulse features: they do not separate kick from bass.
+
+## Clock positions (plan 10)
+
+With a clock position (spec §6.2.1) the rules above change in five places:
+
+- Riser bars close on the clock's beat 4, not every 4 beats; a partial bar at start or after a gap never counts.
+- `min_state_beats` does not bind a quick move on a phrase's beat 1; beat 2 confirms it or undoes it.
+- A Build-up drops to Rhythm on a full beat 1 of a bar with a kick jump.
+- Soft break: a phrase's bar 1 (four clocked beats) whose mean kick is 5 dB or more down, sub 3 dB or more down and highs within 2 dB of their reference is Calm from Rhythm (`soft_kick_db`, `soft_sub_db`, `soft_high_db`); that Calm has no slow return and Rhythm comes back with the kick jump or 2 full beats.
+- In a phrase's second half 3 rising bars are enough. Measured alone (`--rules riser`) this depends on the phase of the 4-beat counter, because without `aligned_bars` the bars are not clock-aligned.

@@ -22,35 +22,66 @@ fn on_beat_does_not_allocate() {
     use light_core::clock::{PhraseBars, Position};
     use light_core::detect::PositionRules;
     use light_core::detect::bands::HopFrame;
-    use light_core::detect::moment::{DetectorParams, MomentDetector};
+    use light_core::detect::moment::{DetectorParams, Moment, MomentDetector};
     let params = DetectorParams {
         rules: PositionRules::ALL,
         ..DetectorParams::default()
     };
     let mut d = MomentDetector::new(params, 0.0058);
-    let frame = |i: u32| {
-        let v = 0.01 + f32::from((i % 7) as u8) * 0.01;
-        HopFrame {
-            kick: v,
-            sub: v,
-            high: v * 0.5,
-            onset: 0.0,
+    // Linear levels per beat: a groove, a break with quiet highs, a four-bar riser of highs back
+    // to the groove level, then the drop on the phrase start (bar 1 of 8 at beat 96).
+    let level = |beat: u32| -> (f32, f32) {
+        match beat {
+            0..=31 | 96.. => (0.5, 0.3),
+            32..=79 => (0.0005, 0.003),
+            80..=83 => (0.0005, 0.01),
+            84..=87 => (0.0005, 0.03),
+            88..=91 => (0.0005, 0.1),
+            _ => (0.0005, 0.3),
         }
     };
+    let mut seen = [false; 3];
+    let mut at = [Moment::Rhythm; 200];
     assert_no_alloc(|| {
+        // Without a clock position.
         for beat in 0..200 {
-            for h in 0..90 {
-                d.push(frame(beat + h));
+            let (kick, high) = level(beat % 128);
+            for _ in 0..90 {
+                d.push(HopFrame {
+                    kick,
+                    sub: kick,
+                    high,
+                    onset: 0.0,
+                });
             }
             let _ = d.on_beat(None);
-            for h in 0..90 {
-                d.push(frame(beat + h));
+        }
+    });
+    d.reset();
+    assert_no_alloc(|| {
+        // Consecutive clock positions, so riser bars close and phrase-position rules apply.
+        for beat in 0..200_u32 {
+            let (kick, high) = level(beat % 128);
+            for _ in 0..90 {
+                d.push(HopFrame {
+                    kick,
+                    sub: kick,
+                    high,
+                    onset: 0.0,
+                });
             }
-            let _ = d.on_beat(Some(Position::at(
+            let (m, _) = d.on_beat(Some(Position::at(
                 u64::from(beat),
                 false,
                 PhraseBars::Eight,
             )));
+            seen[m as usize] = true;
+            at[beat as usize] = m;
         }
     });
+    assert!(seen.iter().all(|&s| s), "all moments reached: {seen:?}");
+    // The branches under guard: the quick Calm on phrase beat 1, the riser, the bar-1 drop.
+    assert_eq!(at[33], Moment::Calm);
+    assert_eq!(at[95], Moment::BuildUp);
+    assert_eq!(at[96], Moment::Rhythm);
 }
