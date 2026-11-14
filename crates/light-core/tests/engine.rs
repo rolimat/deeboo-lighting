@@ -576,7 +576,7 @@ fn matching_library_sequence_is_played() {
     s.start();
     s.beats_of(2, &mut none);
     let got = apply_all(&s.sends, vec![None; 4]);
-    assert_eq!(got, vec![hsv(280, 900, 950); 4]);
+    assert_eq!(got, vec![hsv(320, 900, 1000); 4]);
 }
 
 #[test]
@@ -781,7 +781,7 @@ fn edited_playing_sequence_shows_from_the_next_bar() {
     s.e.set_library(s.now, &edited);
     s.beats_of(6, &mut none);
     let got = apply_all(&s.sends, vec![None; 4]);
-    assert_eq!(got, vec![hsv(280, 900, 950); 4]);
+    assert_eq!(got, vec![hsv(320, 900, 1000); 4]);
 }
 
 /// `plain` with a second palette (principal hue 100), in Auto, rotating as `change` says.

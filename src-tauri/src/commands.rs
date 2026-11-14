@@ -1239,7 +1239,7 @@ mod tests {
         let json = serde_json::to_string(&Status::initial()).unwrap_or_default();
         assert_eq!(
             json,
-            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","setId":1,"paletteAuto":true,"palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}},"clip":null}"#
+            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","setId":1,"paletteAuto":true,"palette":{"name":"Ocean","colours":[{"h":190,"s":1000,"v":1000},{"h":320,"s":900,"v":1000},{"h":190,"s":300,"v":1000}]}},"clip":null}"#
         );
         let clip = ClipDto {
             moment: MomentDto::Calm,
@@ -1843,15 +1843,15 @@ mod tests {
         let (dir, state) = lib_state();
         let name = |sel: Selection| (sel.palette_auto, sel.palette.name);
         assert!(state.library().active_palette.is_none());
-        // Auto -> p1 -> p2 ... -> p8 -> Auto, over the active set's palettes.
+        // Auto -> p1 -> p2 ... -> p9 -> Auto, over the active set's palettes.
         assert_eq!(
             state.select(Pick::Palette, 1).unwrap().palette.name,
-            "Sunset"
+            "Ocean"
         );
         assert_eq!(state.library().active_palette, Some(1));
         assert_eq!(
             name(state.select(Pick::Palette, 1).unwrap()),
-            (false, "Ocean".into())
+            (false, "Laser".into())
         );
         assert_eq!(
             crate::library_store::load(&dir.path().join("library.json"), 10, 8).active_palette,
@@ -1862,7 +1862,7 @@ mod tests {
         assert_eq!(state.library().active_palette, None);
         // Backwards from Auto lands on the last palette, forwards from it on Auto.
         state.select(Pick::Palette, -1).unwrap();
-        assert_eq!(state.library().active_palette, Some(8));
+        assert_eq!(state.library().active_palette, Some(9));
         assert!(state.select(Pick::Palette, 1).unwrap().palette_auto);
         for bad in [0, 2, -2] {
             assert!(state.select(Pick::Palette, bad).is_err());
@@ -1987,7 +1987,7 @@ mod tests {
         let saved = state.save_library(lib).unwrap();
         assert_eq!(
             saved.palettes.iter().map(|p| p.0).collect::<Vec<_>>(),
-            [1, 2, 3, 4, 5, 6, 7, 8, 9]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
         assert_eq!(
             saved.sequences.iter().map(|p| p.0).collect::<Vec<_>>(),
@@ -1995,7 +1995,7 @@ mod tests {
         );
         assert_eq!(saved.sets[1].id, 2);
         assert_eq!(saved.sets[1].rhythm.sequences, [SeqRef::Id(11)]);
-        assert_eq!(saved.sets[1].palettes, [9]);
+        assert_eq!(saved.sets[1].palettes, [10]);
         // The editor's selection is ignored: the live one stays.
         assert_eq!((saved.active_set, saved.active_palette), (1, None));
         assert_eq!(state.library(), saved);

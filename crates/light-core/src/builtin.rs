@@ -81,53 +81,63 @@ pub fn sequence(moment: Moment, segments: u8) -> Sequence {
     }
 }
 
-/// Eight palettes: Principal/Contraste at least 60 degrees apart, Suave light (S <= 450, V >= 800).
+/// Nine palettes (HSV, 0-360 / 0-1000): Principal and Contraste clearly apart, Suave light.
 #[must_use]
 pub fn palettes() -> Vec<Palette> {
-    let p = |name: &str, a: (u16, u16, u16), b: (u16, u16, u16), c: (u16, u16, u16)| {
-        let hsv = |(h, s, v)| Hsv { h, s, v };
-        Palette {
-            name: name.into(),
-            principal: hsv(a),
-            contraste: hsv(b),
-            suave: hsv(c),
-        }
-    };
-    vec![
-        p("Sunset", (20, 950, 1000), (280, 900, 950), (30, 300, 1000)),
-        p(
+    let hsv = |(h, s, v)| Hsv { h, s, v };
+    [
+        (
             "Ocean",
             (190, 1000, 1000),
             (320, 900, 1000),
             (190, 300, 1000),
         ),
-        p(
-            "Club",
-            (300, 1000, 1000),
-            (180, 1000, 1000),
-            (300, 250, 1000),
+        (
+            "Laser",
+            (125, 1000, 1000),
+            (325, 1000, 1000),
+            (160, 600, 1000),
         ),
-        p(
-            "Fire and ice",
-            (10, 1000, 1000),
-            (210, 1000, 1000),
-            (20, 300, 1000),
+        ("UV", (257, 1000, 1000), (177, 1000, 1000), (282, 500, 1000)),
+        (
+            "Deep sea",
+            (197, 1000, 1000),
+            (157, 1000, 1000),
+            (182, 400, 1000),
         ),
-        p("Forest", (120, 900, 900), (300, 800, 1000), (120, 300, 950)),
-        p(
-            "Aurora",
-            (160, 900, 1000),
-            (270, 900, 1000),
-            (200, 250, 1000),
+        ("Ember", (28, 1000, 1000), (53, 1000, 1000), (43, 500, 1000)),
+        (
+            "Green",
+            (130, 1000, 550),
+            (130, 1000, 1000),
+            (130, 450, 1000),
         ),
-        p(
-            "Candy",
-            (330, 900, 1000),
-            (180, 800, 1000),
-            (330, 250, 1000),
+        (
+            "Lavender",
+            (270, 550, 1000),
+            (220, 450, 1000),
+            (220, 250, 1000),
         ),
-        p("Gold", (45, 1000, 1000), (240, 900, 1000), (45, 300, 1000)),
+        (
+            "Sorbet",
+            (45, 650, 1000),
+            (350, 650, 1000),
+            (350, 300, 1000),
+        ),
+        (
+            "Peach and mint",
+            (20, 550, 1000),
+            (150, 550, 1000),
+            (40, 250, 1000),
+        ),
     ]
+    .map(|(name, a, b, c)| Palette {
+        name: name.into(),
+        principal: hsv(a),
+        contraste: hsv(b),
+        suave: hsv(c),
+    })
+    .to_vec()
 }
 
 /// "Auto": a freshly generated sequence for every moment; the set's palettes rotate in order at

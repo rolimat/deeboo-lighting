@@ -260,7 +260,7 @@ fn piece_fields_are_public() {
 fn serde_round_trip() {
     let l = seeded(8);
     let json = serde_json::to_string(&l).expect("ser");
-    assert!(json.contains("\"schemaVersion\":2"), "{json}");
+    assert!(json.contains("\"schemaVersion\":3"), "{json}");
     assert!(json.contains("\"activeSet\""), "{json}");
     let back: Library = serde_json::from_str(&json).expect("de");
     assert_eq!(back, l);
@@ -300,13 +300,16 @@ fn resize_segments_pads_with_off_and_truncates() {
 #[test]
 fn palettes_combine() {
     let ps = light_core::builtin::palettes();
-    assert_eq!(ps.len(), 8);
+    assert_eq!(ps.len(), 9);
     let names: std::collections::HashSet<_> = ps.iter().map(|p| p.name.clone()).collect();
-    assert_eq!(names.len(), 8);
+    assert_eq!(names.len(), 9);
     for p in &ps {
-        let d = p.principal.h.abs_diff(p.contraste.h);
-        assert!(d.min(360 - d) >= 60, "{}", p.name);
-        assert!(p.suave.s <= 450 && p.suave.v >= 800, "{}", p.name);
+        assert_eq!(
+            light_core::library::validate_palette(p),
+            Ok(()),
+            "{}",
+            p.name
+        );
     }
 }
 
@@ -320,10 +323,10 @@ fn builtin_library_has_no_sequences() {
 #[test]
 fn first_run_seeds_auto_set() {
     let l = Library::builtin(10);
-    assert_eq!(l.palettes.len(), 8);
+    assert_eq!(l.palettes.len(), 9);
     let s = l.current_set().expect("active");
     assert_eq!(s.name, "Auto");
-    assert_eq!(s.palettes.len(), 8);
+    assert_eq!(s.palettes.len(), 9);
     for m in [&s.rhythm, &s.calm, &s.buildup] {
         assert_eq!(m.sequences, vec![SeqRef::Generated]);
     }

@@ -6,7 +6,7 @@ use crate::paint::Hsv;
 use crate::patterns::Pattern;
 use std::fmt;
 
-pub const SCHEMA_VERSION: u16 = 2;
+pub const SCHEMA_VERSION: u16 = 3;
 pub const MAX_PALETTES: usize = 32;
 pub const MAX_SEQUENCES: usize = 64;
 pub const MAX_SETS: usize = 16;
@@ -229,7 +229,7 @@ impl Library {
         changed
     }
 
-    /// First-run library (spec §6.3): the 8 built-in palettes, no sequences (the 35 patterns are
+    /// First-run library (spec §6.3): the 9 built-in palettes, no sequences (the 35 patterns are
     /// always available) and the active set "Auto". `library_store::load` only uses this when no
     /// stored library is usable.
     #[must_use]
