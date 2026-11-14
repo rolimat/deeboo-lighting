@@ -11,6 +11,7 @@ mod lan;
 mod library_store;
 mod midi;
 mod qr;
+mod refs_store;
 mod runtime;
 mod settings;
 mod strip;

@@ -25,6 +25,9 @@ use light_core::scene;
 /// when no wizard runs, so only a hanging network makes quitting slow.
 const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(22);
 
+/// The most the app waits at exit for the engine to save the detector references.
+const ENGINE_DONE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StripStatus {
@@ -568,7 +571,11 @@ impl AppState {
     /// App exit: a running wizard is cancelled (its cloud session revoked) before the engine stops.
     pub fn quit(&self, emit: &Emit) {
         self.wizard.shutdown(emit, QUIT_WAIT);
-        let _ = self.send(Input::Quit);
+        self.deliver(Input::Quit);
+        if let Some(h) = lock(&self.runtime).as_ref() {
+            // A closed channel (engine already gone) returns at once.
+            let _ = h.done.recv_timeout(ENGINE_DONE_WAIT);
+        }
     }
 }
 
@@ -1197,10 +1204,42 @@ mod tests {
     }
 
     #[test]
+    fn quit_returns_at_once_when_the_engine_is_gone_and_waits_for_it_otherwise() {
+        let state = AppState::default();
+        let emit: Emit = Arc::new(|_| {});
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let (done_tx, done) = std::sync::mpsc::sync_channel(1);
+        state.set_runtime(RuntimeHandle { tx, done });
+        let t = std::time::Instant::now();
+        std::thread::scope(|s| {
+            s.spawn(move || {
+                assert!(matches!(rx.recv(), Ok(Input::Quit)));
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                done_tx.send(()).unwrap();
+            });
+            state.quit(&emit);
+        });
+        assert!(t.elapsed() >= std::time::Duration::from_millis(100));
+        // Engine thread gone: both ends dropped, no wait.
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        drop(rx);
+        state.set_runtime(RuntimeHandle {
+            tx,
+            done: std::sync::mpsc::sync_channel(1).1,
+        });
+        let t = std::time::Instant::now();
+        state.quit(&emit);
+        assert!(t.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
     fn popover_report_sets_the_flag_and_wakes_the_engine() {
         let state = AppState::default();
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
-        state.set_runtime(RuntimeHandle { tx });
+        state.set_runtime(RuntimeHandle {
+            tx,
+            done: std::sync::mpsc::sync_channel(1).1,
+        });
         let flag = state.visible_flag();
         state.popover_reports_visible(true);
         assert!(flag.load(Ordering::Relaxed));
@@ -1637,7 +1676,10 @@ mod tests {
         // The retry: the library is already adapted, so there is nothing new to adapt.
         assert_eq!(state.adapt_library(6).unwrap(), None);
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
-        state.set_runtime(RuntimeHandle { tx });
+        state.set_runtime(RuntimeHandle {
+            tx,
+            done: std::sync::mpsc::sync_channel(1).1,
+        });
         let cfg = strip_store::StripConfig {
             id: "abc".into(),
             name: "n".into(),
@@ -1807,7 +1849,10 @@ mod tests {
         let state = AppState::default();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         tx.send(Input::PopoverShown).unwrap();
-        state.set_runtime(RuntimeHandle { tx });
+        state.set_runtime(RuntimeHandle {
+            tx,
+            done: std::sync::mpsc::sync_channel(1).1,
+        });
         (state, rx)
     }
 

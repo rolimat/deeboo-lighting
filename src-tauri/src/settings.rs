@@ -18,12 +18,13 @@ fn describe(e: &serde_json::Error) -> String {
     format!("{:?} at {}:{}", e.classify(), e.line(), e.column())
 }
 
-fn read_capped(path: &Path) -> io::Result<Option<String>> {
+/// Reads at most `max` bytes: `None` when the file is bigger.
+pub(crate) fn read_capped(path: &Path, max: u64) -> io::Result<Option<String>> {
     let mut text = String::new();
     std::fs::File::open(path)?
-        .take(MAX_BYTES + 1)
+        .take(max + 1)
         .read_to_string(&mut text)?;
-    Ok((text.len() as u64 <= MAX_BYTES).then_some(text))
+    Ok((text.len() as u64 <= max).then_some(text))
 }
 
 /// When the Dock icon shows; anything else is rejected by serde.
@@ -139,7 +140,7 @@ impl Default for Settings {
     }
 }
 
-fn check_name(what: &str, name: Option<&String>) -> Result<(), String> {
+pub(crate) fn check_name(what: &str, name: Option<&String>) -> Result<(), String> {
     let Some(n) = name else { return Ok(()) };
     if n.trim() != n
         || n.is_empty()
@@ -237,17 +238,17 @@ impl Settings {
 /// Defaults on a missing, corrupt or invalid file.
 #[must_use]
 pub fn load(path: &Path) -> Settings {
-    let text = match read_capped(path) {
+    let text = match read_capped(path, MAX_BYTES) {
         Ok(Some(t)) => t,
         Ok(None) => {
             log::warn!("settings too large, using defaults");
-            keep_aside(path);
+            keep_aside(path, &path.with_extension("json.bad"));
             return Settings::default();
         }
         Err(e) => {
             if e.kind() != io::ErrorKind::NotFound {
                 log::warn!("settings unreadable, using defaults: {e}");
-                keep_aside(path);
+                keep_aside(path, &path.with_extension("json.bad"));
             }
             return Settings::default();
         }
@@ -257,22 +258,21 @@ pub fn load(path: &Path) -> Settings {
             Ok(()) => s,
             Err(e) => {
                 log::warn!("settings invalid, using defaults: {e}");
-                keep_aside(path);
+                keep_aside(path, &path.with_extension("json.bad"));
                 Settings::default()
             }
         },
         Err(e) => {
             log::warn!("settings corrupt, using defaults: {}", describe(&e));
-            keep_aside(path);
+            keep_aside(path, &path.with_extension("json.bad"));
             Settings::default()
         }
     }
 }
 
 /// Spec §12: an invalid file is copied to `<name>.bad` so the next save never loses the user's data.
-fn keep_aside(path: &Path) {
-    let bad = path.with_extension("json.bad");
-    if let Err(e) = std::fs::copy(path, &bad) {
+pub(crate) fn keep_aside(path: &Path, bad: &Path) {
+    if let Err(e) = std::fs::copy(path, bad) {
         log::warn!("cannot keep a copy of the invalid settings: {e}");
     }
 }
