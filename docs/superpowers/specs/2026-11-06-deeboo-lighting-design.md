@@ -297,11 +297,15 @@ como sin estas reglas.
 Decisión del usuario 2026-11-14 (detalle y tablas en `2026-11-14-generated-sequences-palettes-fades-design.md`, que
 manda sobre esta sección):
 
-- Los 11 patrones parametrizados se sustituyen por **35 secuencias fijas** (Ritmo, Calma y Subidón), sobre una
-  **partición simétrica** de la tira en piezas (`parts.rs`): los grupos espaciales salen de la forma dibujada.
+- Los 11 patrones parametrizados se sustituyen por **35 secuencias fijas**: 15 Ritmo, 10 Calma y 10 Subidón.
+- Se definen sobre una **partición a lo largo de la tira** (orden de segmentos 1..N, no la forma dibujada; `parts.rs`)
+  en 4 partes: iguales si N es múltiplo de 4; si es múltiplo de 3 pero no de 4, 3 secciones iguales en las que la
+  central hace de partes 2 y 4; en otro caso simétricas, con el segmento central compartido si N es impar.
+- Ritmo cambia solo en beats enteros; cada cambio de Calma dura al menos 2 compases.
 - Los pasos priorizan un solo mensaje (§6.5). «Cualquier patrón» (Generated) **nunca repite** la secuencia anterior.
-- **Calma con fundidos:** cada secuencia Calma tiene un interruptor **Fade** (activado por defecto) que hace fundidos
-  entre pasos (`fade.rs`).
+- **Calma con fundidos:** cada secuencia Calma tiene un interruptor **Fade** (activado por defecto) que funde entre
+  pasos (`fade.rs`) durante 2 beats (un fotograma cada medio beat). Entrar o salir de Calma y cambiar de paleta son
+  cortes secos.
 
 ### 6.5 Motor de envío (estado → mensajes)
 
