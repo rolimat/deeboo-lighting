@@ -375,6 +375,7 @@ impl Engine {
         self.free_at = None;
         self.playing = None;
         self.resend = true;
+        self.cut = true;
         if self.cfg.lights_on && !self.clock.running() {
             self.rest_or_preview(now_us);
         }
@@ -387,6 +388,7 @@ impl Engine {
         if on != self.calibrating {
             self.calibrating = on;
             self.playing = None;
+            self.cut = true;
             self.resend = true;
             self.free_at = None;
             if !self.clock.running() && self.cfg.lights_on {
@@ -443,8 +445,11 @@ impl Engine {
         if !self.cfg.lights_on || self.preview.is_none() {
             return;
         }
-        if let (Some(desired), _) = self.step_scene(Moment::Rhythm, false) {
+        let (desired, changed) = self.step_scene(Moment::Rhythm, false);
+        self.cut &= !changed;
+        if let Some(desired) = desired {
             self.plan_now(now_us, &desired);
+            self.last_planned = Some(desired);
         }
         self.free_at = Some(now_us + PREVIEW_HALF_US);
     }
@@ -631,7 +636,8 @@ impl Engine {
         // shortcut: a half-beat first step is skipped on Start; only a forced Build-up has one.
         let first = start.then(|| self.step_scene(moment, true));
         let (desired, changed) = self.step_scene(moment, false);
-        self.cut = false;
+        // A cut waits for the step change that uses it (a reconnect mid-step does not spend it).
+        self.cut &= !(changed || start);
         let ((desired, changed), show_at) = match first {
             Some(d0) => (d0, at),
             None => (
@@ -715,7 +721,8 @@ impl Engine {
         if restart {
             self.fade_from = None;
         } else if changed {
-            let fading = moment == Moment::Calm && fade && !self.cut && fade::frames(len) > 1;
+            let fading =
+                sequence.moment == Moment::Calm && fade && !self.cut && fade::frames(len) > 1;
             self.fade_from = self.last_planned.take_if(|_| fading);
         }
         // The frame number counts half beats since the step began; the last frame is the target.

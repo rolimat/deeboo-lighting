@@ -1029,6 +1029,56 @@ fn preview_follows_the_clock_when_it_runs() {
     assert!(!after.contains(&111) && !after.contains(&222), "{after:?}");
 }
 
+/// Four-beat steps of two opposite colours on every segment, as a preview of `moment`.
+fn slow_preview(moment: Moment) -> (light_core::model::Palette, Sequence) {
+    let (palette, mut seq) = preview_pair();
+    seq.moment = moment;
+    seq.steps = vec![
+        uniform(StepLen::Four, Role::Principal),
+        uniform(StepLen::Four, Role::Contraste),
+    ];
+    (palette, seq)
+}
+
+fn mixed(sends: &[(u64, PaintCommand)]) -> bool {
+    hues(sends).iter().any(|h| ![111, 222].contains(h))
+}
+
+#[test]
+fn a_calm_preview_fades_even_when_the_show_is_not_calm() {
+    let mut s = sim125();
+    s.start();
+    s.beats_of(2, &mut none);
+    let out = s.e.set_preview(s.now, Some(slow_preview(Calm)));
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.beats_of(14, &mut none);
+    assert!(mixed(&s.sends[mark..]), "{:?}", hues(&s.sends[mark..]));
+}
+
+#[test]
+fn a_rhythm_preview_never_fades_even_when_the_show_is_calm() {
+    let mut s = sim125();
+    s.start();
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(2, &mut none);
+    let out = s.e.set_preview(s.now, Some(slow_preview(Rhythm)));
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.beats_of(14, &mut none);
+    assert_ne!(hues(&s.sends[mark..]), Vec::<u16>::new());
+    assert!(!mixed(&s.sends[mark..]), "{:?}", hues(&s.sends[mark..]));
+}
+
+#[test]
+fn a_calm_preview_without_a_clock_fades_after_its_first_cut() {
+    let mut s = sim125();
+    let out = s.e.set_preview(s.now, Some(slow_preview(Calm)));
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 6_000_000);
+    assert!(mixed(&s.sends), "{:?}", hues(&s.sends));
+}
+
 #[test]
 fn status_reports_the_playing_clip_and_its_progress() {
     let mut s = sim125();
@@ -1460,6 +1510,85 @@ fn fade_off_is_a_dry_cut() {
     assert_eq!(
         s.sends_in(T0 + (at as u64 + 1) * HALF, T0 + (at as u64 + 8) * HALF),
         vec![]
+    );
+}
+
+/// The two-step Calm show, forced Calm, `beats` beats in; also the colours of its steps.
+fn two_step_calm(beats: u64) -> (Library, Sim, Colour, Colour) {
+    let lib = calm_with(
+        vec![
+            uniform(StepLen::Four, Role::Principal),
+            uniform(StepLen::Four, Role::Suave),
+        ],
+        true,
+    );
+    let (p, q) = (
+        role_colour(&lib, Role::Principal),
+        role_colour(&lib, Role::Suave),
+    );
+    let s = calm_run(&lib, beats);
+    (lib, s, p, q)
+}
+
+fn is_cut_colour(lib: &Library, c: Colour, p: Colour, q: Colour) -> bool {
+    c.is_none()
+        || [p, q, role_colour(lib, Role::Contraste)].contains(&c)
+        || c.is_some_and(|h| h.s == 0)
+}
+
+#[test]
+fn a_reconnect_mid_step_makes_the_next_step_change_a_cut() {
+    let (lib, mut s, p, q) = two_step_calm(1);
+    s.e.strip_reconnected();
+    s.beats_of(8, &mut none);
+    let tl = timeline(&s, 20);
+    let at = find(&tl, find(&tl, 0, p), q);
+    assert!(
+        tl[..=at]
+            .iter()
+            .flatten()
+            .all(|c| is_cut_colour(&lib, *c, p, q)),
+        "{tl:?}"
+    );
+}
+
+#[test]
+fn a_preview_toggle_in_calm_makes_the_next_step_a_cut() {
+    let (lib, mut s, p, q) = two_step_calm(6); // the second step plays
+    let n0 = ((s.now - T0) / HALF) as usize;
+    let out = s.e.set_preview(s.now, Some(preview_pair()));
+    s.record(s.now, out);
+    let out = s.e.set_preview(s.now, None);
+    s.record(s.now, out);
+    s.beats_of(3, &mut none);
+    let tl = timeline(&s, n0 as u64 + 6);
+    assert!(
+        tl[n0..]
+            .iter()
+            .flatten()
+            .all(|c| is_cut_colour(&lib, *c, p, q)),
+        "{:?}",
+        &tl[n0..]
+    );
+}
+
+#[test]
+fn the_end_of_calibration_makes_the_next_step_a_cut() {
+    let (lib, mut s, p, q) = two_step_calm(6);
+    let n0 = ((s.now - T0) / HALF) as usize;
+    let out = s.e.calibrate(s.now, true);
+    s.record(s.now, out);
+    let out = s.e.calibrate(s.now, false);
+    s.record(s.now, out);
+    s.beats_of(3, &mut none);
+    let tl = timeline(&s, n0 as u64 + 6);
+    assert!(
+        tl[n0..]
+            .iter()
+            .flatten()
+            .all(|c| is_cut_colour(&lib, *c, p, q)),
+        "{:?}",
+        &tl[n0..]
     );
 }
 
