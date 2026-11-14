@@ -8,7 +8,9 @@ use std::path::Path;
 use light_core::detect::{LearnedRefs, REF_DB_RANGE};
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{MAX_INPUTS, SYSTEM_DEFAULT, check_name, keep_aside, read_capped};
+use crate::settings::{
+    MAX_INPUTS, SYSTEM_DEFAULT, check_name, keep_aside, read_capped, write_atomic,
+};
 
 pub const FILE: &str = "detector-refs.json";
 pub const VERSION: u16 = 1;
@@ -80,18 +82,17 @@ impl RefsFile {
 /// first, so the next save never loses it.
 #[must_use]
 pub fn load(path: &Path) -> RefsFile {
-    let bad = path.with_extension("json.bad");
     let text = match read_capped(path, MAX_BYTES) {
         Ok(Some(t)) => t,
         Ok(None) => {
             log::warn!("detector references too large, ignored");
-            keep_aside(path, &bad);
+            keep_aside(path);
             return RefsFile::default();
         }
         Err(e) => {
             if e.kind() != io::ErrorKind::NotFound {
                 log::warn!("detector references unreadable, ignored: {e}");
-                keep_aside(path, &bad);
+                keep_aside(path);
             }
             return RefsFile::default();
         }
@@ -108,7 +109,7 @@ pub fn load(path: &Path) -> RefsFile {
             e.column()
         ),
     }
-    keep_aside(path, &bad);
+    keep_aside(path);
     RefsFile::default()
 }
 
@@ -117,12 +118,7 @@ pub fn load(path: &Path) -> RefsFile {
 /// # Errors
 /// Returns the I/O (or serialisation) error.
 pub fn save(path: &Path, f: &RefsFile) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(f)?)?;
-    std::fs::rename(&tmp, path)
+    write_atomic(path, &serde_json::to_vec(f)?)
 }
 
 #[cfg(test)]

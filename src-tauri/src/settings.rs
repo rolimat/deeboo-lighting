@@ -242,13 +242,13 @@ pub fn load(path: &Path) -> Settings {
         Ok(Some(t)) => t,
         Ok(None) => {
             log::warn!("settings too large, using defaults");
-            keep_aside(path, &path.with_extension("json.bad"));
+            keep_aside(path);
             return Settings::default();
         }
         Err(e) => {
             if e.kind() != io::ErrorKind::NotFound {
                 log::warn!("settings unreadable, using defaults: {e}");
-                keep_aside(path, &path.with_extension("json.bad"));
+                keep_aside(path);
             }
             return Settings::default();
         }
@@ -258,36 +258,41 @@ pub fn load(path: &Path) -> Settings {
             Ok(()) => s,
             Err(e) => {
                 log::warn!("settings invalid, using defaults: {e}");
-                keep_aside(path, &path.with_extension("json.bad"));
+                keep_aside(path);
                 Settings::default()
             }
         },
         Err(e) => {
             log::warn!("settings corrupt, using defaults: {}", describe(&e));
-            keep_aside(path, &path.with_extension("json.bad"));
+            keep_aside(path);
             Settings::default()
         }
     }
 }
 
-/// Spec §12: an invalid file is copied to `<name>.bad` so the next save never loses the user's data.
-pub(crate) fn keep_aside(path: &Path, bad: &Path) {
-    if let Err(e) = std::fs::copy(path, bad) {
-        log::warn!("cannot keep a copy of the invalid settings: {e}");
+/// Spec §12: an invalid file is copied to `<name>.json.bad` so the next save never loses the user's data.
+pub(crate) fn keep_aside(path: &Path) {
+    if let Err(e) = std::fs::copy(path, path.with_extension("json.bad")) {
+        log::warn!("cannot keep a copy of an invalid file: {e}");
     }
 }
 
-/// Writes to a temp file next to `path`, then renames over it.
-///
-/// # Errors
-/// Returns the I/O (or serialisation) error.
-pub fn save(path: &Path, s: &Settings) -> io::Result<()> {
+/// Writes `bytes` to a temp file next to `path`, then renames over it.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(s)?)?;
+    std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path)
+}
+
+/// Atomic write of the settings file.
+///
+/// # Errors
+/// Returns the I/O (or serialisation) error.
+pub fn save(path: &Path, s: &Settings) -> io::Result<()> {
+    write_atomic(path, &serde_json::to_vec_pretty(s)?)
 }
 
 /// Detector thresholds: the panel sets the base, the popover's sensitivity shifts the calm ones
@@ -311,6 +316,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("settings.json");
         (dir, p)
+    }
+
+    #[test]
+    fn keep_aside_copies_next_to_the_file_as_json_bad() {
+        let (_d, p) = tmp();
+        std::fs::write(&p, b"x").unwrap();
+        keep_aside(&p);
+        assert_eq!(std::fs::read(p.with_extension("json.bad")).unwrap(), b"x");
     }
 
     #[test]
