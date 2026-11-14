@@ -24,6 +24,7 @@ const hsv = (h: number) => ({ h, s: 1000, v: 1000 });
 const seq = (name: string, moment: string) => ({
   name,
   moment,
+  fade: true,
   steps: [{ len: "four", roles: ["principal", "off"] }],
 });
 const ms = (sequences: Library["sets"][number]["rhythm"]["sequences"], bars = 4) => ({
@@ -32,7 +33,7 @@ const ms = (sequences: Library["sets"][number]["rhythm"]["sequences"], bars = 4)
   interval: { bars },
 });
 const lib = (): Library => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   shape: { pieces: [] },
   palettes: [
     [1, { name: "Neon", principal: hsv(300), contraste: hsv(180), suave: hsv(260) }],
@@ -156,8 +157,27 @@ it("drop_appends_clip", async () => {
   expect(q("[data-track='rhythm'] [data-zone]")?.textContent).toBe("Drop sequences here");
   await dragDrop(q("[data-drag-seq='13']"), q("[data-track='rhythm'] [data-zone]"));
   expect(refs("rhythm")).toEqual([{ id: 10 }, { id: 13 }, { id: 13 }]);
-  await dragDrop(q("[data-drag-pattern='snake']"), q("[data-track='rhythm'] [data-zone]"));
-  expect(refs("rhythm")?.at(-1)).toEqual({ pattern: "snake" });
+  await dragDrop(q("[data-drag-pattern='crossPairs']"), q("[data-track='rhythm'] [data-zone]"));
+  expect(refs("rhythm")?.at(-1)).toEqual({ pattern: "crossPairs" });
+});
+
+it("pattern_browser_lists_35_grouped", async () => {
+  const all = [...document.querySelectorAll("[data-drag-pattern]")]
+    .filter((e) => e.getAttribute("data-drag-pattern") !== "any")
+    .map((e) => e.textContent?.trim());
+  const names = (m: string) =>
+    m === "rhythm" ? all.slice(0, 15) : m === "calm" ? all.slice(15, 25) : all.slice(25);
+  expect(all).toHaveLength(35);
+  expect(names("rhythm")).toHaveLength(15);
+  expect(names("rhythm")[0]).toBe("Cross pairs");
+  expect(names("rhythm")[14]).toBe("Ends, centre, all, dark");
+  expect(names("calm")).toHaveLength(10);
+  expect(names("buildUp")).toHaveLength(10);
+  await dragDrop(
+    q("[data-drag-pattern='convergeThenStrobe']"),
+    q("[data-track='buildup'] [data-zone]"),
+  );
+  expect(refs("buildup")?.at(-1)).toEqual({ pattern: "convergeThenStrobe" });
 });
 
 it("drag_reorders_clips", async () => {

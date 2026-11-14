@@ -242,6 +242,8 @@ como sin estas reglas.
   Límite (2026-11-13): si la textura suave dura más de 2 frases (64 beats sin posición), vuelve a **Ritmo** y las
   referencias se aprenden de nuevo con el nivel nuevo (p. ej. la siguiente canción es más baja). Un break de verdad
   (silencio) no termina así.
+- **Referencias por entrada (2026-11-14):** las referencias aprendidas se guardan por entrada de audio en
+  `detector-refs.json`, junto a `settings.json`, y sobreviven a los reinicios.
 - **Drop en el 1 de compás:** desde Subidón, si el beat 1 de un compás está lleno (bombo de vuelta con salto y
   sub-bajo), basta ese beat para pasar a **Ritmo**.
 - **Riser en la segunda mitad de la frase:** si el compás que cierra el riser está en la segunda mitad de la frase
@@ -285,29 +287,25 @@ como sin estas reglas.
   - Por defecto *(mi decisión)*: Ritmo cada 1 frase; Calma, una secuencia por break; Subidón cada 2 compases.
   - **Paleta nueva en cada drop** *(mi decisión)*.
 - **Set de serie "Auto":** todo Generated y todas las paletas.
-- La app trae **~8 paletas y ~10 secuencias** de ejemplo *(mi decisión)*. Las paletas tienen que combinar, y para Calma,
-  Suave es un color claro.
+- La app trae **9 paletas** de serie y ninguna secuencia sembrada (las secuencias son las 35 fijas de §6.4)
+  *(2026-11-14)*. Las paletas tienen que combinar, y para Calma, Suave es un color claro. «Nueva paleta» crea una
+  paleta análoga en pastel.
 - Los cambios de secuencia o paleta caen siempre en un **límite de compás** (de frase, si el intervalo es en frases).
 
 ### 6.4 Generación en tiempo real
 
-Biblioteca de patrones por momento. Ejemplos dados por el usuario:
+Decisión del usuario 2026-11-14 (detalle y tablas en `2026-11-14-generated-sequences-palettes-fades-design.md`, que
+manda sobre esta sección):
 
-- **Ritmo:**
-  - mitades;
-  - extremos ↔ centro (1-3 y 8-10 en el beat 1, 4-7 en el beat 2);
-  - pares ↔ impares;
-  - cuartos, encendiendo 2 grupos y luego los otros 2;
-  - serpiente (1, 2, 3…);
-  - espejo.
-- **Calma:** solo algunos segmentos encendidos, que cambian o se desplazan despacio (cada 4–8 beats), con colores Suave.
-- **Subidón:** destellos de colores por grupos, juegos de segmentos y serpiente rápida, cada beat o medio beat.
-
-Reglas:
-- Los grupos espaciales (izquierda/derecha, arriba/abajo, centro/extremos) se calculan a partir de la **forma** dibujada.
-- Los patrones priorizan **pasos de un solo mensaje** (§6.5).
-- Generated produce una secuencia nueva en cada intervalo de cambio y alterna patrones y parámetros. *(constructor:
-  algoritmo de variación)*
+- Los 11 patrones parametrizados se sustituyen por **35 secuencias fijas**: 15 Ritmo, 10 Calma y 10 Subidón.
+- Se definen sobre una **partición a lo largo de la tira** (orden de segmentos 1..N, no la forma dibujada; `parts.rs`)
+  en 4 partes: iguales si N es múltiplo de 4; si es múltiplo de 3 pero no de 4, 3 secciones iguales en las que la
+  central hace de partes 2 y 4; en otro caso simétricas, con el segmento central compartido si N es impar.
+- Ritmo cambia solo en beats enteros; cada cambio de Calma dura al menos 2 compases.
+- Los pasos priorizan un solo mensaje (§6.5). «Cualquier patrón» (Generated) **nunca repite** la secuencia anterior.
+- **Calma con fundidos:** cada secuencia Calma tiene un interruptor **Fade** (activado por defecto) que funde entre
+  pasos (`fade.rs`) durante 2 beats (un fotograma cada medio beat). Entrar o salir de Calma y cambiar de paleta son
+  cortes secos.
 
 ### 6.5 Motor de envío (estado → mensajes)
 

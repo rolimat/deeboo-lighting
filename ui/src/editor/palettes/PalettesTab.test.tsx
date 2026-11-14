@@ -20,7 +20,7 @@ import type { BarActions } from "../sequences/SequencesTab";
 
 const hsv = (h: number, s = 1000, v = 1000) => ({ h, s, v });
 const lib = (): Library => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   shape: { pieces: Array.from({ length: 3 }, (_, i) => ({ x: i * 2, y: 0, angle: 0, len: 1 })) },
   palettes: [
     [1, { name: "Neon", principal: hsv(300), contraste: hsv(180), suave: hsv(260, 600, 700) }],
@@ -33,6 +33,7 @@ const lib = (): Library => ({
       {
         name: "Pulse",
         moment: "rhythm",
+        fade: true,
         steps: [{ len: "one", roles: ["principal", "contraste", "suave"] }],
       },
     ],
@@ -255,6 +256,17 @@ it("browser_lists_palettes_with_three_swatches_and_new_palette", async () => {
   expect(root.textContent).toContain("Main colour · most segments");
   expect(root.textContent).toContain("Accents and hits");
   expect(root.textContent).toContain("Background, calm moments");
+});
+
+it("new_palette_is_pastel", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  await mount();
+  const b = [...root.querySelectorAll("button")].find((x) =>
+    x.textContent?.includes("New palette"),
+  );
+  await click(b);
+  expect(store.lib?.palettes.at(-1)?.[1].principal).toEqual({ h: 180, s: 600, v: 1000 });
+  vi.mocked(Math.random).mockRestore();
 });
 
 it("a_duplicate_stays_selected_after_renumbering_and_recolour_edits_it", async () => {

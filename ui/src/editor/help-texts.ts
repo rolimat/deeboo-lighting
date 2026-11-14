@@ -77,6 +77,7 @@ export const H = {
   } satisfies Record<MomentName, string>,
   previewPalette: "The palette used to show this sequence here; it is not saved with it.",
   duplicateToEdit: "Copy this generated sequence into your library so you can edit it.",
+  fade: "Fade between steps in Calm; off makes every change a cut.",
   simulation: "Play or pause the preview of this sequence.",
   clipLength: "Drag, or use the arrow keys, to change the length in whole bars.",
   halve: "Halve the length: keeps the first half.",

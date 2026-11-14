@@ -1,10 +1,8 @@
 //! Built-in palette and sequences (spec §6.3, §6.4).
 use crate::detect::Moment;
-use crate::groups::Groups;
 use crate::library::{Interval, MomentSet, Order, PaletteChange, SeqRef, Set};
 use crate::model::{Palette, Role, Sequence, Step, StepLen};
 use crate::paint::Hsv;
-use crate::patterns::{Params, Pattern, build};
 
 #[must_use]
 pub fn test_palette() -> Palette {
@@ -77,109 +75,69 @@ pub fn sequence(moment: Moment, segments: u8) -> Sequence {
     };
     Sequence {
         name: name.into(),
+        fade: true,
         moment,
         steps,
     }
 }
 
-/// Eight palettes: Principal/Contraste at least 60 degrees apart, Suave light (S <= 450, V >= 800).
+/// Nine palettes (HSV, 0-360 / 0-1000): Principal and Contraste clearly apart, Suave light.
 #[must_use]
 pub fn palettes() -> Vec<Palette> {
-    let p = |name: &str, a: (u16, u16, u16), b: (u16, u16, u16), c: (u16, u16, u16)| {
-        let hsv = |(h, s, v)| Hsv { h, s, v };
-        Palette {
-            name: name.into(),
-            principal: hsv(a),
-            contraste: hsv(b),
-            suave: hsv(c),
-        }
-    };
-    vec![
-        p("Sunset", (20, 950, 1000), (280, 900, 950), (30, 300, 1000)),
-        p(
+    let hsv = |(h, s, v)| Hsv { h, s, v };
+    [
+        (
             "Ocean",
             (190, 1000, 1000),
             (320, 900, 1000),
             (190, 300, 1000),
         ),
-        p(
-            "Club",
-            (300, 1000, 1000),
-            (180, 1000, 1000),
-            (300, 250, 1000),
+        (
+            "Laser",
+            (125, 1000, 1000),
+            (325, 1000, 1000),
+            (160, 600, 1000),
         ),
-        p(
-            "Fire and ice",
-            (10, 1000, 1000),
-            (210, 1000, 1000),
-            (20, 300, 1000),
+        ("UV", (257, 1000, 1000), (177, 1000, 1000), (282, 500, 1000)),
+        (
+            "Deep sea",
+            (197, 1000, 1000),
+            (157, 1000, 1000),
+            (182, 400, 1000),
         ),
-        p("Forest", (120, 900, 900), (300, 800, 1000), (120, 300, 950)),
-        p(
-            "Aurora",
-            (160, 900, 1000),
-            (270, 900, 1000),
-            (200, 250, 1000),
+        ("Ember", (28, 1000, 1000), (53, 1000, 1000), (43, 500, 1000)),
+        (
+            "Green",
+            (130, 1000, 550),
+            (130, 1000, 1000),
+            (130, 450, 1000),
         ),
-        p(
-            "Candy",
-            (330, 900, 1000),
-            (180, 800, 1000),
-            (330, 250, 1000),
+        (
+            "Lavender",
+            (270, 550, 1000),
+            (220, 450, 1000),
+            (220, 250, 1000),
         ),
-        p("Gold", (45, 1000, 1000), (240, 900, 1000), (45, 300, 1000)),
-    ]
-}
-
-/// Ten sequences for the strip: 4 Rhythm, 3 Calm, 3 Build-up, fixed params.
-#[must_use]
-pub fn sequences(n: u8, groups: &Groups) -> Vec<Sequence> {
-    let mk = |pat, step, roles, reverse, density| {
-        let params = Params {
-            step,
-            roles,
-            reverse,
-            density,
-        };
-        build(pat, &params, groups, n)
-    };
-    let (pc, cp) = (
-        (Role::Principal, Role::Contraste),
-        (Role::Contraste, Role::Principal),
-    );
-    let calm = (Role::Suave, Role::Off);
-    let mut drift_back = mk(Pattern::Drift, StepLen::Four, calm, true, 2);
-    drift_back.name = "Drift back".into();
-    vec![
-        mk(Pattern::Halves, StepLen::One, pc, false, 1),
-        mk(Pattern::EndsCentre, StepLen::Two, cp, false, 1),
-        mk(Pattern::Snake, StepLen::One, pc, false, 2),
-        mk(Pattern::Quarters, StepLen::Two, pc, true, 1),
-        mk(Pattern::Drift, StepLen::Four, calm, false, 1),
-        mk(Pattern::Sparse, StepLen::Four, calm, false, 1),
-        drift_back,
-        mk(
-            Pattern::GroupFlash,
-            StepLen::Half,
-            (Role::Contraste, Role::Off),
-            false,
-            1,
+        (
+            "Sorbet",
+            (45, 650, 1000),
+            (350, 650, 1000),
+            (350, 300, 1000),
         ),
-        mk(
-            Pattern::FastSnake,
-            StepLen::Half,
-            (Role::White, Role::Off),
-            false,
-            2,
-        ),
-        mk(
-            Pattern::Strobe,
-            StepLen::Half,
-            (Role::White, Role::Off),
-            false,
-            1,
+        (
+            "Peach and mint",
+            (20, 550, 1000),
+            (150, 550, 1000),
+            (40, 250, 1000),
         ),
     ]
+    .map(|(name, a, b, c)| Palette {
+        name: name.into(),
+        principal: hsv(a),
+        contraste: hsv(b),
+        suave: hsv(c),
+    })
+    .to_vec()
 }
 
 /// "Auto": a freshly generated sequence for every moment; the set's palettes rotate in order at

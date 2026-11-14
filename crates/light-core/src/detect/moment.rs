@@ -206,6 +206,27 @@ impl Ring {
         self.buf[(self.head + i) % self.buf.len()]
     }
 
+    /// Pushes the newest `cap` finite values of `vals`, clamped to `REF_DB_RANGE`.
+    fn fill(&mut self, vals: &[f32]) {
+        let ok = vals.iter().filter(|v| v.is_finite());
+        let skip = ok.clone().count().saturating_sub(self.cap);
+        for v in ok.skip(skip) {
+            self.push(v.clamp(*REF_DB_RANGE.start(), *REF_DB_RANGE.end()));
+        }
+    }
+
+    /// Keeps only the newest `n` values.
+    fn keep_newest(&mut self, n: usize) {
+        if self.len() > n {
+            let vals: Vec<f32> = (self.len() - n..self.len()).map(|i| self.get(i)).collect();
+            self.buf.clear();
+            self.head = 0;
+            for v in vals {
+                self.push(v);
+            }
+        }
+    }
+
     /// Median of the stored values; `scratch` has the same capacity as the ring.
     fn median(&self, scratch: &mut Vec<f32>) -> f32 {
         scratch.clear();
@@ -223,6 +244,18 @@ fn db(x: f32) -> f32 {
 }
 
 const REF_MIN_BEATS: usize = 8;
+
+/// dB range a stored reference value may take (`db()` floors at -120).
+pub const REF_DB_RANGE: std::ops::RangeInclusive<f32> = -130.0..=20.0;
+
+/// The learned level references of a detector as per-beat dB values, oldest first.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct LearnedRefs {
+    pub kick: Vec<f32>,
+    pub sub: Vec<f32>,
+    pub high: Vec<f32>,
+}
 /// A riser bar may sit this far under the highest bar before it.
 const MONO_TOL: f32 = 0.5;
 
@@ -355,6 +388,36 @@ impl MomentDetector {
 
     pub fn reset(&mut self) {
         *self = MomentDetector::new(self.p, 0.0);
+    }
+
+    /// The three reference rings, oldest value first.
+    #[must_use]
+    pub fn export_refs(&self) -> LearnedRefs {
+        let (lo, hi) = (*REF_DB_RANGE.start(), *REF_DB_RANGE.end());
+        let ring = |r: &Ring| (0..r.len()).map(|i| r.get(i).clamp(lo, hi)).collect();
+        LearnedRefs {
+            kick: ring(&self.kick_hist),
+            sub: ring(&self.sub_hist),
+            high: ring(&self.high_hist),
+        }
+    }
+
+    /// `reset()`, then fills the rings with the newest `history_beats` finite values clamped to
+    /// `REF_DB_RANGE`, cut to the shortest ring. The moment is Rhythm, and references are warm once there are `REF_MIN_BEATS`.
+    pub fn import_refs(&mut self, r: &LearnedRefs) {
+        self.reset();
+        self.kick_hist.fill(&r.kick);
+        self.sub_hist.fill(&r.sub);
+        self.high_hist.fill(&r.high);
+        // The three rings grow together; `on_beat` takes medians of all of them.
+        let n = self
+            .kick_hist
+            .len()
+            .min(self.sub_hist.len())
+            .min(self.high_hist.len());
+        for h in [&mut self.kick_hist, &mut self.sub_hist, &mut self.high_hist] {
+            h.keep_newest(n);
+        }
     }
 
     /// Adds this beat to the current bar of highs; when a bar completes, tells whether the last
@@ -704,6 +767,96 @@ fn min_of(w: &[f32]) -> f32 {
 mod tests {
     use super::*;
     use crate::clock::PhraseBars;
+
+    /// A detector after `n` groove beats (same signal as `groove_at`).
+    fn trained(n: usize) -> (MomentDetector, BandAnalyzer) {
+        let lens = beats(128.0, n);
+        let sig = synth(&lens, |_| true, |_| true, |_| 1.0);
+        let mut a = BandAnalyzer::new(FS);
+        let mut d = MomentDetector::new(DetectorParams::default(), a.hop_len() as f32 / FS as f32);
+        let mut pos = 0;
+        for (i, &len) in lens.iter().enumerate() {
+            a.process(&sig[pos..pos + len], &mut |f| d.push(f));
+            pos += len;
+            d.on_beat(Some(Position::at(i as u64, false, PhraseBars::Eight)));
+        }
+        (d, a)
+    }
+
+    #[test]
+    fn refs_round_trip() {
+        let (mut orig, mut a) = trained(80);
+        let refs = orig.export_refs();
+        assert_eq!(
+            (refs.kick.len(), refs.sub.len(), refs.high.len()),
+            (64, 64, 64)
+        );
+        let mut fresh =
+            MomentDetector::new(DetectorParams::default(), a.hop_len() as f32 / FS as f32);
+        fresh.import_refs(&refs);
+        assert_eq!(fresh.export_refs(), refs);
+        assert_eq!(fresh.moment(), Moment::Rhythm);
+        let beat = synth(&beats(128.0, 1), |_| true, |_| true, |_| 1.0);
+        for d in [&mut orig, &mut fresh] {
+            a.process(&beat, &mut |f| d.push(f));
+        }
+        let at = Some(Position::at(80, false, PhraseBars::Eight));
+        let kick_ref = |d: &mut MomentDetector| d.on_beat(at).1.map(|f| f.kick_ref_db);
+        let (o, f) = (kick_ref(&mut orig), kick_ref(&mut fresh));
+        assert!(o.is_some());
+        assert_eq!(o, f);
+    }
+
+    #[test]
+    fn import_with_empty_sub_and_high_never_panics_on_beat() {
+        let mut d = MomentDetector::new(DetectorParams::default(), 0.0058);
+        d.import_refs(&LearnedRefs {
+            kick: vec![-20.0; 64],
+            sub: vec![],
+            high: vec![],
+        });
+        let e = d.export_refs();
+        assert_eq!((e.kick.len(), e.sub.len(), e.high.len()), (0, 0, 0));
+        let mut a = BandAnalyzer::new(FS);
+        let beat = synth(&beats(128.0, 1), |_| true, |_| true, |_| 1.0);
+        for i in 0..10 {
+            a.process(&beat, &mut |f| d.push(f));
+            d.on_beat(Some(Position::at(i, false, PhraseBars::Eight)));
+        }
+    }
+
+    #[test]
+    fn export_clamps_to_ref_range() {
+        let mut d = MomentDetector::new(DetectorParams::default(), 0.0058);
+        d.kick_hist.push(500.0);
+        d.sub_hist.push(-500.0);
+        d.high_hist.push(-20.0);
+        let e = d.export_refs();
+        assert_eq!(
+            (e.kick, e.sub, e.high),
+            (vec![20.0], vec![-130.0], vec![-20.0])
+        );
+    }
+
+    #[test]
+    fn import_bounds_values() {
+        let mut d = MomentDetector::new(DetectorParams::default(), 0.0058);
+        let mut kick = vec![f32::NAN, f32::INFINITY, -500.0, f32::NEG_INFINITY];
+        kick.extend((0..100).map(|i| i as f32 / 10.0));
+        let mut sub = vec![-500.0, f32::NAN];
+        sub.extend((0..70).map(|i| i as f32 / 10.0));
+        let r = LearnedRefs {
+            kick,
+            sub,
+            high: vec![f32::NAN, 500.0, 1.0],
+        };
+        d.import_refs(&r);
+        let e = d.export_refs();
+        // Rings are cut to the shortest (2 finite highs), newest values kept.
+        assert_eq!(e.kick, vec![9.8, 9.9]);
+        assert_eq!(e.sub, vec![6.8, 6.9]);
+        assert_eq!(e.high, vec![20.0, 1.0]);
+    }
 
     #[test]
     fn ring_keeps_at_most_its_capacity() {

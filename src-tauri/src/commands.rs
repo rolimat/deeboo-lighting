@@ -25,6 +25,9 @@ use light_core::scene;
 /// when no wizard runs, so only a hanging network makes quitting slow.
 const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(22);
 
+/// The most the app waits at exit for the engine to save the detector references.
+const ENGINE_DONE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StripStatus {
@@ -568,7 +571,13 @@ impl AppState {
     /// App exit: a running wizard is cancelled (its cloud session revoked) before the engine stops.
     pub fn quit(&self, emit: &Emit) {
         self.wizard.shutdown(emit, QUIT_WAIT);
-        let _ = self.send(Input::Quit);
+        self.deliver(Input::Quit);
+        // Taken out of the lock: nothing else may wait on it while this waits for the engine.
+        let handle = lock(&self.runtime).take();
+        if let Some(h) = handle {
+            // A closed channel (engine already gone) returns at once.
+            let _ = h.done.recv_timeout(ENGINE_DONE_WAIT);
+        }
     }
 }
 
@@ -711,16 +720,14 @@ pub fn message_counts(
     message_counts_of(&state.library(), &sequence, palette_id)
 }
 
-/// One example of `pattern` with random parameters, for the library's own segment count and shape
-/// (every sequence in the library matches it; no strip needed).
+/// `pattern` for the library's own segment count (every sequence in the library matches it; no
+/// strip needed). Deterministic.
 fn pattern_sequence_of(
     lib: &Library,
     pattern: light_core::patterns::Pattern,
-    seed: u64,
 ) -> Result<Sequence, String> {
     let n = lib.segments();
-    let groups = light_core::groups::groups(&lib.shape);
-    let seq = light_core::generator::Generator::new(seed).pattern(pattern, &groups, n);
+    let seq = light_core::patterns::build(pattern, n);
     seq.validate(n)
         .map_err(|_| "Could not build that pattern for this library.".to_string())?;
     Ok(seq)
@@ -732,16 +739,14 @@ fn pattern_sequence_of(
 pub fn pattern_sequence(
     state: tauri::State<'_, AppState>,
     pattern: light_core::patterns::Pattern,
-    seed: u64,
 ) -> Result<Sequence, String> {
-    pattern_sequence_of(&state.library(), pattern, seed)
+    pattern_sequence_of(&state.library(), pattern)
 }
 
 /// One example of what Generated would play for `moment`, built for the saved shape and a fresh seed.
 fn preview_generated_of(lib: &Library, moment: Moment, seed: u64) -> Result<Sequence, String> {
     let n = lib.segments();
-    let groups = light_core::groups::groups(&lib.shape);
-    let seq = light_core::generator::Generator::new(seed).next(moment, &groups, n);
+    let seq = light_core::generator::Generator::new(seed).next(moment, n);
     seq.validate(n)
         .map_err(|_| "Could not generate a sequence for this strip.".to_string())?;
     Ok(seq)
@@ -844,7 +849,7 @@ fn preview_sequence_of(
     light_core::library::validate_palette(&palette).map_err(|e| e.to_string())?;
     let seq = match clip {
         SeqRef::Id(id) => return preview_palette_of(lib, palette, id),
-        SeqRef::Pattern(p) => pattern_sequence_of(lib, p, seed)?,
+        SeqRef::Pattern(p) => pattern_sequence_of(lib, p)?,
         SeqRef::Generated => preview_generated_of(lib, moment, seed)?,
     };
     Ok(Box::new((palette, seq)))
@@ -1153,7 +1158,7 @@ mod tests {
     #[test]
     fn preview_palette_validates_everything() {
         use light_core::paint::Hsv;
-        let lib = Library::builtin(10);
+        let lib = crate::library_store::seeded_builtin(10);
         let id = lib.sequences[0].0;
         let pal = lib.palettes[0].1.clone();
         let (p, s) = *preview_palette_of(&lib, pal.clone(), id).unwrap();
@@ -1171,14 +1176,14 @@ mod tests {
     fn preview_sequence_resolves_every_kind_of_clip() {
         use light_core::library::SeqRef;
         use light_core::paint::Hsv;
-        let lib = Library::builtin(10);
+        let lib = crate::library_store::seeded_builtin(10);
         let id = lib.sequences[0].0;
         let pal = lib.palettes[0].1.clone();
         let m = Moment::Rhythm;
         let (_, s) = *preview_sequence_of(&lib, pal.clone(), SeqRef::Id(id), m, 1).unwrap();
         assert_eq!(s.name, lib.sequences[0].1.name);
         assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Generated, m, 1).is_ok());
-        let pat = light_core::patterns::Pattern::Halves;
+        let pat = light_core::patterns::Pattern::CrossPairs;
         assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Pattern(pat), m, 1).is_ok());
         assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Id(999_999), m, 1).is_err());
         let mut bad = pal;
@@ -1201,10 +1206,66 @@ mod tests {
     }
 
     #[test]
+    fn quit_returns_at_once_when_the_engine_is_gone_and_waits_for_it_otherwise() {
+        let state = AppState::default();
+        let emit: Emit = Arc::new(|_| {});
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let (done_tx, done) = std::sync::mpsc::sync_channel(1);
+        state.set_runtime(RuntimeHandle { tx, done });
+        let t = std::time::Instant::now();
+        std::thread::scope(|s| {
+            s.spawn(move || {
+                assert!(matches!(rx.recv(), Ok(Input::Quit)));
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                done_tx.send(()).unwrap();
+            });
+            state.quit(&emit);
+        });
+        assert!(t.elapsed() >= std::time::Duration::from_millis(100));
+        // Engine thread gone: both ends dropped, no wait.
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        drop(rx);
+        state.set_runtime(RuntimeHandle {
+            tx,
+            done: std::sync::mpsc::sync_channel(1).1,
+        });
+        let t = std::time::Instant::now();
+        state.quit(&emit);
+        assert!(t.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn quit_does_not_hold_the_runtime_lock_while_waiting_for_the_engine() {
+        let state = AppState::default();
+        let emit: Emit = Arc::new(|_| {});
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let (done_tx, done) = std::sync::mpsc::sync_channel(1);
+        let (got_tx, got) = std::sync::mpsc::channel();
+        state.set_runtime(RuntimeHandle { tx, done });
+        std::thread::scope(|s| {
+            s.spawn(|| state.quit(&emit));
+            s.spawn(move || {
+                assert!(matches!(rx.recv(), Ok(Input::Quit)));
+                got_tx.send(()).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(600));
+                done_tx.send(()).unwrap();
+            });
+            got.recv().unwrap();
+            // Engine commands from other threads (the tray, the UI) are not stuck behind quit.
+            let t = std::time::Instant::now();
+            let _ = state.send(Input::PopoverShown);
+            assert!(t.elapsed() < std::time::Duration::from_millis(300));
+        });
+    }
+
+    #[test]
     fn popover_report_sets_the_flag_and_wakes_the_engine() {
         let state = AppState::default();
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
-        state.set_runtime(RuntimeHandle { tx });
+        state.set_runtime(RuntimeHandle {
+            tx,
+            done: std::sync::mpsc::sync_channel(1).1,
+        });
         let flag = state.visible_flag();
         state.popover_reports_visible(true);
         assert!(flag.load(Ordering::Relaxed));
@@ -1243,7 +1304,7 @@ mod tests {
         let json = serde_json::to_string(&Status::initial()).unwrap_or_default();
         assert_eq!(
             json,
-            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","setId":1,"paletteAuto":true,"palette":{"name":"Sunset","colours":[{"h":20,"s":950,"v":1000},{"h":280,"s":900,"v":950},{"h":30,"s":300,"v":1000}]}},"clip":null}"#
+            r#"{"strip":{"kind":"notConfigured"},"bpm":null,"playing":false,"beatInBar":null,"barInPhrase":null,"phraseBars":8,"moment":"rhythm","auto":true,"predicted":false,"lightsOn":true,"midi":{"source":null,"ok":true},"audio":{"ok":false},"selection":{"set":"Auto","setId":1,"paletteAuto":true,"palette":{"name":"Ocean","colours":[{"h":190,"s":1000,"v":1000},{"h":320,"s":900,"v":1000},{"h":190,"s":300,"v":1000}]}},"clip":null}"#
         );
         let clip = ClipDto {
             moment: MomentDto::Calm,
@@ -1501,6 +1562,7 @@ mod tests {
         };
         let seq = Sequence {
             name: "t".into(),
+            fade: true,
             moment: Moment::Rhythm,
             steps: vec![
                 step([P, P, P, P]),         // from the last (all off): 1 bucket
@@ -1543,6 +1605,16 @@ mod tests {
         (dir, state)
     }
 
+    /// Like `lib_state`, with a saved library that has sequences.
+    fn seeded_state() -> (tempfile::TempDir, AppState) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::default();
+        let path = dir.path().join("library.json");
+        crate::library_store::save(&path, &crate::library_store::seeded_builtin(10)).unwrap();
+        state.init_library(path, 10);
+        (dir, state)
+    }
+
     #[test]
     fn unsaved_builtin_library_follows_the_strip_but_a_saved_one_does_not() {
         let (dir, state) = lib_state();
@@ -1579,7 +1651,7 @@ mod tests {
 
     #[test]
     fn a_preview_for_another_segment_count_than_the_strip_is_refused() {
-        let lib = Library::builtin(10);
+        let lib = crate::library_store::seeded_builtin(10);
         let pal = lib.palettes[0].1.clone();
         let p = preview_palette_of(&lib, pal, lib.sequences[0].0).unwrap();
         let strip = |segments| StripStatus::Connected {
@@ -1630,7 +1702,10 @@ mod tests {
         // The retry: the library is already adapted, so there is nothing new to adapt.
         assert_eq!(state.adapt_library(6).unwrap(), None);
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
-        state.set_runtime(RuntimeHandle { tx });
+        state.set_runtime(RuntimeHandle {
+            tx,
+            done: std::sync::mpsc::sync_channel(1).1,
+        });
         let cfg = strip_store::StripConfig {
             id: "abc".into(),
             name: "n".into(),
@@ -1733,7 +1808,6 @@ mod tests {
         let before = state.library();
         let lib = state.set_wired(8).unwrap();
         assert_eq!(lib.shape.pieces, before.shape.pieces[..8]);
-        assert_eq!(lib.sequences[0].1.steps[0].roles.len(), 8);
         let cfg = strip_store::load(&dir.path().join("strip.json")).unwrap();
         assert_eq!((cfg.segments, cfg.reported), (8, 10));
         // Growing continues the row after the last piece; the others are untouched.
@@ -1773,7 +1847,7 @@ mod tests {
     fn saving_a_shape_with_another_piece_count_resizes_the_roles() {
         use light_core::library::Shape;
         use light_core::model::Role;
-        let (dir, state) = lib_state();
+        let (dir, state) = seeded_state();
         for m in [12u8, 6] {
             let mut lib = state.library();
             lib.shape = Shape::row(m);
@@ -1801,7 +1875,10 @@ mod tests {
         let state = AppState::default();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         tx.send(Input::PopoverShown).unwrap();
-        state.set_runtime(RuntimeHandle { tx });
+        state.set_runtime(RuntimeHandle {
+            tx,
+            done: std::sync::mpsc::sync_channel(1).1,
+        });
         (state, rx)
     }
 
@@ -1837,15 +1914,15 @@ mod tests {
         let (dir, state) = lib_state();
         let name = |sel: Selection| (sel.palette_auto, sel.palette.name);
         assert!(state.library().active_palette.is_none());
-        // Auto -> p1 -> p2 ... -> p8 -> Auto, over the active set's palettes.
+        // Auto -> p1 -> p2 ... -> p9 -> Auto, over the active set's palettes.
         assert_eq!(
             state.select(Pick::Palette, 1).unwrap().palette.name,
-            "Sunset"
+            "Ocean"
         );
         assert_eq!(state.library().active_palette, Some(1));
         assert_eq!(
             name(state.select(Pick::Palette, 1).unwrap()),
-            (false, "Ocean".into())
+            (false, "Laser".into())
         );
         assert_eq!(
             crate::library_store::load(&dir.path().join("library.json"), 10, 8).active_palette,
@@ -1856,7 +1933,7 @@ mod tests {
         assert_eq!(state.library().active_palette, None);
         // Backwards from Auto lands on the last palette, forwards from it on Auto.
         state.select(Pick::Palette, -1).unwrap();
-        assert_eq!(state.library().active_palette, Some(8));
+        assert_eq!(state.library().active_palette, Some(9));
         assert!(state.select(Pick::Palette, 1).unwrap().palette_auto);
         for bad in [0, 2, -2] {
             assert!(state.select(Pick::Palette, bad).is_err());
@@ -1923,17 +2000,27 @@ mod tests {
         use light_core::patterns::Pattern;
         // No strip connected: the library's own segment count rules.
         let lib = Library::builtin(8);
-        let seq = pattern_sequence_of(&lib, Pattern::Halves, 7).unwrap();
+        let seq = pattern_sequence_of(&lib, Pattern::CrossPairs).unwrap();
         assert!(seq.validate(8).is_ok());
         assert!(seq.steps.iter().all(|s| s.roles.len() == 8));
-        assert_eq!(seq, pattern_sequence_of(&lib, Pattern::Halves, 7).unwrap());
+    }
+
+    #[test]
+    fn pattern_sequence_is_deterministic() {
+        use light_core::patterns::Pattern;
+        let lib = Library::builtin(8);
+        assert_eq!(
+            pattern_sequence_of(&lib, Pattern::CrossPairs).unwrap(),
+            pattern_sequence_of(&lib, Pattern::CrossPairs).unwrap()
+        );
     }
 
     #[test]
     fn pattern_sequence_rejects_unknown_pattern() {
         use light_core::patterns::Pattern;
         assert!(serde_json::from_str::<Pattern>(r#""nope""#).is_err());
-        assert!(serde_json::from_str::<Pattern>(r#""halves""#).is_ok());
+        assert!(serde_json::from_str::<Pattern>(r#""halves""#).is_err());
+        assert!(serde_json::from_str::<Pattern>(r#""crossPairs""#).is_ok());
     }
 
     #[test]
@@ -1953,7 +2040,7 @@ mod tests {
     #[test]
     fn new_entries_get_ids_in_rust() {
         use light_core::library::SeqRef;
-        let (dir, state) = lib_state();
+        let (dir, state) = seeded_state();
         let mut lib = state.library();
         // Ids the stored library does not have are new: the client's number is only a handle.
         let pal = lib.palettes[0].1.clone();
@@ -1971,7 +2058,7 @@ mod tests {
         let saved = state.save_library(lib).unwrap();
         assert_eq!(
             saved.palettes.iter().map(|p| p.0).collect::<Vec<_>>(),
-            [1, 2, 3, 4, 5, 6, 7, 8, 9]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
         assert_eq!(
             saved.sequences.iter().map(|p| p.0).collect::<Vec<_>>(),
@@ -1979,7 +2066,7 @@ mod tests {
         );
         assert_eq!(saved.sets[1].id, 2);
         assert_eq!(saved.sets[1].rhythm.sequences, [SeqRef::Id(11)]);
-        assert_eq!(saved.sets[1].palettes, [9]);
+        assert_eq!(saved.sets[1].palettes, [10]);
         // The editor's selection is ignored: the live one stays.
         assert_eq!((saved.active_set, saved.active_palette), (1, None));
         assert_eq!(state.library(), saved);

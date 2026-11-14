@@ -22,7 +22,6 @@ type Store = ReturnType<typeof useLibrary>;
 
 const MAX_SEQUENCES = 64;
 const NAME_MSG = "Name must be 1 to 63 characters, without control characters.";
-const SEED = 1; // generated previews are the same for the whole session
 const ZOOMS = [1, 2, 4];
 const PAINT = ["principal", "contraste", "suave", "off"] as const;
 
@@ -33,21 +32,45 @@ const MOMENTS: [MomentName, "rhythm" | "calm" | "buildup", IconName, string][] =
 ];
 export const PATTERNS: Record<MomentName, [PatternName, string][]> = {
   rhythm: [
-    ["halves", "Halves"],
-    ["endsCentre", "Ends ↔ centre"],
-    ["oddEven", "Odd / even"],
-    ["quarters", "Quarters"],
-    ["snake", "Snake"],
-    ["mirror", "Mirror"],
+    ["crossPairs", "Cross pairs"],
+    ["colourAndDark", "Colour and dark"],
+    ["whiteBackbeat", "White backbeat"],
+    ["outsideIn", "Outside in"],
+    ["halvesBlink", "Halves blink"],
+    ["crossPairsWhiteBackbeat", "Cross pairs + white backbeat"],
+    ["colourDarkWhite", "Colour, dark, white"],
+    ["outsideInWithDark", "Outside in, with dark"],
+    ["mirrorWithWhite", "Mirror with white"],
+    ["colourAndDarkTwoBars", "Colour and dark, two bars"],
+    ["everyOtherBeat", "Every other beat"],
+    ["halvesWhiteBackbeat", "Halves + white backbeat"],
+    ["outsideInTwoBars", "Outside in, two bars"],
+    ["crossPairsWhiteTurnaround", "Cross pairs, white turnaround"],
+    ["endsCentreAllDark", "Ends, centre, all, dark"],
   ],
   calm: [
-    ["drift", "Drift"],
-    ["sparse", "Sparse"],
+    ["washAndSoften", "Wash and soften"],
+    ["endsWhiteThenWash", "Ends white, then wash"],
+    ["slowFadeToDark", "Slow fade to dark"],
+    ["colourAndWhite", "Colour and white"],
+    ["centreToEnds", "Centre to ends"],
+    ["colourCycle", "Colour cycle"],
+    ["fadeAndReturn", "Fade and return"],
+    ["slowWhiteBreath", "Slow white breath"],
+    ["longWash", "Long wash"],
+    ["whiteEndsSlowly", "White ends, slowly"],
   ],
   buildUp: [
-    ["groupFlash", "Group flash"],
-    ["fastSnake", "Fast snake"],
     ["strobe", "Strobe"],
+    ["converge", "Converge"],
+    ["colourStrobe", "Colour strobe"],
+    ["oddEvenStrobe", "Odd / even strobe"],
+    ["convergeThenStrobe", "Converge, then strobe"],
+    ["halvesAccelerating", "Halves, accelerating"],
+    ["oddEvenAccelerating", "Odd / even, accelerating"],
+    ["strobeAccelerating", "Strobe, accelerating"],
+    ["convergeAccelerating", "Converge, accelerating"],
+    ["fourPartChaseAccelerating", "Four-part chase, accelerating"],
   ],
 };
 
@@ -148,12 +171,12 @@ export function SequencesTab({
   const shown = entry?.[1] ?? (gen?.key === genKey ? gen.seq : undefined);
   const readOnly = picked?.k === "gen";
 
-  // Generated entries: a fixed-seed preview from Rust.
+  // Generated entries: a preview from Rust.
   useEffect(() => {
     if (picked?.k !== "gen") return;
     let alive = true;
     const p = picked.pattern
-      ? api.patternSequence(picked.pattern, SEED)
+      ? api.patternSequence(picked.pattern)
       : api.previewGenerated(picked.moment);
     p.then(
       (seq) => alive && setGen({ key: genKey, seq }),
@@ -424,6 +447,7 @@ export function SequencesTab({
             const off = Array<string>(pieces).fill("off");
             add({
               name: "New sequence",
+              fade: true,
               moment: picked?.k === "gen" ? picked.moment : (shown?.moment ?? "rhythm"),
               steps: fromCells(Array.from({ length: BAR }, () => off)),
             });
@@ -531,6 +555,25 @@ export function SequencesTab({
                   ))}
                 </select>
               </div>
+              {!readOnly && shown.moment === "calm" && (
+                <div class="flex items-center gap-2">
+                  <span class="t-label">Fade</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={shown.fade}
+                    aria-label="Fade"
+                    {...help(H.fade)}
+                    onClick={() => editSeq((s) => ({ ...s, fade: !s.fade }))}
+                    class={`relative h-5 w-9 shrink-0 rounded-full border focus-visible:outline-2 focus-visible:outline-accent ${shown.fade ? "border-accent bg-accent" : "border-border bg-bg"}`}
+                  >
+                    <span
+                      class={`absolute top-0.5 h-3.5 w-3.5 rounded-full ${shown.fade ? "left-4 bg-bg" : "left-0.5 bg-dim"}`}
+                    />
+                  </button>
+                  <span class="text-dim">Smooth changes between steps</span>
+                </div>
+              )}
               {readOnly && (
                 <button
                   type="button"

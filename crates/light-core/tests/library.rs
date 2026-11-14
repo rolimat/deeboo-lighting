@@ -5,10 +5,23 @@ use light_core::library::{Interval, Library, PaletteChange, Piece, SeqRef, Shape
 use light_core::model::{Role, Step, StepLen};
 use light_core::patterns::Pattern;
 
+/// `Library::builtin` plus ten sequences (ids 1-4 Rhythm, 5-7 Calm, 8-10 Build-up), for tests that
+/// edit sequences.
+fn seeded(n: u8) -> Library {
+    use light_core::patterns::{build, for_moment};
+    let mut l = Library::builtin(n);
+    let picks = [(Moment::Rhythm, 4), (Moment::Calm, 3), (Moment::BuildUp, 3)];
+    let seqs = picks
+        .iter()
+        .flat_map(|(m, k)| for_moment(*m).iter().take(*k).map(move |p| build(*p, n)));
+    l.sequences = (1..).zip(seqs).collect();
+    l
+}
+
 #[test]
 fn builtin_validates_for_1_to_60_segments() {
     for n in 1..=60u8 {
-        let l = Library::builtin(n);
+        let l = seeded(n);
         assert_eq!(l.validate(), Ok(()), "n={n}");
         assert_eq!(l.segments(), n);
     }
@@ -23,7 +36,7 @@ fn shape_row_has_n_pieces() {
 
 #[test]
 fn builtin_auto_set_uses_spec_intervals() {
-    let l = Library::builtin(8);
+    let l = seeded(8);
     let s = &l.sets[0];
     assert_eq!(s.name, "Auto");
     assert_eq!(s.rhythm.interval, Interval::Bars(8));
@@ -43,7 +56,7 @@ type Mutate = Box<dyn Fn(&mut Library)>;
 #[test]
 #[allow(clippy::too_many_lines)] // one table
 fn validate_rejects_each_limit() {
-    let base = Library::builtin(8);
+    let base = seeded(8);
     let long = "x".repeat(64);
     let cases: Vec<(&str, Mutate)> = vec![
         (
@@ -198,34 +211,34 @@ fn validate_rejects_each_limit() {
 
 #[test]
 fn library_for_10_validates_and_reports_10() {
-    let l = Library::builtin(10);
+    let l = seeded(10);
     assert_eq!(l.validate(), Ok(()));
     assert_eq!(l.segments(), 10);
 }
 
 #[test]
 fn roles_must_match_shape_not_strip() {
-    let mut l = Library::builtin(10);
+    let mut l = seeded(10);
     l.sequences[1].1.steps[0].roles.pop();
     assert_eq!(fields(&l), "sequences[1].steps[0].roles");
 }
 
 #[test]
 fn set_must_reference_existing_ids() {
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     l.sets[0].calm.sequences.push(SeqRef::Id(999));
     assert_eq!(fields(&l), "sets[0].calm.sequences");
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     l.sets[0].palettes.push(999);
     assert_eq!(fields(&l), "sets[0].palettes");
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     l.sets[0].rhythm.sequences.push(SeqRef::Generated);
     assert_eq!(l.validate(), Ok(()));
 }
 
 #[test]
 fn error_never_echoes_input() {
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     l.palettes[0].1.name = "secret\n".repeat(50);
     let e = l.validate().expect_err("bad name");
     assert!(!format!("{e} {e:?}").contains("secret"));
@@ -245,9 +258,9 @@ fn piece_fields_are_public() {
 #[cfg(feature = "serde")]
 #[test]
 fn serde_round_trip() {
-    let l = Library::builtin(8);
+    let l = seeded(8);
     let json = serde_json::to_string(&l).expect("ser");
-    assert!(json.contains("\"schemaVersion\":2"), "{json}");
+    assert!(json.contains("\"schemaVersion\":3"), "{json}");
     assert!(json.contains("\"activeSet\""), "{json}");
     let back: Library = serde_json::from_str(&json).expect("de");
     assert_eq!(back, l);
@@ -256,10 +269,10 @@ fn serde_round_trip() {
 #[cfg(feature = "serde")]
 #[test]
 fn unknown_fields_are_refused() {
-    let mut v = serde_json::to_value(Library::builtin(4)).expect("ser");
+    let mut v = serde_json::to_value(seeded(4)).expect("ser");
     v["extra"] = 1.into();
     assert!(serde_json::from_value::<Library>(v).is_err());
-    let mut v = serde_json::to_value(Library::builtin(4)).expect("ser");
+    let mut v = serde_json::to_value(seeded(4)).expect("ser");
     v["shape"]["pieces"][0]["extra"] = 1.into();
     assert!(serde_json::from_value::<Library>(v).is_err());
 }
@@ -268,7 +281,7 @@ fn unknown_fields_are_refused() {
 fn resize_segments_pads_with_off_and_truncates() {
     use light_core::model::Role;
     for m in [4u8, 12, 60] {
-        let mut l = Library::builtin(10);
+        let mut l = seeded(10);
         l.shape = Shape::row(m);
         assert!(l.validate().is_err(), "roles still have 10 entries (m={m})");
         let before = l.clone();
@@ -287,40 +300,33 @@ fn resize_segments_pads_with_off_and_truncates() {
 #[test]
 fn palettes_combine() {
     let ps = light_core::builtin::palettes();
-    assert_eq!(ps.len(), 8);
+    assert_eq!(ps.len(), 9);
     let names: std::collections::HashSet<_> = ps.iter().map(|p| p.name.clone()).collect();
-    assert_eq!(names.len(), 8);
+    assert_eq!(names.len(), 9);
     for p in &ps {
-        let d = p.principal.h.abs_diff(p.contraste.h);
-        assert!(d.min(360 - d) >= 60, "{}", p.name);
-        assert!(p.suave.s <= 450 && p.suave.v >= 800, "{}", p.name);
+        assert_eq!(
+            light_core::library::validate_palette(p),
+            Ok(()),
+            "{}",
+            p.name
+        );
     }
 }
 
 #[test]
-fn ten_sequences_validate_for_common_n() {
-    use light_core::detect::Moment::{BuildUp, Calm, Rhythm};
-    for n in [1u8, 4, 6, 9, 10, 12, 16, 60] {
-        let g = light_core::groups::groups(&Shape::row(n));
-        let seqs = light_core::builtin::sequences(n, &g);
-        assert_eq!(seqs.len(), 10);
-        let count = |m| seqs.iter().filter(|s| s.moment == m).count();
-        assert_eq!((count(Rhythm), count(Calm), count(BuildUp)), (4, 3, 3));
-        let names: std::collections::HashSet<_> = seqs.iter().map(|s| &s.name).collect();
-        assert_eq!(names.len(), 10, "n={n}");
-        for s in &seqs {
-            assert!(s.validate(n).is_ok(), "{} n={n}", s.name);
-        }
-    }
+fn builtin_library_has_no_sequences() {
+    let l = Library::builtin(10);
+    assert_eq!(l.sequences.len(), 0);
+    assert_eq!(l.validate(), Ok(()));
 }
 
 #[test]
 fn first_run_seeds_auto_set() {
     let l = Library::builtin(10);
-    assert_eq!((l.palettes.len(), l.sequences.len()), (8, 10));
+    assert_eq!(l.palettes.len(), 9);
     let s = l.current_set().expect("active");
     assert_eq!(s.name, "Auto");
-    assert_eq!(s.palettes.len(), 8);
+    assert_eq!(s.palettes.len(), 9);
     for m in [&s.rhythm, &s.calm, &s.buildup] {
         assert_eq!(m.sequences, vec![SeqRef::Generated]);
     }
@@ -338,7 +344,7 @@ fn steps(n: usize, len: StepLen, segments: usize) -> Vec<Step> {
 
 #[test]
 fn rejects_sequence_not_whole_bars() {
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     let mut st = steps(3, StepLen::One, 4);
     st.insert(
         0,
@@ -353,7 +359,7 @@ fn rejects_sequence_not_whole_bars() {
 
 #[test]
 fn accepts_sixteen_bars_rejects_seventeen() {
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     l.sequences[0].1.steps = steps(16, StepLen::Four, 4);
     assert_eq!(l.validate(), Ok(()));
     l.sequences[0].1.steps = steps(17, StepLen::Four, 4);
@@ -362,7 +368,7 @@ fn accepts_sixteen_bars_rejects_seventeen() {
 
 #[test]
 fn once_per_break_only_on_calm() {
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     l.sets[0].calm.interval = Interval::OncePerBreak;
     assert_eq!(l.validate(), Ok(()));
     l.sets[0].rhythm.interval = Interval::OncePerBreak;
@@ -376,24 +382,24 @@ fn once_per_break_only_on_calm() {
 
 #[test]
 fn pattern_ref_must_match_track_moment() {
-    let mut l = Library::builtin(4);
-    l.sets[0].rhythm.sequences = vec![SeqRef::Pattern(Pattern::Snake)];
-    l.sets[0].calm.sequences = vec![SeqRef::Pattern(Pattern::Drift)];
+    let mut l = seeded(4);
+    l.sets[0].rhythm.sequences = vec![SeqRef::Pattern(Pattern::CrossPairs)];
+    l.sets[0].calm.sequences = vec![SeqRef::Pattern(Pattern::WashAndSoften)];
     l.sets[0].buildup.sequences = vec![SeqRef::Pattern(Pattern::Strobe)];
     assert_eq!(l.validate(), Ok(()));
-    l.sets[0].calm.sequences = vec![SeqRef::Pattern(Pattern::Snake)];
+    l.sets[0].calm.sequences = vec![SeqRef::Pattern(Pattern::CrossPairs)];
     assert_eq!(fields(&l), "sets[0].calm.sequences");
 }
 
 #[test]
 fn set_palettes_required_and_known() {
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     l.sets[0].palettes.clear();
     assert_eq!(fields(&l), "sets[0].palettes");
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     l.sets[0].palettes = vec![999];
     assert_eq!(fields(&l), "sets[0].palettes");
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     l.sets[0].palette_change = PaletteChange::Bars(3);
     assert_eq!(fields(&l), "sets[0].palette_change");
     l.sets[0].palette_change = PaletteChange::Bars(4);
@@ -406,10 +412,10 @@ fn pattern_labels_are_english_and_distinct() {
         .iter()
         .flat_map(|m| light_core::patterns::for_moment(*m))
         .collect();
-    assert_eq!(all.len(), 11);
+    assert_eq!(all.len(), 35);
     let names: std::collections::HashSet<_> = all.iter().map(|p| p.label()).collect();
-    assert_eq!(names.len(), 11);
-    assert_eq!(Pattern::EndsCentre.label(), "Ends \u{2194} centre");
+    assert_eq!(names.len(), 35);
+    assert_eq!(Pattern::OddEvenStrobe.label(), "Odd / even strobe");
 }
 
 #[test]
@@ -431,13 +437,13 @@ fn serde_round_trip_v2() {
     assert_eq!(j(SeqRef::Id(3)), json!({"id": 3}));
     assert_eq!(j(SeqRef::Generated), json!("generated"));
     assert_eq!(
-        j(SeqRef::Pattern(Pattern::Halves)),
-        json!({"pattern": "halves"})
+        j(SeqRef::Pattern(Pattern::HalvesBlink)),
+        json!({"pattern": "halvesBlink"})
     );
     assert_eq!(j(PaletteChange::AtDrop), json!("atDrop"));
     assert_eq!(j(PaletteChange::Bars(2)), json!({"bars": 2}));
-    let mut l = Library::builtin(6);
-    l.sets[0].rhythm.sequences = vec![SeqRef::Pattern(Pattern::OddEven), SeqRef::Id(1)];
+    let mut l = seeded(6);
+    l.sets[0].rhythm.sequences = vec![SeqRef::Pattern(Pattern::ColourAndDark), SeqRef::Id(1)];
     l.sets[0].palette_change = PaletteChange::Bars(8);
     let back: Library = serde_json::from_value(j(&l)).expect("de");
     assert_eq!(back, l);
@@ -478,7 +484,7 @@ fn validate_palette_checks_name_and_ranges() {
 
 #[test]
 fn angles_in_15_degree_steps_validate() {
-    let mut l = Library::builtin(3);
+    let mut l = seeded(3);
     for a in (0..360).step_by(15) {
         l.shape.pieces[0].angle = a;
         assert_eq!(l.validate(), Ok(()), "angle {a}");
@@ -487,7 +493,7 @@ fn angles_in_15_degree_steps_validate() {
 
 #[test]
 fn a_set_cannot_use_another_moments_sequence() {
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     let rhythm_id = l
         .sequences
         .iter()
@@ -500,7 +506,7 @@ fn a_set_cannot_use_another_moments_sequence() {
 
 #[test]
 fn dropping_foreign_refs_keeps_the_rest_and_leaves_a_track_never_empty() {
-    let mut l = Library::builtin(4);
+    let mut l = seeded(4);
     let rhythm_id = l
         .sequences
         .iter()
@@ -516,4 +522,29 @@ fn dropping_foreign_refs_keeps_the_rest_and_leaves_a_track_never_empty() {
         [SeqRef::Id(rhythm_id), SeqRef::Generated]
     );
     assert_eq!(l.validate(), Ok(()));
+}
+
+#[test]
+fn pad_to_bars_is_public() {
+    use light_core::library::pad_to_bars;
+    use light_core::model::Sequence;
+    let step = |len, r| Step {
+        len,
+        roles: vec![r],
+    };
+    let mut s = Sequence {
+        name: "a".into(),
+        moment: Moment::Calm,
+        steps: vec![
+            step(StepLen::One, Role::Principal),
+            step(StepLen::Half, Role::Off),
+        ],
+        fade: true,
+    };
+    // One (2) + Half (1) = 3 half beats -> 8 repeating from the first step.
+    pad_to_bars(&mut s);
+    let total: u32 = s.steps.iter().map(|x| u32::from(x.len.half_beats())).sum();
+    assert_eq!(total, 8);
+    assert_eq!(s.steps[2].len, StepLen::One);
+    assert_eq!(s.steps[2].roles, vec![Role::Principal]);
 }

@@ -18,12 +18,13 @@ fn describe(e: &serde_json::Error) -> String {
     format!("{:?} at {}:{}", e.classify(), e.line(), e.column())
 }
 
-fn read_capped(path: &Path) -> io::Result<Option<String>> {
+/// Reads at most `max` bytes: `None` when the file is bigger.
+pub(crate) fn read_capped(path: &Path, max: u64) -> io::Result<Option<String>> {
     let mut text = String::new();
     std::fs::File::open(path)?
-        .take(MAX_BYTES + 1)
+        .take(max + 1)
         .read_to_string(&mut text)?;
-    Ok((text.len() as u64 <= MAX_BYTES).then_some(text))
+    Ok((text.len() as u64 <= max).then_some(text))
 }
 
 /// When the Dock icon shows; anything else is rejected by serde.
@@ -139,7 +140,7 @@ impl Default for Settings {
     }
 }
 
-fn check_name(what: &str, name: Option<&String>) -> Result<(), String> {
+pub(crate) fn check_name(what: &str, name: Option<&String>) -> Result<(), String> {
     let Some(n) = name else { return Ok(()) };
     if n.trim() != n
         || n.is_empty()
@@ -237,7 +238,7 @@ impl Settings {
 /// Defaults on a missing, corrupt or invalid file.
 #[must_use]
 pub fn load(path: &Path) -> Settings {
-    let text = match read_capped(path) {
+    let text = match read_capped(path, MAX_BYTES) {
         Ok(Some(t)) => t,
         Ok(None) => {
             log::warn!("settings too large, using defaults");
@@ -269,25 +270,29 @@ pub fn load(path: &Path) -> Settings {
     }
 }
 
-/// Spec §12: an invalid file is copied to `<name>.bad` so the next save never loses the user's data.
-fn keep_aside(path: &Path) {
-    let bad = path.with_extension("json.bad");
-    if let Err(e) = std::fs::copy(path, &bad) {
-        log::warn!("cannot keep a copy of the invalid settings: {e}");
+/// Spec §12: an invalid file is copied to `<name>.json.bad` so the next save never loses the user's data.
+pub(crate) fn keep_aside(path: &Path) {
+    if let Err(e) = std::fs::copy(path, path.with_extension("json.bad")) {
+        log::warn!("cannot keep a copy of an invalid file: {e}");
     }
 }
 
-/// Writes to a temp file next to `path`, then renames over it.
-///
-/// # Errors
-/// Returns the I/O (or serialisation) error.
-pub fn save(path: &Path, s: &Settings) -> io::Result<()> {
+/// Writes `bytes` to a temp file next to `path`, then renames over it.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(s)?)?;
+    std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path)
+}
+
+/// Atomic write of the settings file.
+///
+/// # Errors
+/// Returns the I/O (or serialisation) error.
+pub fn save(path: &Path, s: &Settings) -> io::Result<()> {
+    write_atomic(path, &serde_json::to_vec_pretty(s)?)
 }
 
 /// Detector thresholds: the panel sets the base, the popover's sensitivity shifts the calm ones
@@ -311,6 +316,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("settings.json");
         (dir, p)
+    }
+
+    #[test]
+    fn keep_aside_copies_next_to_the_file_as_json_bad() {
+        let (_d, p) = tmp();
+        std::fs::write(&p, b"x").unwrap();
+        keep_aside(&p);
+        assert_eq!(std::fs::read(p.with_extension("json.bad")).unwrap(), b"x");
     }
 
     #[test]

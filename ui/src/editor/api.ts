@@ -32,17 +32,41 @@ export type WizardState =
   | { kind: "failed"; step: WizardStep; message: string };
 
 export type PatternName =
-  | "halves"
-  | "endsCentre"
-  | "oddEven"
-  | "quarters"
-  | "snake"
-  | "mirror"
-  | "drift"
-  | "sparse"
-  | "groupFlash"
-  | "fastSnake"
-  | "strobe";
+  | "crossPairs"
+  | "colourAndDark"
+  | "whiteBackbeat"
+  | "outsideIn"
+  | "halvesBlink"
+  | "crossPairsWhiteBackbeat"
+  | "colourDarkWhite"
+  | "outsideInWithDark"
+  | "mirrorWithWhite"
+  | "colourAndDarkTwoBars"
+  | "everyOtherBeat"
+  | "halvesWhiteBackbeat"
+  | "outsideInTwoBars"
+  | "crossPairsWhiteTurnaround"
+  | "endsCentreAllDark"
+  | "washAndSoften"
+  | "endsWhiteThenWash"
+  | "slowFadeToDark"
+  | "colourAndWhite"
+  | "centreToEnds"
+  | "colourCycle"
+  | "fadeAndReturn"
+  | "slowWhiteBreath"
+  | "longWash"
+  | "whiteEndsSlowly"
+  | "strobe"
+  | "converge"
+  | "colourStrobe"
+  | "oddEvenStrobe"
+  | "convergeThenStrobe"
+  | "halvesAccelerating"
+  | "oddEvenAccelerating"
+  | "strobeAccelerating"
+  | "convergeAccelerating"
+  | "fourPartChaseAccelerating";
 export type Interval = { bars: number } | "oncePerBreak";
 export type SeqRef = { id: number } | "generated" | { pattern: PatternName };
 export type PaletteChange = "atDrop" | { bars: number };
@@ -73,6 +97,8 @@ export interface Step {
 export interface Sequence {
   name: string;
   moment: string;
+  /** Steps cross-fade into each other (Rust `Sequence.fade`). */
+  fade: boolean;
   steps: Step[];
 }
 export interface MomentSet {
@@ -97,7 +123,7 @@ export interface LibrarySet {
  * library with the real ids.
  */
 export interface Library {
-  schemaVersion: 2;
+  schemaVersion: 3;
   shape: { pieces: Piece[] };
   palettes: [number, Palette][];
   sequences: [number, Sequence][];
@@ -135,8 +161,8 @@ export const api = {
   previewGenerated: (moment: MomentName): Promise<Sequence> =>
     invoke("preview_generated", { moment }),
   /** A pattern as an editable sequence for the strip's shape (Duplicate to edit) or a read-only preview. */
-  patternSequence: (pattern: PatternName, seed: number): Promise<Sequence> =>
-    invoke("pattern_sequence", { pattern, seed }),
+  patternSequence: (pattern: PatternName): Promise<Sequence> =>
+    invoke("pattern_sequence", { pattern }),
   /** "Show on strip": plays `sequence` (a library id) in `palette` on the real strip until switched off. */
   previewPalette: (on: boolean, palette: Palette, sequence: number): Promise<void> =>
     invoke("preview_palette", { on, palette, sequence }),

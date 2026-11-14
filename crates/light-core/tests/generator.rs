@@ -1,7 +1,5 @@
 use light_core::detect::Moment;
 use light_core::generator::{Generator, SplitMix64};
-use light_core::groups::groups;
-use light_core::library::Shape;
 use light_core::patterns::for_moment;
 
 const MOMENTS: [Moment; 3] = [Moment::Rhythm, Moment::Calm, Moment::BuildUp];
@@ -26,51 +24,50 @@ fn below_is_in_range_and_zero_is_safe() {
 
 #[test]
 fn same_seed_same_sequence() {
-    let g = groups(&Shape::row(10));
     let (mut a, mut b) = (Generator::new(42), Generator::new(42));
     for i in 0..30 {
         let m = MOMENTS[i % 3];
-        assert_eq!(a.next(m, &g, 10), b.next(m, &g, 10));
+        assert_eq!(a.next(m, 10), b.next(m, 10));
     }
 }
 
 #[test]
-fn never_repeats_twice_in_a_row() {
-    let g = groups(&Shape::row(12));
-    for seed in 0..20 {
-        let mut generator = Generator::new(seed);
+fn generated_never_repeats_per_moment() {
+    for seed in 0..5 {
         for m in MOMENTS {
-            let mut prev = generator.next(m, &g, 12);
-            for _ in 0..50 {
-                let s = generator.next(m, &g, 12);
-                assert_ne!(s, prev, "{m:?} seed {seed}");
-                assert_ne!(s.name, prev.name, "pattern must alternate");
-                assert!(s.steps.len() <= 64);
-                prev = s;
+            let mut generator = Generator::new(seed);
+            let mut prev = generator.next(m, 8).name;
+            for _ in 0..200 {
+                let s = generator.next(m, 8);
+                assert_eq!(s.moment, m);
+                assert_ne!(s.name, prev, "{m:?} seed {seed}");
+                prev = s.name;
             }
         }
     }
 }
 
 #[test]
-fn covers_all_patterns_over_100_calls() {
-    let g = groups(&Shape::row(12));
-    for m in MOMENTS {
-        let mut generator = Generator::new(1);
-        let names: std::collections::HashSet<String> =
-            (0..100).map(|_| generator.next(m, &g, 12).name).collect();
-        assert_eq!(names.len(), for_moment(m).len(), "{m:?}");
+fn memory_is_per_moment() {
+    // Interleaving Calm picks must not reset Rhythm's memory.
+    for seed in 0..20 {
+        let mut generator = Generator::new(seed);
+        let mut prev = generator.next(Moment::Rhythm, 8).name;
+        for _ in 0..100 {
+            generator.next(Moment::Calm, 8);
+            let s = generator.next(Moment::Rhythm, 8);
+            assert_ne!(s.name, prev, "seed {seed}");
+            prev = s.name;
+        }
     }
 }
 
 #[test]
-fn pattern_builds_that_pattern_with_fresh_params() {
-    use light_core::patterns::Pattern;
-    let g = groups(&Shape::row(8));
-    let mut gen_ = Generator::new(3);
-    let seqs: Vec<_> = (0..20)
-        .map(|_| gen_.pattern(Pattern::Snake, &g, 8))
-        .collect();
-    assert!(seqs.iter().all(|q| q.validate(8).is_ok()));
-    assert!(seqs.iter().any(|q| *q != seqs[0]), "params vary");
+fn covers_all_patterns_over_300_calls() {
+    for m in MOMENTS {
+        let mut generator = Generator::new(1);
+        let names: std::collections::HashSet<String> =
+            (0..300).map(|_| generator.next(m, 8).name).collect();
+        assert_eq!(names.len(), for_moment(m).len(), "{m:?}");
+    }
 }

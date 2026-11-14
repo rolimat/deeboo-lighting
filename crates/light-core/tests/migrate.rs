@@ -1,7 +1,7 @@
 #![cfg(feature = "serde")]
 #![allow(clippy::expect_used)]
 use light_core::library::{Interval, Library, Order, PaletteChange, SeqRef};
-use light_core::migrate::{IntervalV1, LibraryV1, migrate_v1};
+use light_core::migrate::{IntervalV1, LibraryV1, LibraryV2, OLD_BUILTIN, migrate_v1, migrate_v2};
 use light_core::model::StepLen;
 
 const FIXTURE: &str = include_str!("fixtures/library-v1.json");
@@ -14,7 +14,7 @@ fn v1() -> LibraryV1 {
 fn migrates_a_real_v1_library() {
     let lib = migrate_v1(v1(), 8).expect("migrates");
     assert_eq!(lib.validate(), Ok(()));
-    assert_eq!(lib.schema_version, 2);
+    assert_eq!(lib.schema_version, 3);
     assert_eq!(lib.active_palette, None);
     assert_eq!(lib.active_set, 1);
     let club = &lib.sets[0];
@@ -120,10 +120,7 @@ fn fixed_with_many_palettes_becomes_in_order() {
 #[test]
 fn a_library_that_cannot_validate_is_an_error() {
     let mut x = v1();
-    let set = &mut x.sets[0];
-    for m in [&mut set.rhythm, &mut set.calm, &mut set.buildup] {
-        m.palettes.clear();
-    }
+    x.active_set = 999;
     assert!(migrate_v1(x, 8).is_err());
 }
 
@@ -193,4 +190,176 @@ fn odd_long_sequence_pads_or_truncates_to_valid() {
     assert_eq!(half_beats(&lib, 0), 40, "37 padded to 5 bars");
     assert_eq!(half_beats(&lib, 1), 128, "132 cut to 16 bars");
     assert_eq!(lib.sequences[1].1.steps.len(), 16);
+}
+
+// ---- schema 2 -> 3 ----
+
+use serde_json::{Value, json};
+
+fn old_palettes() -> Vec<Value> {
+    let hsv = |(h, s, v): (u16, u16, u16)| json!({"h": h, "s": s, "v": v});
+    OLD_BUILTIN
+        .iter()
+        .enumerate()
+        .map(|(i, (n, a, b, c))| {
+            json!([i + 1, {"name": n, "principal": hsv(*a), "contraste": hsv(*b), "suave": hsv(*c)}])
+        })
+        .collect()
+}
+
+fn track(seqs: &Value, interval: &Value) -> Value {
+    json!({"sequences": seqs, "order": "inOrder", "interval": interval})
+}
+
+/// What an existing user file holds: the old `Library::builtin(10)` (palettes 1-8, set "Auto").
+fn v2_json() -> Value {
+    let auto = json!({
+        "id": 1, "name": "Auto",
+        "rhythm": track(&json!(["generated"]), &json!({"bars": 8})),
+        "calm": track(&json!(["generated"]), &json!("oncePerBreak")),
+        "buildup": track(&json!(["generated"]), &json!({"bars": 2})),
+        "palettes": [1, 2, 3, 4, 5, 6, 7, 8], "paletteOrder": "inOrder",
+        "paletteChange": "atDrop",
+    });
+    json!({
+        "schemaVersion": 2,
+        "shape": serde_json::to_value(Library::builtin(10).shape).expect("shape"),
+        "palettes": old_palettes(), "sequences": [],
+        "sets": [auto], "activeSet": 1, "activePalette": null,
+    })
+}
+
+fn migrate(v: &Value) -> Library {
+    let v2: LibraryV2 = serde_json::from_value(v.clone()).expect("parses as v2");
+    migrate_v2(v2).expect("migrates")
+}
+
+fn names(l: &Library) -> Vec<&str> {
+    l.palettes.iter().map(|(_, p)| p.name.as_str()).collect()
+}
+
+const NEW: [&str; 9] = [
+    "Ocean",
+    "Laser",
+    "UV",
+    "Deep sea",
+    "Ember",
+    "Green",
+    "Lavender",
+    "Sorbet",
+    "Peach and mint",
+];
+
+#[test]
+fn builtin_palettes_are_the_nine() {
+    let ps = light_core::builtin::palettes();
+    assert_eq!(ps.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), NEW);
+    assert_eq!(
+        ps[1].suave,
+        light_core::paint::Hsv {
+            h: 160,
+            s: 600,
+            v: 1000
+        }
+    );
+    let l = Library::builtin(10);
+    assert_eq!(l.validate(), Ok(()));
+    assert_eq!(l.schema_version, 3);
+    assert_eq!(l.sets[0].name, "Auto");
+    assert_eq!(l.sets[0].palettes, (1..=9).collect::<Vec<u32>>());
+}
+
+#[test]
+fn v2_pattern_refs_become_generated_even_unknown() {
+    let mut v = v2_json();
+    v["sets"][0]["rhythm"]["sequences"] =
+        json!([{"pattern": "snake"}, {"pattern": "strobe"}, {"id": 1}]);
+    v["sets"][0]["calm"]["sequences"] = json!([{"pattern": "nope"}]);
+    v["sets"][0]["buildup"]["sequences"] = json!(["generated", {"pattern": "strobe"}]);
+    v["sequences"] = json!([[1, {"name": "S", "moment": "rhythm",
+        "steps": [{"len": "four", "roles": vec!["principal"; 10]}]}]]);
+    let l = migrate(&v);
+    let s = &l.sets[0];
+    assert_eq!(s.rhythm.sequences, [SeqRef::Generated, SeqRef::Id(1)]);
+    assert_eq!(s.calm.sequences, [SeqRef::Generated]);
+    assert_eq!(s.buildup.sequences, [SeqRef::Generated]);
+    assert!(l.sequences.iter().all(|(_, q)| q.fade), "fade reads on");
+}
+
+#[test]
+fn untouched_auto_set_gets_the_new_palettes() {
+    let l = migrate(&v2_json());
+    assert_eq!(names(&l), NEW);
+    assert_eq!(l.palettes[0].0, 2, "Ocean keeps its old id");
+    let ids: Vec<u32> = l.palettes.iter().map(|p| p.0).collect();
+    assert_eq!(l.sets[0].palettes, ids);
+}
+
+#[test]
+fn used_and_user_palettes_stay() {
+    let mut v = v2_json();
+    let mut other = v["sets"][0].clone();
+    other["id"] = json!(2);
+    other["name"] = json!("Mine set");
+    other["palettes"] = json!([1]); // Sunset
+    v["sets"].as_array_mut().expect("arr").push(other);
+    v["activePalette"] = json!(3); // Club
+    v["palettes"].as_array_mut().expect("arr").push(json!(
+        [20, {"name": "Mine", "principal": {"h": 1, "s": 2, "v": 3},
+              "contraste": {"h": 100, "s": 2, "v": 3}, "suave": {"h": 1, "s": 2, "v": 3}}]
+    ));
+    let l = migrate(&v);
+    let mut got = names(&l);
+    got.sort_unstable();
+    let mut want: Vec<&str> = NEW.to_vec();
+    want.extend(["Sunset", "Club", "Mine"]);
+    want.sort_unstable();
+    assert_eq!(got, want);
+    assert_eq!(l.sets[1].palettes, vec![1]);
+    assert_eq!(l.active_palette, Some(3));
+}
+
+#[test]
+fn edited_old_builtin_is_a_user_palette() {
+    let mut v = v2_json();
+    v["palettes"][4][1]["principal"]["h"] = json!(121);
+    let l = migrate(&v);
+    assert!(names(&l).contains(&"Forest"));
+    assert_eq!(names(&l).len(), 10);
+}
+
+#[test]
+fn migration_respects_max_palettes() {
+    let mut v = v2_json();
+    let pal = v["palettes"].as_array_mut().expect("arr");
+    pal.clear();
+    for i in 1..=30u32 {
+        pal.push(
+            json!([i, {"name": format!("U{i}"), "principal": {"h": 1, "s": 2, "v": 3},
+            "contraste": {"h": 100, "s": 2, "v": 3}, "suave": {"h": 1, "s": 2, "v": 3}}]),
+        );
+    }
+    let hsv = |(h, s, v): (u16, u16, u16)| json!({"h": h, "s": s, "v": v});
+    for (k, (n, a, b, c)) in OLD_BUILTIN.iter().take(2).enumerate() {
+        pal.push(json!([31 + k, {"name": n, "principal": hsv(*a), "contraste": hsv(*b), "suave": hsv(*c)}]));
+    }
+    v["sets"][0]["palettes"] = json!([31, 32]);
+    let l = migrate(&v);
+    assert_eq!(l.palettes.len(), 32);
+}
+
+#[test]
+fn migrating_twice_does_not_duplicate_palettes() {
+    let l = migrate(&v2_json());
+    let mut back = serde_json::to_value(&l).expect("ser");
+    back["schemaVersion"] = json!(2);
+    assert_eq!(migrate(&back).palettes, l.palettes);
+}
+
+#[test]
+fn v1_chains_to_v3() {
+    let lib = migrate_v1(v1(), 8).expect("migrates");
+    assert_eq!(lib.schema_version, 3);
+    assert_eq!(lib.validate(), Ok(()));
+    assert!(names(&lib).contains(&"Laser"), "new palettes added");
 }

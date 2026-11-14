@@ -176,7 +176,7 @@ it("a_sequence_opened_from_sets_follows_its_renumbered_id", async () => {
     paletteChange: "atDrop",
   };
   const lib = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     shape: { pieces: [{ x: 0, y: 0, angle: 0, len: 1 }] },
     palettes: [[1, { name: "P", principal: color, contraste: color, suave: color }]],
     sequences: [[1_000_001, seq]],
@@ -234,7 +234,7 @@ it("a_library_edit_after_a_re_pair_keeps_the_new_segment_count", async () => {
   };
   const lib = (n: number) =>
     ({
-      schemaVersion: 2,
+      schemaVersion: 3,
       shape: { pieces: Array.from({ length: n }, () => piece) },
       palettes: [],
       sequences: [],

@@ -3,7 +3,9 @@ pub mod bands;
 pub mod filter;
 pub mod moment;
 pub use bands::BandAnalyzer;
-pub use moment::{BeatFeatures, DetectorParams, Moment, MomentDetector, PositionRules};
+pub use moment::{
+    BeatFeatures, DetectorParams, LearnedRefs, Moment, MomentDetector, PositionRules, REF_DB_RANGE,
+};
 
 #[cfg(test)]
 mod tests {

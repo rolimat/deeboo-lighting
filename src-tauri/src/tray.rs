@@ -96,17 +96,31 @@ fn image(name: &str) -> Option<Image<'static>> {
     Image::from_bytes(bytes).ok()
 }
 
-/// Paints `view` on the tray item, touching only what differs from `prev`.
+/// Paints `view` on the tray item, touching only what differs from `prev`. Fire and forget: the
+/// tray calls block on the main thread, and the engine thread that calls this must stay free to
+/// process Quit while the main thread waits for it.
 pub fn apply(app: &AppHandle, prev: Option<&TrayView>, view: &TrayView) {
-    let Some(main) = app.tray_by_id(TRAY_ID) else {
-        return;
-    };
-    if prev.is_none_or(|p| p.image != view.image) {
-        // One call: on macOS a separate `set_icon` would reset the template flag.
-        let _ = main.set_icon_with_as_template(image(&view.image.name()), view.image.is_template());
-    }
-    if prev.is_none_or(|p| p.title != view.title) {
-        let _ = main.set_title(Some(view.title.as_str()));
+    let icon = prev
+        .is_none_or(|p| p.image != view.image)
+        .then(|| (view.image.name(), view.image.is_template()));
+    let title = prev
+        .is_none_or(|p| p.title != view.title)
+        .then(|| view.title.clone());
+    let handle = app.clone();
+    let queued = app.run_on_main_thread(move || {
+        let Some(main) = handle.tray_by_id(TRAY_ID) else {
+            return;
+        };
+        if let Some((name, template)) = icon {
+            // One call: on macOS a separate `set_icon` would reset the template flag.
+            let _ = main.set_icon_with_as_template(image(&name), template);
+        }
+        if let Some(title) = title {
+            let _ = main.set_title(Some(title.as_str()));
+        }
+    });
+    if queued.is_err() {
+        log::debug!("tray update not queued: the app is closing");
     }
 }
 

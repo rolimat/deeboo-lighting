@@ -2,12 +2,13 @@
 use crate::builtin;
 use crate::clock::{ClockEvent, ClockTracker, PhraseBars, Position};
 use crate::detect::Moment;
+use crate::fade;
 use crate::generator::Generator;
-use crate::groups::{Groups, groups};
 use crate::library::{Library, MomentSet, SeqRef, Set};
 use crate::model::{Colour, Palette, Role, Sequence, resolve};
 use crate::moments::MomentControl;
 use crate::paint::PaintCommand;
+use crate::patterns::build;
 use crate::rotation::{PaletteRotator, Rotator};
 use crate::scheduler::Scheduler;
 
@@ -79,7 +80,6 @@ struct Look {
 #[derive(Clone)]
 struct Rotation {
     lib: Library,
-    groups: Groups,
     rots: [Rotator; 3],
     pal: PaletteRotator,
     /// Library ids of what plays now (`None`: generated or built-in), to refresh edited data.
@@ -110,8 +110,8 @@ fn resolve_seq(r: &Rotation, generator: &mut Generator, m: Moment, sr: SeqRef, n
             .iter()
             .find(|(i, q)| *i == id && q.validate(n).is_ok())
             .map(|(_, q)| q.clone()),
-        SeqRef::Pattern(p) => Some(generator.pattern(p, &r.groups, n)),
-        SeqRef::Generated => Some(generator.next(m, &r.groups, n)),
+        SeqRef::Pattern(p) => Some(build(p, n)),
+        SeqRef::Generated => Some(generator.next(m, n)),
     }
     .unwrap_or_else(|| builtin::sequence(m, n))
 }
@@ -139,7 +139,6 @@ impl Look {
             MOMENTS.map(|m| Rotator::new(moment_set(set, m), seed ^ (slot(m) as u64 + 1) << 56));
         let rot = Rotation {
             lib: lib.clone(),
-            groups: groups(&lib.shape),
             shown_pal: lib.current_palette_id(),
             seq_ids: rots.each_ref().map(|r| match r.current() {
                 Some(SeqRef::Id(id)) => Some(id),
@@ -237,6 +236,12 @@ pub struct Engine {
     last_beat_us: Option<u64>,
     /// The strip may not show the current step: plan it again on the next pulse.
     resend: bool,
+    /// Calm fade under way: what the strip was heading for when the step changed.
+    fade_from: Option<Vec<Colour>>,
+    /// The last scene the show planned (a fade frame while fading).
+    last_planned: Option<Vec<Colour>>,
+    /// The next step change is a cut (moment entered, palette change, start, reconnect, new library).
+    cut: bool,
 }
 
 impl Engine {
@@ -268,6 +273,9 @@ impl Engine {
             pos: None,
             last_beat_us: None,
             resend: false,
+            fade_from: None,
+            last_planned: None,
+            cut: false,
         }
     }
 
@@ -367,6 +375,7 @@ impl Engine {
         self.free_at = None;
         self.playing = None;
         self.resend = true;
+        self.cut = true;
         if self.cfg.lights_on && !self.clock.running() {
             self.rest_or_preview(now_us);
         }
@@ -379,6 +388,7 @@ impl Engine {
         if on != self.calibrating {
             self.calibrating = on;
             self.playing = None;
+            self.cut = true;
             self.resend = true;
             self.free_at = None;
             if !self.clock.running() && self.cfg.lights_on {
@@ -435,8 +445,11 @@ impl Engine {
         if !self.cfg.lights_on || self.preview.is_none() {
             return;
         }
-        if let (Some(desired), _) = self.step_scene(Moment::Rhythm, false) {
+        let (desired, changed) = self.step_scene(Moment::Rhythm, false);
+        self.cut &= !changed;
+        if let Some(desired) = desired {
             self.plan_now(now_us, &desired);
+            self.last_planned = Some(desired);
         }
         self.free_at = Some(now_us + PREVIEW_HALF_US);
     }
@@ -532,6 +545,7 @@ impl Engine {
     pub fn strip_reconnected(&mut self) {
         self.sched.forget_sent();
         self.resend = true;
+        self.cut = true;
     }
 
     /// Plans the scene for the position after `pos`, shown half a pulse-pair later. A moment change
@@ -583,11 +597,13 @@ impl Engine {
         {
             self.look = look;
             self.playing = None;
+            self.cut = true;
         }
         if start {
             // A Start (also while running) begins a fresh show: rotation counts from here.
             self.rot_moment = None;
             self.drop_counted = false;
+            self.cut = true;
         }
         let entered = self.rot_moment != Some(moment);
         let mut dropped =
@@ -604,6 +620,7 @@ impl Engine {
             // Confirmed (Rhythm stays) or left for Calm: the next build-up starts a new drop.
             self.drop_counted = false;
         }
+        self.cut |= entered;
         self.rot_moment = Some(moment);
         let bar = start || (pos.half && pos.beat_in_bar == 4);
         if entered || bar {
@@ -619,6 +636,8 @@ impl Engine {
         // shortcut: a half-beat first step is skipped on Start; only a forced Build-up has one.
         let first = start.then(|| self.step_scene(moment, true));
         let (desired, changed) = self.step_scene(moment, false);
+        // A cut waits for the step change that uses it (a reconnect mid-step does not spend it).
+        self.cut &= !(changed || start);
         let ((desired, changed), show_at) = match first {
             Some(d0) => (d0, at),
             None => (
@@ -633,6 +652,7 @@ impl Engine {
         let resend = std::mem::take(&mut self.resend);
         if let Some(desired) = desired.filter(|_| changed || resend) {
             self.sched.plan(at, show_at, self.cfg.lead_us, &desired);
+            self.last_planned = Some(desired);
         }
     }
 
@@ -667,6 +687,7 @@ impl Engine {
             self.look.palette = p.clone();
             r.shown_pal = Some(*id);
             self.playing = None;
+            self.cut = true;
         }
     }
 
@@ -692,16 +713,40 @@ impl Engine {
             .playing
             .is_none_or(|p| p.moment != moment || p.idx != idx || restart);
         self.playing = Some(Playing { moment, idx, left });
-        let scene = sequence
-            .steps
-            .get(idx)
-            .map(|step| self.scene(step.roles.iter().copied()));
-        (scene, changed)
+        let Some(step) = sequence.steps.get(idx) else {
+            return (None, changed);
+        };
+        let target = self.scene(step.roles.iter().copied());
+        let (len, fade) = (step.len.half_beats(), sequence.fade);
+        if restart {
+            self.fade_from = None;
+        } else if changed {
+            let fading =
+                sequence.moment == Moment::Calm && fade && !self.cut && fade::frames(len) > 1;
+            self.fade_from = self.last_planned.take_if(|_| fading);
+        }
+        // The frame number counts half beats since the step began; the last frame is the target.
+        let k = len - left;
+        let frames = fade::frames(len);
+        let Some(from) = self.fade_from.as_ref().filter(|_| k < frames) else {
+            self.fade_from = None;
+            return (Some(target), changed);
+        };
+        let frame = from
+            .iter()
+            .zip(&target)
+            .map(|(a, b)| fade::mix(*a, *b, k + 1, frames))
+            .collect();
+        if k + 1 == frames {
+            self.fade_from = None;
+        }
+        (Some(frame), true)
     }
 
     fn stopped(&mut self, now: u64) {
         self.playing = None;
         self.rot_moment = None;
+        self.fade_from = None;
         self.pos = None;
         self.control.reset();
         if self.cfg.lights_on {

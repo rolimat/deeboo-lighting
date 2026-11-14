@@ -1,10 +1,12 @@
 //! The engine thread: one blocking loop over a bounded channel. It wakes for an input or for the
 //! engine's next deadline, never on a timer of its own (spec §6.1, §13).
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::time::Duration;
 
+use crate::refs_store::{self, RefsFile};
 use light_core::clock::{PhraseBars, Position};
 use light_core::detect::{BandAnalyzer, BeatFeatures, DetectorParams, Moment, MomentDetector};
 use light_core::engine::{Engine, EngineConfig, EngineStatus, UiCommand};
@@ -117,6 +119,14 @@ impl Detect {
             fresh: true,
         }
     }
+}
+
+/// Saved references are written at most this often while beats come in.
+const REFS_SAVE_US: u64 = 30_000_000;
+
+/// The store's key for an audio input.
+fn key_of(input: Option<&str>) -> String {
+    input.unwrap_or(crate::settings::SYSTEM_DEFAULT).to_string()
 }
 
 /// Runs the beat's audio through the detector: its moment, or `None` without audio.
@@ -268,6 +278,7 @@ fn snapshot(engine: &Engine) -> EngineStatus {
     s
 }
 
+#[allow(clippy::struct_excessive_bools)] // independent flags of one state machine
 /// The thread's state; generic over the MIDI input and the status sink so tests can fake both.
 pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     engine: Engine,
@@ -310,6 +321,13 @@ pub struct Core<M: MidiPort, A: AudioPort, E: FnMut(&Status)> {
     strip_told: Option<StripStatus>,
     sources_sink: Option<SourcesSink>,
     choice_sink: Option<ChoiceSink>,
+    /// Learned references of every input seen, persisted next to the settings.
+    refs: RefsFile,
+    refs_path: Option<PathBuf>,
+    refs_dirty: bool,
+    refs_saved_us: Option<u64>,
+    #[cfg(test)]
+    refs_writes: u32,
 }
 
 /// Told every new list of MIDI sources (the UI listens).
@@ -380,9 +398,21 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             strip_told: None,
             sources_sink: None,
             choice_sink: None,
+            refs: RefsFile::default(),
+            refs_path: None,
+            refs_dirty: false,
+            refs_saved_us: None,
+            #[cfg(test)]
+            refs_writes: 0,
         };
         core.replan(now_us);
         core
+    }
+
+    /// Loads the saved references from `path` and keeps them there from now on.
+    pub fn set_refs_store(&mut self, path: PathBuf) {
+        self.refs = refs_store::load(&path);
+        self.refs_path = Some(path);
     }
 
     pub fn set_midi_sinks(&mut self, sources: SourcesSink, choice: ChoiceSink) {
@@ -488,6 +518,11 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     fn swap_detector_for_input(&mut self) {
         let key = self.settings.audio_input.clone();
         if self.detect_key != key {
+            if let Some(d) = &self.detect {
+                self.refs
+                    .put(&key_of(self.detect_key.as_deref()), d.moment.export_refs());
+                self.refs_dirty = true;
+            }
             if let Some(d) = self.detect.take()
                 && self.parked.len() < crate::settings::MAX_INPUTS
             {
@@ -500,6 +535,32 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             let p = detector_params(&self.settings);
             d.moment
                 .set_thresholds(p.calm_kick_db, p.calm_high_db, p.riser_db);
+        }
+    }
+
+    /// The live detector's references differ from what the store holds (engine thread, once per beat).
+    fn refs_changed(&self) -> bool {
+        self.detect.as_ref().is_some_and(|d| {
+            let stored = self.refs.inputs.get(&key_of(self.detect_key.as_deref()));
+            stored.map(|e| &e.refs) != Some(&d.moment.export_refs())
+        })
+    }
+
+    /// Exports the current detector into the store and writes the file (engine thread only).
+    fn save_refs(&mut self, now_us: u64) {
+        let Some(path) = &self.refs_path else { return };
+        if let Some(d) = &self.detect {
+            self.refs
+                .put(&key_of(self.detect_key.as_deref()), d.moment.export_refs());
+        }
+        self.refs_saved_us = Some(now_us);
+        match refs_store::save(path, &self.refs) {
+            Ok(()) => self.refs_dirty = false,
+            Err(e) => log::warn!("detector references not saved: {e}"),
+        }
+        #[cfg(test)]
+        {
+            self.refs_writes += 1;
         }
     }
 
@@ -533,7 +594,19 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 Ok(info) => {
                     self.swap_detector_for_input();
                     if self.detect.as_ref().is_none_or(|d| d.rate != info.rate) {
-                        self.detect = Some(Detect::new(info.rate, detector_params(&self.settings)));
+                        // The old detector's learning moves to the new one through the store.
+                        if let Some(old) = &self.detect {
+                            self.refs.put(
+                                &key_of(self.detect_key.as_deref()),
+                                old.moment.export_refs(),
+                            );
+                            self.refs_dirty = true;
+                        }
+                        let mut d = Detect::new(info.rate, detector_params(&self.settings));
+                        if let Some(e) = self.refs.inputs.get(&key_of(self.detect_key.as_deref())) {
+                            d.moment.import_refs(&e.refs);
+                        }
+                        self.detect = Some(d);
                     }
                     if let Some(d) = self.detect.as_mut() {
                         d.fresh = true;
@@ -666,6 +739,9 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 if let Some(silent) = beat_silent {
                     self.check_capture(silent);
                 }
+                if features.is_some() && self.refs_changed() {
+                    self.refs_dirty = true;
+                }
                 if let Some((f, moment)) = features {
                     self.meter(&f, moment, now_us);
                 }
@@ -730,7 +806,10 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 }
                 self.publisher.touch();
             }
-            Input::Quit => return false,
+            Input::Quit => {
+                self.save_refs(now_us);
+                return false;
+            }
         }
         self.after(now_us);
         true
@@ -868,6 +947,13 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         }
         self.tell_strip();
         self.sync_capture();
+        if self.refs_dirty
+            && self
+                .refs_saved_us
+                .is_none_or(|t| now_us.saturating_sub(t) >= REFS_SAVE_US)
+        {
+            self.save_refs(now_us);
+        }
         self.update_tray();
         if self.publisher.due(now_us) {
             let status = self.status();
@@ -923,6 +1009,8 @@ fn report_strip(tx: &SyncSender<Input>, s: StripStatus) {
 
 pub struct RuntimeHandle {
     pub tx: SyncSender<Input>,
+    /// Signalled once the engine loop has returned (its references are saved).
+    pub done: Receiver<()>,
 }
 
 /// Starts the engine thread (and the strip task when there is a strip).
@@ -933,6 +1021,12 @@ pub fn spawn(
     library: Library,
 ) -> RuntimeHandle {
     let (tx, rx) = sync_channel(QUEUE);
+    let (done_tx, done) = sync_channel(1);
+    let refs_path = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join(refs_store::FILE));
     let clock = MonoClock::new();
     let segments = strip.as_ref().map_or(DEFAULT_SEGMENTS, |c| c.segments);
     // The strip task always runs: with no strip file it waits for the wizard's config.
@@ -974,6 +1068,9 @@ pub fn spawn(
                 emit,
                 clock.now_us(),
             );
+            if let Some(p) = refs_path {
+                core.set_refs_store(p);
+            }
             let strip_app = app.clone();
             core.set_strip_sink(Box::new(move |s| {
                 strip_app.state::<AppState>().set_strip(s.clone());
@@ -1002,11 +1099,12 @@ pub fn spawn(
                 crate::tray::apply(&tray_app, prev, view);
             }));
             run(&rx, &clock, &mut core, &visible);
+            let _ = done_tx.send(());
         });
     if let Err(e) = spawned {
         log::error!("engine thread not started: {e}");
     }
-    RuntimeHandle { tx }
+    RuntimeHandle { tx, done }
 }
 
 #[cfg(test)]
@@ -1054,6 +1152,8 @@ mod tests {
         closes: Rc<RefCell<u32>>,
         samples: Vec<f32>,
         errored: bool,
+        /// 0 reads as 48 kHz.
+        rate: u32,
     }
 
     impl AudioPort for FakeAudio {
@@ -1063,7 +1163,7 @@ mod tests {
                 return Err(AudioError::NoDevice);
             }
             Ok(AudioInfo {
-                rate: 48_000,
+                rate: if self.rate == 0 { 48_000 } else { self.rate },
                 name: "Fake mic".into(),
             })
         }
@@ -1319,6 +1419,7 @@ mod tests {
         };
         let seq = Sequence {
             name: "S".into(),
+            fade: true,
             moment: Moment::Rhythm,
             steps: vec![Step {
                 len: StepLen::One,
@@ -1860,6 +1961,113 @@ mod tests {
         };
         c.handle(Input::Settings(new), 3_000_000);
         assert!(c.detect.is_some());
+    }
+
+    fn refs_core(path: &std::path::Path, input: Option<&str>) -> TestCore {
+        let (mut c, _rx, _) = core(false);
+        c.settings.audio_input = input.map(String::from);
+        c.set_refs_store(path.to_path_buf());
+        start(&mut c);
+        c
+    }
+
+    fn key(input: Option<&str>) -> String {
+        input.unwrap_or(crate::settings::SYSTEM_DEFAULT).to_string()
+    }
+
+    #[test]
+    fn refs_are_saved_at_most_every_30_s() {
+        let d = tempfile::tempdir().unwrap();
+        let mut c = refs_core(&d.path().join(refs_store::FILE), None);
+        run_ticks(&mut c, 49..3_500, 20_000);
+        assert!(c.refs_writes >= 1, "saved at all");
+        assert!(c.refs_writes <= 3, "70 s: {} writes", c.refs_writes);
+    }
+
+    #[test]
+    fn frozen_references_stop_being_written() {
+        let d = tempfile::tempdir().unwrap();
+        let mut c = refs_core(&d.path().join(refs_store::FILE), None);
+        run_ticks(&mut c, 49..1_600, 20_000);
+        // The rings fill with one exact value (digital silence) and stop changing.
+        let silent = |c: &mut TestCore, ticks: std::ops::Range<u64>| {
+            for i in ticks {
+                c.audio.samples = vec![0.0; 4_800];
+                let at = i * 20_000;
+                c.handle(
+                    Input::Midi(MidiEvent {
+                        at_us: at,
+                        status: 0xF8,
+                    }),
+                    at,
+                );
+            }
+        };
+        silent(&mut c, 1_600..5_000);
+        let before = c.refs_writes;
+        assert!(before >= 2, "saved while learning: {before}");
+        silent(&mut c, 5_000..8_600);
+        assert_eq!(c.refs_writes, before, "unchanged references were rewritten");
+    }
+
+    #[test]
+    fn a_new_sample_rate_keeps_the_learned_references() {
+        let d = tempfile::tempdir().unwrap();
+        let mut c = refs_core(&d.path().join(refs_store::FILE), None);
+        run_ticks(&mut c, 49..400, 20_000);
+        let want = c.detect.as_ref().unwrap().moment.export_refs();
+        assert!(want.kick.len() > 8);
+        c.handle(
+            Input::Midi(MidiEvent {
+                at_us: 8_000_000,
+                status: 0xFC,
+            }),
+            8_000_000,
+        );
+        c.audio.rate = 44_100;
+        start(&mut c);
+        let d = c.detect.as_ref().unwrap();
+        assert_eq!(d.rate, 44_100);
+        // The restart's own beats come after what was learned before.
+        assert_eq!(d.moment.export_refs().kick[..want.kick.len()], want.kick);
+    }
+
+    #[test]
+    fn quit_writes_refs() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join(refs_store::FILE);
+        let mut c = refs_core(&p, None);
+        run_ticks(&mut c, 49..121, 20_000);
+        let want = c.detect.as_ref().unwrap().moment.export_refs();
+        assert_ne!(want.kick, Vec::<f32>::new());
+        assert!(!c.handle(Input::Quit, 3_000_000));
+        assert_eq!(refs_store::load(&p).inputs[&key(None)].refs, want);
+    }
+
+    #[test]
+    fn restart_restores_refs_warm() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join(refs_store::FILE);
+        let mut a = refs_core(&p, Some("Mic A"));
+        run_ticks(&mut a, 49..121, 20_000);
+        let want = a.detect.as_ref().unwrap().moment.export_refs();
+        a.handle(Input::Quit, 3_000_000);
+        let b = refs_core(&p, Some("Mic A"));
+        assert_eq!(b.detect.as_ref().unwrap().moment.export_refs(), want);
+    }
+
+    #[test]
+    fn new_input_starts_without_refs() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join(refs_store::FILE);
+        let mut a = refs_core(&p, Some("Mic A"));
+        run_ticks(&mut a, 49..121, 20_000);
+        a.handle(Input::Quit, 3_000_000);
+        let b = refs_core(&p, Some("Mic B"));
+        assert_eq!(
+            b.detect.as_ref().unwrap().moment.export_refs().kick,
+            Vec::<f32>::new()
+        );
     }
 
     fn switch_input(c: &mut TestCore, input: Option<&str>, at: u64) {

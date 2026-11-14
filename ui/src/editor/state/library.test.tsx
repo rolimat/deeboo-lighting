@@ -10,7 +10,7 @@ import { api } from "../api";
 import { useLibrary } from "./library";
 
 const lib0: Library = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   shape: { pieces: [] },
   palettes: [],
   sequences: [],

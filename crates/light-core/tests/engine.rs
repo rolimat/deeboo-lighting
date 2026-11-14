@@ -479,8 +479,15 @@ fn lead_ms_changes_send_times() {
 
 /// The built-in library reduced to one palette and the first sequence of each moment, in order.
 fn plain(n: u8) -> light_core::library::Library {
+    use light_core::builtin::sequence;
+    use light_core::detect::Moment::{BuildUp, Calm, Rhythm};
     use light_core::library::{Order, SeqRef};
     let mut lib = light_core::library::Library::builtin(n);
+    lib.sequences = vec![
+        (1, sequence(Rhythm, n)),
+        (5, sequence(Calm, n)),
+        (8, sequence(BuildUp, n)),
+    ];
     lib.palettes.truncate(1);
     lib.active_palette = Some(1);
     let set = &mut lib.sets[0];
@@ -569,7 +576,7 @@ fn matching_library_sequence_is_played() {
     s.start();
     s.beats_of(2, &mut none);
     let got = apply_all(&s.sends, vec![None; 4]);
-    assert_eq!(got, vec![hsv(280, 900, 950); 4]);
+    assert_eq!(got, vec![hsv(320, 900, 1000); 4]);
 }
 
 #[test]
@@ -774,7 +781,7 @@ fn edited_playing_sequence_shows_from_the_next_bar() {
     s.e.set_library(s.now, &edited);
     s.beats_of(6, &mut none);
     let got = apply_all(&s.sends, vec![None; 4]);
-    assert_eq!(got, vec![hsv(280, 900, 950); 4]);
+    assert_eq!(got, vec![hsv(320, 900, 1000); 4]);
 }
 
 /// `plain` with a second palette (principal hue 100), in Auto, rotating as `change` says.
@@ -887,12 +894,12 @@ fn calm_bars_rotates_inside_a_long_break() {
 }
 
 #[test]
-fn pattern_ref_plays_that_pattern_with_new_params() {
+fn pattern_ref_plays_that_pattern() {
     use light_core::library::{Interval, Library, Order, SeqRef};
     use light_core::patterns::Pattern;
     let mut lib = Library::builtin(4);
     let ms = &mut lib.sets[0].rhythm;
-    ms.sequences = vec![SeqRef::Pattern(Pattern::Halves)];
+    ms.sequences = vec![SeqRef::Pattern(Pattern::HalvesBlink)];
     ms.order = Order::InOrder;
     ms.interval = Interval::Bars(1);
     let mut s = sim125();
@@ -905,13 +912,6 @@ fn pattern_ref_plays_that_pattern_with_new_params() {
         seen.iter().all(|p| *p == [1, 2] || *p == [3, 4]),
         "only halves: {seen:?}"
     );
-    let bars: Vec<String> = (1..15u64)
-        .map(|bar| {
-            let from = T0 + bar * 4 * 480_000 - LEAD;
-            format!("{:?}", s.sends_in(from, from + 4 * 480_000))
-        })
-        .collect();
-    assert!(bars.iter().any(|b| *b != bars[0]), "fresh params each bar");
 }
 
 // ---- palette preview ("Show on strip") ----
@@ -939,6 +939,7 @@ fn preview_pair() -> (light_core::model::Palette, light_core::model::Sequence) {
         },
         Sequence {
             name: "S".into(),
+            fade: true,
             moment: Rhythm,
             steps: vec![step(Role::Principal), step(Role::Contraste)],
         },
@@ -1026,6 +1027,56 @@ fn preview_follows_the_clock_when_it_runs() {
     s.beats_of(3, &mut none);
     let after = hues(&s.sends[mark..]);
     assert!(!after.contains(&111) && !after.contains(&222), "{after:?}");
+}
+
+/// Four-beat steps of two opposite colours on every segment, as a preview of `moment`.
+fn slow_preview(moment: Moment) -> (light_core::model::Palette, Sequence) {
+    let (palette, mut seq) = preview_pair();
+    seq.moment = moment;
+    seq.steps = vec![
+        uniform(StepLen::Four, Role::Principal),
+        uniform(StepLen::Four, Role::Contraste),
+    ];
+    (palette, seq)
+}
+
+fn mixed(sends: &[(u64, PaintCommand)]) -> bool {
+    hues(sends).iter().any(|h| ![111, 222].contains(h))
+}
+
+#[test]
+fn a_calm_preview_fades_even_when_the_show_is_not_calm() {
+    let mut s = sim125();
+    s.start();
+    s.beats_of(2, &mut none);
+    let out = s.e.set_preview(s.now, Some(slow_preview(Calm)));
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.beats_of(14, &mut none);
+    assert!(mixed(&s.sends[mark..]), "{:?}", hues(&s.sends[mark..]));
+}
+
+#[test]
+fn a_rhythm_preview_never_fades_even_when_the_show_is_calm() {
+    let mut s = sim125();
+    s.start();
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(2, &mut none);
+    let out = s.e.set_preview(s.now, Some(slow_preview(Rhythm)));
+    s.record(s.now, out);
+    let mark = s.sends.len();
+    s.beats_of(14, &mut none);
+    assert_ne!(hues(&s.sends[mark..]), Vec::<u16>::new());
+    assert!(!mixed(&s.sends[mark..]), "{:?}", hues(&s.sends[mark..]));
+}
+
+#[test]
+fn a_calm_preview_without_a_clock_fades_after_its_first_cut() {
+    let mut s = sim125();
+    let out = s.e.set_preview(s.now, Some(slow_preview(Calm)));
+    s.record(s.now, out);
+    s.deadlines_until(T0 + 6_000_000);
+    assert!(mixed(&s.sends), "{:?}", hues(&s.sends));
 }
 
 #[test]
@@ -1279,4 +1330,455 @@ fn two_contradicted_predictions_and_the_real_drop_advance_the_palette_once() {
     });
     assert_eq!(s.e.status().moment, Rhythm);
     assert_eq!(s.e.status().palette, Some(2));
+}
+
+// ---- Calm fades ----
+
+use light_core::fade::mix;
+use light_core::library::{Interval, Library, Order, SeqRef};
+use light_core::model::{Colour, Role, Sequence, Step, StepLen, resolve};
+use light_core::scheduler::MESSAGE_GAP_US;
+
+const HALF: u64 = 240_000;
+
+fn uniform(len: StepLen, role: Role) -> Step {
+    Step {
+        len,
+        roles: vec![role; 4],
+    }
+}
+
+/// `plain(4)` with this Calm sequence (id 5).
+fn calm_with(steps: Vec<Step>, fade: bool) -> Library {
+    let mut lib = plain(4);
+    lib.sequences[1].1 = Sequence {
+        name: "c".into(),
+        moment: Calm,
+        steps,
+        fade,
+    };
+    lib
+}
+
+fn role_colour(lib: &Library, role: Role) -> Colour {
+    resolve(role, &lib.palettes[0].1, 100)
+}
+
+/// Strip state after each half-beat window (the messages planned by one half pulse land in it).
+fn timeline(s: &Sim, windows: u64) -> Vec<Vec<Colour>> {
+    let mut state = vec![None; 4];
+    (0..windows)
+        .map(|n| {
+            state = apply_all(
+                &s.sends_in(T0 + n * HALF, T0 + (n + 1) * HALF),
+                state.clone(),
+            );
+            state.clone()
+        })
+        .collect()
+}
+
+fn calm_run(lib: &Library, beats: u64) -> Sim {
+    let mut s = sim125();
+    s.e.set_library(s.now, lib);
+    s.start();
+    s.beats_of(2, &mut none);
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(beats, &mut none);
+    s
+}
+
+/// Window of the first state equal to `first`, after `after`.
+#[allow(clippy::unwrap_used)] // test helper
+fn find(tl: &[Vec<Colour>], after: usize, first: Colour) -> usize {
+    after
+        + tl[after..]
+            .iter()
+            .position(|st| st.iter().all(|c| c == &first))
+            .unwrap()
+}
+
+fn assert_fade(s: &Sim, tl: &[Vec<Colour>], at: usize, from: Colour, to: Colour, frames: u8) {
+    for k in 1..=frames {
+        let want = mix(from, to, k, frames);
+        assert_eq!(tl[at + usize::from(k) - 1], vec![want; 4], "frame {k}");
+    }
+    assert!(
+        s.sends_in(
+            T0 + (at as u64 + u64::from(frames)) * HALF,
+            T0 + (at as u64 + u64::from(frames) + 2) * HALF
+        )
+        .is_empty(),
+        "no message after the last frame"
+    );
+}
+
+#[allow(clippy::unwrap_used)] // test helper
+fn first_mixed(tl: &[Vec<Colour>], p: Colour, q: Colour) -> usize {
+    tl.iter()
+        .position(|st| st.iter().all(|c| *c != p && *c != q && c.is_some()))
+        .unwrap()
+}
+
+#[test]
+fn calm_step_change_fades_in_four_half_beat_frames() {
+    let lib = calm_with(
+        vec![
+            uniform(StepLen::Four, Role::Principal),
+            uniform(StepLen::Four, Role::Suave),
+        ],
+        true,
+    );
+    let (p, q) = (
+        role_colour(&lib, Role::Principal),
+        role_colour(&lib, Role::Suave),
+    );
+    let s = calm_run(&lib, 12);
+    let tl = timeline(&s, 24);
+    let at = first_mixed(&tl, p, q);
+    assert_eq!(tl[at - 1], vec![p; 4]);
+    assert_fade(&s, &tl, at, p, q, 4);
+}
+
+#[test]
+fn calm_loop_wrap_fades() {
+    let lib = calm_with(
+        vec![
+            uniform(StepLen::Four, Role::Principal),
+            uniform(StepLen::Four, Role::Suave),
+        ],
+        true,
+    );
+    let (p, q) = (
+        role_colour(&lib, Role::Principal),
+        role_colour(&lib, Role::Suave),
+    );
+    let s = calm_run(&lib, 16);
+    let tl = timeline(&s, 34);
+    let first = first_mixed(&tl, p, q);
+    let wrap = first
+        + 4
+        + tl[first + 4..]
+            .iter()
+            .position(|st| *st == vec![q; 4])
+            .unwrap();
+    let at = wrap + tl[wrap..].iter().position(|st| st[0] != q).unwrap();
+    assert_fade(&s, &tl, at, q, p, 4);
+}
+
+#[test]
+fn short_calm_step_fades_over_half_the_step() {
+    let lib = calm_with(
+        vec![
+            uniform(StepLen::Four, Role::Principal),
+            uniform(StepLen::Two, Role::Suave),
+        ],
+        true,
+    );
+    let (p, q) = (
+        role_colour(&lib, Role::Principal),
+        role_colour(&lib, Role::Suave),
+    );
+    let s = calm_run(&lib, 8);
+    let tl = timeline(&s, 18);
+    let at = first_mixed(&tl, p, q);
+    assert_fade(&s, &tl, at, p, q, 2);
+}
+
+#[test]
+fn fade_off_is_a_dry_cut() {
+    let lib = calm_with(
+        vec![
+            uniform(StepLen::Four, Role::Principal),
+            uniform(StepLen::Four, Role::Suave),
+        ],
+        false,
+    );
+    let (p, q) = (
+        role_colour(&lib, Role::Principal),
+        role_colour(&lib, Role::Suave),
+    );
+    let s = calm_run(&lib, 12);
+    let tl = timeline(&s, 24);
+    let cut = |c: &Colour| {
+        c.is_none()
+            || [p, q, role_colour(&lib, Role::Contraste)].contains(c)
+            || c.is_some_and(|h| h.s == 0)
+    };
+    assert!(tl.iter().flatten().all(cut), "{tl:?}");
+    let at = find(&tl, find(&tl, 0, p), q);
+    assert_eq!(
+        s.sends_in(T0 + (at as u64 + 1) * HALF, T0 + (at as u64 + 8) * HALF),
+        vec![]
+    );
+}
+
+/// The two-step Calm show, forced Calm, `beats` beats in; also the colours of its steps.
+fn two_step_calm(beats: u64) -> (Library, Sim, Colour, Colour) {
+    let lib = calm_with(
+        vec![
+            uniform(StepLen::Four, Role::Principal),
+            uniform(StepLen::Four, Role::Suave),
+        ],
+        true,
+    );
+    let (p, q) = (
+        role_colour(&lib, Role::Principal),
+        role_colour(&lib, Role::Suave),
+    );
+    let s = calm_run(&lib, beats);
+    (lib, s, p, q)
+}
+
+fn is_cut_colour(lib: &Library, c: Colour, p: Colour, q: Colour) -> bool {
+    c.is_none()
+        || [p, q, role_colour(lib, Role::Contraste)].contains(&c)
+        || c.is_some_and(|h| h.s == 0)
+}
+
+#[test]
+fn a_reconnect_mid_step_makes_the_next_step_change_a_cut() {
+    let (lib, mut s, p, q) = two_step_calm(1);
+    s.e.strip_reconnected();
+    s.beats_of(8, &mut none);
+    let tl = timeline(&s, 20);
+    let at = find(&tl, find(&tl, 0, p), q);
+    assert!(
+        tl[..=at]
+            .iter()
+            .flatten()
+            .all(|c| is_cut_colour(&lib, *c, p, q)),
+        "{tl:?}"
+    );
+}
+
+#[test]
+fn a_preview_toggle_in_calm_makes_the_next_step_a_cut() {
+    let (lib, mut s, p, q) = two_step_calm(6); // the second step plays
+    let n0 = ((s.now - T0) / HALF) as usize;
+    let out = s.e.set_preview(s.now, Some(preview_pair()));
+    s.record(s.now, out);
+    let out = s.e.set_preview(s.now, None);
+    s.record(s.now, out);
+    s.beats_of(3, &mut none);
+    let tl = timeline(&s, n0 as u64 + 6);
+    assert!(
+        tl[n0..]
+            .iter()
+            .flatten()
+            .all(|c| is_cut_colour(&lib, *c, p, q)),
+        "{:?}",
+        &tl[n0..]
+    );
+}
+
+#[test]
+fn the_end_of_calibration_makes_the_next_step_a_cut() {
+    let (lib, mut s, p, q) = two_step_calm(6);
+    let n0 = ((s.now - T0) / HALF) as usize;
+    let out = s.e.calibrate(s.now, true);
+    s.record(s.now, out);
+    let out = s.e.calibrate(s.now, false);
+    s.record(s.now, out);
+    s.beats_of(3, &mut none);
+    let tl = timeline(&s, n0 as u64 + 6);
+    assert!(
+        tl[n0..]
+            .iter()
+            .flatten()
+            .all(|c| is_cut_colour(&lib, *c, p, q)),
+        "{:?}",
+        &tl[n0..]
+    );
+}
+
+#[test]
+fn entering_and_leaving_calm_and_palette_change_cut() {
+    let lib = calm_with(
+        vec![
+            uniform(StepLen::Four, Role::Principal),
+            uniform(StepLen::Four, Role::Suave),
+        ],
+        true,
+    );
+    let p = role_colour(&lib, Role::Principal);
+    let mut s = sim125();
+    s.e.set_library(s.now, &lib);
+    s.start();
+    s.beats_of(4, &mut none);
+    s.cmd(UiCommand::Force(Calm));
+    s.beats_of(8, &mut none);
+    let tl = timeline(&s, 16);
+    // Rhythm (role colours) then Calm's first step: no mixed colour anywhere on the way in.
+    assert!(
+        tl.iter().flatten().all(|c| c.is_none()
+            || [Role::Principal, Role::Suave, Role::Contraste, Role::White]
+                .iter()
+                .any(|r| role_colour(&lib, *r) == *c)),
+        "{tl:?}"
+    );
+    // Calm -> Build-up likewise.
+    let mut s = calm_run(&lib, 4);
+    let before = s.sends.len();
+    s.cmd(UiCommand::Force(BuildUp));
+    s.beats_of(8, &mut none);
+    let known: Vec<Colour> = [Role::Principal, Role::Suave, Role::Contraste, Role::White]
+        .iter()
+        .map(|r| role_colour(&lib, *r))
+        .collect();
+    for (_, c) in &s.sends[before..] {
+        let h = match c {
+            PaintCommand::Bucket(h) => Some(*h),
+            PaintCommand::Pencil { color, .. } => Some(*color),
+            PaintCommand::Eraser { .. } => None,
+        };
+        assert!(h.is_none() || known.contains(&h), "{c:?}");
+    }
+    // A palette rotation inside Calm shows the new palette at once.
+    // One steady colour: any mixed colour on the strip would be a fade across the palette change.
+    let mut lib2 = calm_with(vec![uniform(StepLen::Four, Role::Principal)], true);
+    let mut pal2 = lib2.palettes[0].1.clone();
+    pal2.principal.h = (pal2.principal.h + 100) % 360;
+    pal2.suave.h = (pal2.suave.h + 100) % 360;
+    lib2.palettes.push((2, pal2.clone()));
+    lib2.sets[0].palettes = vec![1, 2];
+    lib2.sets[0].palette_order = Order::InOrder;
+    lib2.sets[0].palette_change = light_core::library::PaletteChange::Bars(2);
+    lib2.active_palette = None;
+    let s = calm_run(&lib2, 24);
+    let tl = timeline(&s, 50);
+    let np = resolve(Role::Principal, &pal2, 100);
+    let ns = resolve(Role::Suave, &pal2, 100);
+    let ok = |c: &Colour| {
+        [
+            p,
+            role_colour(&lib, Role::Suave),
+            role_colour(&lib, Role::Contraste),
+            np,
+            ns,
+        ]
+        .contains(c)
+            || *c
+                == Some(light_core::paint::Hsv {
+                    h: 0,
+                    s: 0,
+                    v: 1000,
+                })
+    };
+    assert!(tl.iter().flatten().all(|c| c.is_none() || ok(c)), "{tl:?}");
+    assert!(
+        tl.iter().flatten().any(|c| *c == np || *c == ns),
+        "palette never changed"
+    );
+}
+
+#[test]
+fn calm_to_calm_rotation_fades() {
+    let mut lib = calm_with(vec![uniform(StepLen::Four, Role::Principal)], true);
+    let mut q2 = lib.sequences[1].1.clone();
+    q2.steps = vec![uniform(StepLen::Four, Role::Contraste)];
+    lib.sequences.push((99, q2));
+    lib.sets[0].calm.sequences = vec![SeqRef::Id(5), SeqRef::Id(99)];
+    lib.sets[0].calm.order = Order::InOrder;
+    lib.sets[0].calm.interval = Interval::Bars(1);
+    let (p, c) = (
+        role_colour(&lib, Role::Principal),
+        role_colour(&lib, Role::Contraste),
+    );
+    let s = calm_run(&lib, 12);
+    let tl = timeline(&s, 24);
+    let at = first_mixed(&tl, p, c);
+    assert_eq!(tl[at - 1], vec![p; 4]);
+    assert_fade(&s, &tl, at, p, c, 4);
+}
+
+#[test]
+#[allow(clippy::many_single_char_names)] // the colours are P, S, C
+fn fade_starts_from_the_last_planned_frame() {
+    // Four 1-beat steps (cuts), then a long step that starts at half beat 8: the rotation at the next
+    // bar start's planning pulse lands on the last frame of its fade.
+    let mut lib = calm_with(
+        vec![
+            uniform(StepLen::One, Role::Principal),
+            uniform(StepLen::One, Role::Principal),
+            uniform(StepLen::One, Role::Principal),
+            uniform(StepLen::One, Role::Principal),
+            uniform(StepLen::Four, Role::Suave),
+        ],
+        true,
+    );
+    let mut q2 = lib.sequences[1].1.clone();
+    q2.steps = vec![uniform(StepLen::Four, Role::Contraste)];
+    lib.sequences.push((99, q2));
+    lib.sets[0].calm.sequences = vec![SeqRef::Id(5), SeqRef::Id(99)];
+    lib.sets[0].calm.order = Order::InOrder;
+    lib.sets[0].calm.interval = Interval::Bars(1);
+    let (p, q, c) = (
+        role_colour(&lib, Role::Principal),
+        role_colour(&lib, Role::Suave),
+        role_colour(&lib, Role::Contraste),
+    );
+    let s = calm_run(&lib, 16);
+    let tl = timeline(&s, 34);
+    // The long step fades P -> S; the rotation cuts that short and the new fade starts from the
+    // frame on the strip, not from S.
+    let i = first_mixed(&tl, p, q);
+    let k = (i + 1..tl.len())
+        .find(|k| tl[*k] != vec![mix(p, q, u8::try_from(*k - i + 1).unwrap(), 4); 4])
+        .unwrap();
+    let prev = tl[k - 1][0];
+    assert!(
+        prev != p && prev != q && prev != c,
+        "rotation missed the fade: {prev:?}"
+    );
+    assert_eq!(tl[k], vec![mix(prev, c, 1, 4); 4]);
+}
+
+#[test]
+fn rhythm_and_buildup_never_fade() {
+    let lib = calm_with(vec![uniform(StepLen::Four, Role::Principal)], true);
+    let known: Vec<Colour> = [Role::Principal, Role::Suave, Role::Contraste, Role::White]
+        .iter()
+        .map(|r| role_colour(&lib, *r))
+        .collect();
+    for m in [Rhythm, BuildUp] {
+        let mut s = sim125();
+        s.e.set_library(s.now, &lib);
+        s.start();
+        s.cmd(UiCommand::Force(m));
+        s.beats_of(16, &mut none);
+        assert_ne!(s.sends.len(), 0);
+        for (_, c) in &s.sends {
+            let h = match c {
+                PaintCommand::Bucket(h) => Some(*h),
+                PaintCommand::Pencil { color, .. } => Some(*color),
+                PaintCommand::Eraser { .. } => None,
+            };
+            assert!(h.is_none() || known.contains(&h), "{m:?} {c:?}");
+        }
+    }
+}
+
+#[test]
+fn two_colour_buildups_at_140_bpm_accumulate_no_delay() {
+    use light_core::patterns::Pattern::{HalvesAccelerating, OddEvenAccelerating, OddEvenStrobe};
+    for p in [OddEvenStrobe, HalvesAccelerating, OddEvenAccelerating] {
+        let mut lib = Library::builtin(4);
+        lib.sets[0].buildup.sequences = vec![SeqRef::Pattern(p)];
+        lib.sets[0].buildup.order = Order::InOrder;
+        let mut s = Sim::new(17_857);
+        s.e.set_library(s.now, &lib);
+        s.start();
+        s.cmd(UiCommand::Force(BuildUp));
+        s.beats_of(64, &mut none);
+        assert!(s.sends.len() > 20, "{p:?}");
+        for w in s.sends.windows(2) {
+            assert!(w[1].0 - w[0].0 >= MESSAGE_GAP_US, "{p:?} {w:?}");
+        }
+        let half = 12 * 17_857;
+        for (t, _) in &s.sends {
+            let since = (t - T0) % half;
+            assert!(since < 2 * MESSAGE_GAP_US, "{p:?} backlog: {since}");
+        }
+    }
 }

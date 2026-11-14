@@ -1,12 +1,12 @@
 //! The user library: shape, palettes, sequences and sets, with strict validation (plan 5).
 use crate::builtin::{self, test_palette};
 use crate::detect::Moment;
-use crate::model::{Palette, Sequence};
+use crate::model::{Palette, Sequence, Step, StepLen};
 use crate::paint::Hsv;
 use crate::patterns::Pattern;
 use std::fmt;
 
-pub const SCHEMA_VERSION: u16 = 2;
+pub const SCHEMA_VERSION: u16 = 3;
 pub const MAX_PALETTES: usize = 32;
 pub const MAX_SEQUENCES: usize = 64;
 pub const MAX_SETS: usize = 16;
@@ -78,7 +78,7 @@ pub enum Interval {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum SeqRef {
     Id(u32),
@@ -86,6 +86,31 @@ pub enum SeqRef {
     Generated,
     /// This pattern, with new parameters each time.
     Pattern(Pattern),
+}
+
+/// An unknown pattern name (a file from another version) reads as `Generated`: loading never fails.
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for SeqRef {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{IntoDeserializer, value::Error};
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        enum Raw {
+            Id(u32),
+            Generated,
+            Pattern(String),
+        }
+        Ok(match Raw::deserialize(d)? {
+            Raw::Id(id) => SeqRef::Id(id),
+            Raw::Generated => SeqRef::Generated,
+            Raw::Pattern(name) => {
+                let known = <Pattern as serde::Deserialize>::deserialize(
+                    IntoDeserializer::<Error>::into_deserializer(name.as_str()),
+                );
+                known.map_or(SeqRef::Generated, SeqRef::Pattern)
+            }
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,20 +254,19 @@ impl Library {
         changed
     }
 
-    /// First-run library (spec §6.3): the 8 built-in palettes, the 10 built-in sequences for a row of
-    /// `segments`, and the active set "Auto". A stored library always has palettes and sequences, so
-    /// built-ins are never merged into one; `library_store::load` only uses this when none is usable.
+    /// First-run library (spec §6.3): the 9 built-in palettes, no sequences (the 35 patterns are
+    /// always available) and the active set "Auto". `library_store::load` only uses this when no
+    /// stored library is usable.
     #[must_use]
     pub fn builtin(segments: u8) -> Self {
         let shape = Shape::row(segments);
-        let seqs = builtin::sequences(segments, &crate::groups::groups(&shape));
         let palettes: Vec<(u32, Palette)> = (1..).zip(builtin::palettes()).collect();
         let ids: Vec<u32> = palettes.iter().map(|(i, _)| *i).collect();
         Library {
             schema_version: SCHEMA_VERSION,
             shape,
             palettes,
-            sequences: (1..).zip(seqs).collect(),
+            sequences: Vec::new(),
             sets: vec![builtin::auto_set(1, &ids)],
             active_set: 1,
             active_palette: None,
@@ -414,5 +438,42 @@ impl Library {
             return err("active_palette", "references an unknown palette");
         }
         Ok(())
+    }
+}
+
+/// Appends steps repeating from the first until the sequence fills whole bars, then cuts it to
+/// 16 bars; the step that crosses the limit is shortened (largest lengths first) to fit exactly.
+pub fn pad_to_bars(seq: &mut Sequence) {
+    const MAX: u32 = MAX_BARS as u32 * BAR_HALF_BEATS;
+    let hb = |s: &Step| u32::from(s.len.half_beats());
+    let n = seq.steps.len();
+    let mut total: u32 = seq.steps.iter().map(hb).sum();
+    let mut i = 0;
+    while n > 0 && !total.is_multiple_of(BAR_HALF_BEATS) && total < MAX {
+        seq.steps.push(seq.steps[i % n].clone());
+        total += hb(&seq.steps[n + i]);
+        i += 1;
+    }
+    if total <= MAX {
+        return;
+    }
+    let mut kept = 0;
+    let mut sum = 0;
+    while sum + hb(&seq.steps[kept]) <= MAX {
+        sum += hb(&seq.steps[kept]);
+        kept += 1;
+    }
+    let cross = seq.steps[kept].clone();
+    seq.steps.truncate(kept);
+    while sum < MAX {
+        let len = [StepLen::Four, StepLen::Two, StepLen::One, StepLen::Half]
+            .into_iter()
+            .find(|l| sum + u32::from(l.half_beats()) <= MAX)
+            .unwrap_or(StepLen::Half);
+        sum += u32::from(len.half_beats());
+        seq.steps.push(Step {
+            len,
+            ..cross.clone()
+        });
     }
 }

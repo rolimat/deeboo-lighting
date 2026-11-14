@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
 use light_core::library::{Library, SeqRef};
-use light_core::migrate::{LibraryV1, migrate_v1};
+use light_core::migrate::{LibraryV1, LibraryV2, migrate_v1, migrate_v2};
 
 /// A hand-edited multi-GB file must not blow memory: larger files count as invalid.
 /// The largest library `validate` accepts is ~4.7 MB compact (128 steps).
@@ -64,17 +64,24 @@ struct Version {
     schema_version: u16,
 }
 
-/// A schema-1 file is migrated (spec §6.5): backed up once as `.v1`, then saved as schema 2. A failed
-/// migration is an error like any invalid file; a failed backup or save keeps the file and the
-/// migrated library is used in memory.
+/// A schema-1 or 2 file is migrated (spec §6.5): backed up once as `.v1` / `.v2`, then saved as
+/// schema 3. A failed migration is an error like any invalid file; a failed backup or save keeps
+/// the file and the migrated library is used in memory.
 fn parse(path: &Path, text: &str, phrase_bars: u8) -> Result<Library, String> {
-    if matches!(
-        serde_json::from_str(text),
-        Ok(Version { schema_version: 1 })
-    ) {
-        let v1 = serde_json::from_str::<LibraryV1>(text).map_err(|e| describe(&e))?;
-        let lib = migrate_v1(v1, phrase_bars).map_err(|e| e.to_string())?;
-        let backup = sibling(path, ".v1");
+    let migrated = match serde_json::from_str(text).map(|v: Version| v.schema_version) {
+        Ok(1) => {
+            let v1 = serde_json::from_str::<LibraryV1>(text).map_err(|e| describe(&e))?;
+            Some((".v1", migrate_v1(v1, phrase_bars)))
+        }
+        Ok(2) => {
+            let v2 = serde_json::from_str::<LibraryV2>(text).map_err(|e| describe(&e))?;
+            Some((".v2", migrate_v2(v2)))
+        }
+        _ => None,
+    };
+    if let Some((suffix, lib)) = migrated {
+        let lib = lib.map_err(|e| e.to_string())?;
+        let backup = sibling(path, suffix);
         // `copy` keeps the file's own permissions, as for every other file of the store.
         let kept = backup.exists() || std::fs::copy(path, &backup).is_ok();
         if !kept || save(path, &lib).is_err() {
@@ -195,6 +202,21 @@ fn ids<T>(v: &[(u32, T)]) -> Vec<u32> {
     v.iter().map(|e| e.0).collect()
 }
 
+/// `Library::builtin` plus ten sequences (ids 1-4 Rhythm, 5-7 Calm, 8-10 Build-up), for tests that
+/// need sequences to edit.
+#[cfg(test)]
+pub(crate) fn seeded_builtin(n: u8) -> Library {
+    use light_core::detect::Moment::{BuildUp, Calm, Rhythm};
+    use light_core::patterns::{build, for_moment};
+    let mut l = Library::builtin(n);
+    let picks = [(Rhythm, 4), (Calm, 3), (BuildUp, 3)];
+    let seqs = picks
+        .iter()
+        .flat_map(|(m, k)| for_moment(*m).iter().take(*k).map(move |p| build(*p, n)));
+    l.sequences = (1..).zip(seqs).collect();
+    l
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,7 +229,7 @@ mod tests {
     }
 
     fn with(edit: impl FnOnce(&mut Value)) -> String {
-        let mut v = serde_json::to_value(Library::builtin(10)).unwrap();
+        let mut v = serde_json::to_value(seeded_builtin(10)).unwrap();
         edit(&mut v);
         v.to_string()
     }
@@ -217,7 +239,7 @@ mod tests {
     /// The editor pairs sent and saved entries by index: renumbering never reorders, adds or drops.
     #[test]
     fn assign_ids_keeps_order_and_count_and_changes_only_new_ids() {
-        let prev = Library::builtin(10);
+        let prev = seeded_builtin(10);
         let mut new = prev.clone();
         let (pal, seq, set) = (
             new.palettes[0].clone(),
@@ -260,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn load_v1_writes_backup_once_and_saves_v2() {
+    fn load_v1_writes_backup_once_and_saves_v3() {
         use std::os::unix::fs::PermissionsExt;
         let (dir, p) = tmp();
         std::fs::write(&p, V1).unwrap();
@@ -272,12 +294,62 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), V1);
         let mode = |f: &Path| std::fs::metadata(f).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&backup), 0o640, "same permissions as the file");
-        assert_eq!(load(&p, 4, 8), lib, "v2 was saved over the original");
+        assert_eq!(load(&p, 4, 8), lib, "v3 was saved over the original");
         assert!(!dir.path().join("library.json.bad").exists());
         // A second v1 file (e.g. restored by hand) must not replace the first backup.
         std::fs::write(&p, V1.replace("Club night", "Other")).unwrap();
         assert_eq!(load(&p, 4, 8).sets[0].name, "Other");
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), V1);
+    }
+
+    #[test]
+    fn v3_with_an_unknown_pattern_loads_it_as_generated() {
+        let (dir, p) = tmp();
+        let mut v = serde_json::to_value(seeded_builtin(10)).unwrap();
+        v["sets"][0]["rhythm"]["sequences"] =
+            json!([{"pattern": "snake"}, {"pattern": "crossPairs"}]);
+        std::fs::write(&p, v.to_string()).unwrap();
+        let lib = load(&p, 10, 8);
+        assert_eq!(
+            lib.sets[0].rhythm.sequences,
+            [
+                SeqRef::Generated,
+                SeqRef::Pattern(light_core::patterns::Pattern::CrossPairs)
+            ]
+        );
+        assert!(!dir.path().join("library.json.bad").exists());
+        let again: Library = serde_json::from_str(&serde_json::to_string(&lib).unwrap()).unwrap();
+        assert_eq!(again, lib, "a known pattern round-trips");
+    }
+
+    #[test]
+    fn load_v2_writes_backup_once_and_saves_v3() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, p) = tmp();
+        let mut v = serde_json::to_value(seeded_builtin(10)).unwrap();
+        v["schemaVersion"] = json!(2);
+        v["sets"][0]["rhythm"]["sequences"] = json!([{"pattern": "snake"}]);
+        let text = v.to_string();
+        std::fs::write(&p, &text).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let lib = load(&p, 10, 8);
+        assert_eq!(lib.validate(), Ok(()));
+        assert_eq!(lib.sets[0].rhythm.sequences, [SeqRef::Generated]);
+        let backup = dir.path().join("library.json.v2");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), text);
+        let mode = |f: &Path| std::fs::metadata(f).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&backup), 0o640, "same permissions as the file");
+        assert!(
+            std::fs::read_to_string(&p)
+                .unwrap()
+                .contains("\"schemaVersion\":3")
+        );
+        assert_eq!(load(&p, 10, 8), lib);
+        // A second v2 file must not replace the first backup.
+        std::fs::write(&p, text.replace("Auto", "Other")).unwrap();
+        assert_eq!(load(&p, 10, 8).sets[0].name, "Other");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), text);
+        assert!(!dir.path().join("library.json.bad").exists());
     }
 
     #[test]
@@ -348,7 +420,7 @@ mod tests {
         );
         assert_eq!(
             lib.sequences,
-            Library::builtin(10).sequences,
+            seeded_builtin(10).sequences,
             "the rest is kept"
         );
     }
@@ -381,7 +453,7 @@ mod tests {
 
     #[test]
     fn largest_valid_library_survives_a_save_and_reload() {
-        let mut lib = Library::builtin(60);
+        let mut lib = seeded_builtin(60);
         let seq = lib.sequences[0].1.clone();
         let mut big = seq.clone();
         let mut half = seq.steps[0].clone();
