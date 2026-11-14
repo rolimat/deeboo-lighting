@@ -11,6 +11,7 @@ pub mod migrate;
 pub mod model;
 pub mod moments;
 pub mod paint;
+pub mod parts;
 pub mod patterns;
 pub mod rotation;
 pub mod scene;
