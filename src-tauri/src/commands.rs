@@ -711,16 +711,14 @@ pub fn message_counts(
     message_counts_of(&state.library(), &sequence, palette_id)
 }
 
-/// One example of `pattern` with random parameters, for the library's own segment count and shape
-/// (every sequence in the library matches it; no strip needed).
+/// `pattern` for the library's own segment count (every sequence in the library matches it; no
+/// strip needed). Deterministic.
 fn pattern_sequence_of(
     lib: &Library,
     pattern: light_core::patterns::Pattern,
-    seed: u64,
 ) -> Result<Sequence, String> {
     let n = lib.segments();
-    let groups = light_core::groups::groups(&lib.shape);
-    let seq = light_core::generator::Generator::new(seed).pattern(pattern, &groups, n);
+    let seq = light_core::patterns::build(pattern, n);
     seq.validate(n)
         .map_err(|_| "Could not build that pattern for this library.".to_string())?;
     Ok(seq)
@@ -732,16 +730,14 @@ fn pattern_sequence_of(
 pub fn pattern_sequence(
     state: tauri::State<'_, AppState>,
     pattern: light_core::patterns::Pattern,
-    seed: u64,
 ) -> Result<Sequence, String> {
-    pattern_sequence_of(&state.library(), pattern, seed)
+    pattern_sequence_of(&state.library(), pattern)
 }
 
 /// One example of what Generated would play for `moment`, built for the saved shape and a fresh seed.
 fn preview_generated_of(lib: &Library, moment: Moment, seed: u64) -> Result<Sequence, String> {
     let n = lib.segments();
-    let groups = light_core::groups::groups(&lib.shape);
-    let seq = light_core::generator::Generator::new(seed).next(moment, &groups, n);
+    let seq = light_core::generator::Generator::new(seed).next(moment, n);
     seq.validate(n)
         .map_err(|_| "Could not generate a sequence for this strip.".to_string())?;
     Ok(seq)
@@ -844,7 +840,7 @@ fn preview_sequence_of(
     light_core::library::validate_palette(&palette).map_err(|e| e.to_string())?;
     let seq = match clip {
         SeqRef::Id(id) => return preview_palette_of(lib, palette, id),
-        SeqRef::Pattern(p) => pattern_sequence_of(lib, p, seed)?,
+        SeqRef::Pattern(p) => pattern_sequence_of(lib, p)?,
         SeqRef::Generated => preview_generated_of(lib, moment, seed)?,
     };
     Ok(Box::new((palette, seq)))
@@ -1153,7 +1149,7 @@ mod tests {
     #[test]
     fn preview_palette_validates_everything() {
         use light_core::paint::Hsv;
-        let lib = Library::builtin(10);
+        let lib = crate::library_store::seeded_builtin(10);
         let id = lib.sequences[0].0;
         let pal = lib.palettes[0].1.clone();
         let (p, s) = *preview_palette_of(&lib, pal.clone(), id).unwrap();
@@ -1171,14 +1167,14 @@ mod tests {
     fn preview_sequence_resolves_every_kind_of_clip() {
         use light_core::library::SeqRef;
         use light_core::paint::Hsv;
-        let lib = Library::builtin(10);
+        let lib = crate::library_store::seeded_builtin(10);
         let id = lib.sequences[0].0;
         let pal = lib.palettes[0].1.clone();
         let m = Moment::Rhythm;
         let (_, s) = *preview_sequence_of(&lib, pal.clone(), SeqRef::Id(id), m, 1).unwrap();
         assert_eq!(s.name, lib.sequences[0].1.name);
         assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Generated, m, 1).is_ok());
-        let pat = light_core::patterns::Pattern::Halves;
+        let pat = light_core::patterns::Pattern::CrossPairs;
         assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Pattern(pat), m, 1).is_ok());
         assert!(preview_sequence_of(&lib, pal.clone(), SeqRef::Id(999_999), m, 1).is_err());
         let mut bad = pal;
@@ -1544,6 +1540,16 @@ mod tests {
         (dir, state)
     }
 
+    /// Like `lib_state`, with a saved library that has sequences.
+    fn seeded_state() -> (tempfile::TempDir, AppState) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::default();
+        let path = dir.path().join("library.json");
+        crate::library_store::save(&path, &crate::library_store::seeded_builtin(10)).unwrap();
+        state.init_library(path, 10);
+        (dir, state)
+    }
+
     #[test]
     fn unsaved_builtin_library_follows_the_strip_but_a_saved_one_does_not() {
         let (dir, state) = lib_state();
@@ -1580,7 +1586,7 @@ mod tests {
 
     #[test]
     fn a_preview_for_another_segment_count_than_the_strip_is_refused() {
-        let lib = Library::builtin(10);
+        let lib = crate::library_store::seeded_builtin(10);
         let pal = lib.palettes[0].1.clone();
         let p = preview_palette_of(&lib, pal, lib.sequences[0].0).unwrap();
         let strip = |segments| StripStatus::Connected {
@@ -1734,7 +1740,6 @@ mod tests {
         let before = state.library();
         let lib = state.set_wired(8).unwrap();
         assert_eq!(lib.shape.pieces, before.shape.pieces[..8]);
-        assert_eq!(lib.sequences[0].1.steps[0].roles.len(), 8);
         let cfg = strip_store::load(&dir.path().join("strip.json")).unwrap();
         assert_eq!((cfg.segments, cfg.reported), (8, 10));
         // Growing continues the row after the last piece; the others are untouched.
@@ -1774,7 +1779,7 @@ mod tests {
     fn saving_a_shape_with_another_piece_count_resizes_the_roles() {
         use light_core::library::Shape;
         use light_core::model::Role;
-        let (dir, state) = lib_state();
+        let (dir, state) = seeded_state();
         for m in [12u8, 6] {
             let mut lib = state.library();
             lib.shape = Shape::row(m);
@@ -1924,17 +1929,27 @@ mod tests {
         use light_core::patterns::Pattern;
         // No strip connected: the library's own segment count rules.
         let lib = Library::builtin(8);
-        let seq = pattern_sequence_of(&lib, Pattern::Halves, 7).unwrap();
+        let seq = pattern_sequence_of(&lib, Pattern::CrossPairs).unwrap();
         assert!(seq.validate(8).is_ok());
         assert!(seq.steps.iter().all(|s| s.roles.len() == 8));
-        assert_eq!(seq, pattern_sequence_of(&lib, Pattern::Halves, 7).unwrap());
+    }
+
+    #[test]
+    fn pattern_sequence_is_deterministic() {
+        use light_core::patterns::Pattern;
+        let lib = Library::builtin(8);
+        assert_eq!(
+            pattern_sequence_of(&lib, Pattern::CrossPairs).unwrap(),
+            pattern_sequence_of(&lib, Pattern::CrossPairs).unwrap()
+        );
     }
 
     #[test]
     fn pattern_sequence_rejects_unknown_pattern() {
         use light_core::patterns::Pattern;
         assert!(serde_json::from_str::<Pattern>(r#""nope""#).is_err());
-        assert!(serde_json::from_str::<Pattern>(r#""halves""#).is_ok());
+        assert!(serde_json::from_str::<Pattern>(r#""halves""#).is_err());
+        assert!(serde_json::from_str::<Pattern>(r#""crossPairs""#).is_ok());
     }
 
     #[test]
@@ -1954,7 +1969,7 @@ mod tests {
     #[test]
     fn new_entries_get_ids_in_rust() {
         use light_core::library::SeqRef;
-        let (dir, state) = lib_state();
+        let (dir, state) = seeded_state();
         let mut lib = state.library();
         // Ids the stored library does not have are new: the client's number is only a handle.
         let pal = lib.palettes[0].1.clone();

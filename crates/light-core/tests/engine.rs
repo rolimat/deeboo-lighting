@@ -479,8 +479,15 @@ fn lead_ms_changes_send_times() {
 
 /// The built-in library reduced to one palette and the first sequence of each moment, in order.
 fn plain(n: u8) -> light_core::library::Library {
+    use light_core::builtin::sequence;
+    use light_core::detect::Moment::{BuildUp, Calm, Rhythm};
     use light_core::library::{Order, SeqRef};
     let mut lib = light_core::library::Library::builtin(n);
+    lib.sequences = vec![
+        (1, sequence(Rhythm, n)),
+        (5, sequence(Calm, n)),
+        (8, sequence(BuildUp, n)),
+    ];
     lib.palettes.truncate(1);
     lib.active_palette = Some(1);
     let set = &mut lib.sets[0];
@@ -887,12 +894,12 @@ fn calm_bars_rotates_inside_a_long_break() {
 }
 
 #[test]
-fn pattern_ref_plays_that_pattern_with_new_params() {
+fn pattern_ref_plays_that_pattern() {
     use light_core::library::{Interval, Library, Order, SeqRef};
     use light_core::patterns::Pattern;
     let mut lib = Library::builtin(4);
     let ms = &mut lib.sets[0].rhythm;
-    ms.sequences = vec![SeqRef::Pattern(Pattern::Halves)];
+    ms.sequences = vec![SeqRef::Pattern(Pattern::HalvesBlink)];
     ms.order = Order::InOrder;
     ms.interval = Interval::Bars(1);
     let mut s = sim125();
@@ -905,13 +912,6 @@ fn pattern_ref_plays_that_pattern_with_new_params() {
         seen.iter().all(|p| *p == [1, 2] || *p == [3, 4]),
         "only halves: {seen:?}"
     );
-    let bars: Vec<String> = (1..15u64)
-        .map(|bar| {
-            let from = T0 + bar * 4 * 480_000 - LEAD;
-            format!("{:?}", s.sends_in(from, from + 4 * 480_000))
-        })
-        .collect();
-    assert!(bars.iter().any(|b| *b != bars[0]), "fresh params each bar");
 }
 
 // ---- palette preview ("Show on strip") ----

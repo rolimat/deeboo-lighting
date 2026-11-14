@@ -1,8 +1,7 @@
-//! Seeded sequence generator (spec §6.4): alternates patterns and parameters, deterministic per seed.
+//! Seeded "Any pattern" picker: one of the moment's fixed patterns, never the same twice in a row.
 use crate::detect::Moment;
-use crate::groups::Groups;
-use crate::model::{Role, Sequence, StepLen};
-use crate::patterns::{Params, Pattern, build, for_moment};
+use crate::model::Sequence;
+use crate::patterns::{Pattern, build, for_moment};
 
 /// Standard `SplitMix64` (Vigna). Hand-written to keep `light-core` dependency-free.
 #[derive(Clone, Debug)]
@@ -37,18 +36,19 @@ impl SplitMix64 {
     }
 }
 
-const STEPS: [StepLen; 4] = [StepLen::Half, StepLen::One, StepLen::Two, StepLen::Four];
-const ROLES: [(Role, Role); 4] = [
-    (Role::Principal, Role::Contraste),
-    (Role::Contraste, Role::Principal),
-    (Role::Principal, Role::Suave),
-    (Role::Contraste, Role::Suave),
-];
+/// Index of `m` in `Generator::last`.
+fn slot(m: Moment) -> usize {
+    match m {
+        Moment::Rhythm => 0,
+        Moment::Calm => 1,
+        Moment::BuildUp => 2,
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Generator {
     rng: SplitMix64,
-    last: Option<Pattern>,
+    last: [Option<Pattern>; 3],
 }
 
 impl Generator {
@@ -56,36 +56,21 @@ impl Generator {
     pub fn new(seed: u64) -> Self {
         Self {
             rng: SplitMix64::new(seed),
-            last: None,
+            last: [None; 3],
         }
     }
 
-    /// A pattern of `m` different from the previous one (every moment has >= 2),
-    /// with random params. Alternating patterns guarantees (pattern, params) never repeats.
-    pub fn next(&mut self, m: Moment, groups: &Groups, n: u8) -> Sequence {
-        let all = for_moment(m);
-        let choices: Vec<Pattern> = all
+    /// A random pattern of `m`, never the one this generator last gave for `m`.
+    pub fn next(&mut self, m: Moment, n: u8) -> Sequence {
+        let last = &mut self.last[slot(m)];
+        let choices: Vec<Pattern> = for_moment(m)
             .iter()
             .copied()
-            .filter(|p| all.len() < 2 || Some(*p) != self.last)
+            .filter(|p| Some(*p) != *last)
             .collect();
-        let pick =
-            |rng: &mut SplitMix64, len: usize| usize::try_from(rng.below(len as u64)).unwrap_or(0);
-        let p = choices[pick(&mut self.rng, choices.len())];
-        self.last = Some(p);
-        self.pattern(p, groups, n)
-    }
-
-    /// `p` with random params.
-    pub fn pattern(&mut self, p: Pattern, groups: &Groups, n: u8) -> Sequence {
-        let pick =
-            |rng: &mut SplitMix64, len: usize| usize::try_from(rng.below(len as u64)).unwrap_or(0);
-        let params = Params {
-            step: STEPS[pick(&mut self.rng, STEPS.len())],
-            roles: ROLES[pick(&mut self.rng, ROLES.len())],
-            reverse: self.rng.below(2) == 1,
-            density: 1 + u8::try_from(self.rng.below(4)).unwrap_or(0),
-        };
-        build(p, &params, groups, n)
+        let i = usize::try_from(self.rng.below(choices.len() as u64)).unwrap_or(0);
+        let p = choices[i];
+        *last = Some(p);
+        build(p, n)
     }
 }

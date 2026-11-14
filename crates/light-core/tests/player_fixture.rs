@@ -60,7 +60,7 @@ fn name(l: StepLen) -> &'static str {
 /// Runs the engine and reads, 300 ms after each half-beat pulse, which step the strip shows.
 fn shown_steps(seq: &Sequence) -> Vec<usize> {
     let mut lib = Library::builtin(SEGMENTS);
-    lib.sequences[0].1 = seq.clone();
+    lib.sequences.push((1, seq.clone()));
     lib.sets[0].rhythm.sequences = vec![SeqRef::Id(1)];
     lib.sets[0].rhythm.order = light_core::library::Order::InOrder;
     lib.sets[0].palettes = vec![1];

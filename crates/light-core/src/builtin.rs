@@ -1,10 +1,8 @@
 //! Built-in palette and sequences (spec §6.3, §6.4).
 use crate::detect::Moment;
-use crate::groups::Groups;
 use crate::library::{Interval, MomentSet, Order, PaletteChange, SeqRef, Set};
 use crate::model::{Palette, Role, Sequence, Step, StepLen};
 use crate::paint::Hsv;
-use crate::patterns::{Params, Pattern, build};
 
 #[must_use]
 pub fn test_palette() -> Palette {
@@ -129,57 +127,6 @@ pub fn palettes() -> Vec<Palette> {
             (330, 250, 1000),
         ),
         p("Gold", (45, 1000, 1000), (240, 900, 1000), (45, 300, 1000)),
-    ]
-}
-
-/// Ten sequences for the strip: 4 Rhythm, 3 Calm, 3 Build-up, fixed params.
-#[must_use]
-pub fn sequences(n: u8, groups: &Groups) -> Vec<Sequence> {
-    let mk = |pat, step, roles, reverse, density| {
-        let params = Params {
-            step,
-            roles,
-            reverse,
-            density,
-        };
-        build(pat, &params, groups, n)
-    };
-    let (pc, cp) = (
-        (Role::Principal, Role::Contraste),
-        (Role::Contraste, Role::Principal),
-    );
-    let calm = (Role::Suave, Role::Off);
-    let mut drift_back = mk(Pattern::Drift, StepLen::Four, calm, true, 2);
-    drift_back.name = "Drift back".into();
-    vec![
-        mk(Pattern::Halves, StepLen::One, pc, false, 1),
-        mk(Pattern::EndsCentre, StepLen::Two, cp, false, 1),
-        mk(Pattern::Snake, StepLen::One, pc, false, 2),
-        mk(Pattern::Quarters, StepLen::Two, pc, true, 1),
-        mk(Pattern::Drift, StepLen::Four, calm, false, 1),
-        mk(Pattern::Sparse, StepLen::Four, calm, false, 1),
-        drift_back,
-        mk(
-            Pattern::GroupFlash,
-            StepLen::Half,
-            (Role::Contraste, Role::Off),
-            false,
-            1,
-        ),
-        mk(
-            Pattern::FastSnake,
-            StepLen::Half,
-            (Role::White, Role::Off),
-            false,
-            2,
-        ),
-        mk(
-            Pattern::Strobe,
-            StepLen::Half,
-            (Role::White, Role::Off),
-            false,
-            1,
-        ),
     ]
 }
 

@@ -1,362 +1,429 @@
-//! Pattern library: step sequences per moment (spec §6.4).
+//! The 35 fixed sequences (spec 2026-11-14 §3): 15 Rhythm, 10 Calm, 10 Build-up.
 //!
-//! Patterns are built from chains of states where each transition is a single
-//! `scene::diff` message (bucket, one pencil or one eraser): see `wipe` and `duel`.
-//! Moment constraints beat `Params`: Calm always uses `Suave`/`Off` and `StepLen::Four`;
-//! Build-up steps are at most `StepLen::One`. Out-of-range params are clamped.
-#![allow(
-    clippy::many_single_char_names,
-    clippy::too_many_lines,
-    clippy::enum_glob_use
-)]
+//! Each is a table of `(length, base role, layers)`: the base fills the strip, then the layers paint
+//! parts of it in order (the last one wins where they overlap). Parts come from `parts::parts(n)`.
+#![allow(clippy::enum_glob_use)]
 use crate::detect::Moment;
-use crate::groups::Groups;
+use crate::library::pad_to_bars;
 use crate::model::{Role, Sequence, Step, StepLen};
+use crate::parts::{Parts, parts};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum Pattern {
     // Rhythm
-    Halves,
-    EndsCentre,
-    OddEven,
-    Quarters,
-    Snake,
-    Mirror,
+    CrossPairs,
+    ColourAndDark,
+    WhiteBackbeat,
+    OutsideIn,
+    HalvesBlink,
+    CrossPairsWhiteBackbeat,
+    ColourDarkWhite,
+    OutsideInWithDark,
+    MirrorWithWhite,
+    ColourAndDarkTwoBars,
+    EveryOtherBeat,
+    HalvesWhiteBackbeat,
+    OutsideInTwoBars,
+    CrossPairsWhiteTurnaround,
+    EndsCentreAllDark,
     // Calm
-    Drift,
-    Sparse,
+    WashAndSoften,
+    EndsWhiteThenWash,
+    SlowFadeToDark,
+    ColourAndWhite,
+    CentreToEnds,
+    ColourCycle,
+    FadeAndReturn,
+    SlowWhiteBreath,
+    LongWash,
+    WhiteEndsSlowly,
     // Build-up
-    GroupFlash,
-    FastSnake,
     Strobe,
+    Converge,
+    ColourStrobe,
+    OddEvenStrobe,
+    ConvergeThenStrobe,
+    HalvesAccelerating,
+    OddEvenAccelerating,
+    StrobeAccelerating,
+    ConvergeAccelerating,
+    FourPartChaseAccelerating,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Params {
-    pub step: StepLen,
-    pub roles: (Role, Role),
-    pub reverse: bool,
-    /// 1..=4, clamped. More = finer chunks / wider windows.
-    pub density: u8,
-}
+use Pattern::*;
+
+const RHYTHM: [Pattern; 15] = [
+    CrossPairs,
+    ColourAndDark,
+    WhiteBackbeat,
+    OutsideIn,
+    HalvesBlink,
+    CrossPairsWhiteBackbeat,
+    ColourDarkWhite,
+    OutsideInWithDark,
+    MirrorWithWhite,
+    ColourAndDarkTwoBars,
+    EveryOtherBeat,
+    HalvesWhiteBackbeat,
+    OutsideInTwoBars,
+    CrossPairsWhiteTurnaround,
+    EndsCentreAllDark,
+];
+const CALM: [Pattern; 10] = [
+    WashAndSoften,
+    EndsWhiteThenWash,
+    SlowFadeToDark,
+    ColourAndWhite,
+    CentreToEnds,
+    ColourCycle,
+    FadeAndReturn,
+    SlowWhiteBreath,
+    LongWash,
+    WhiteEndsSlowly,
+];
+const BUILDUP: [Pattern; 10] = [
+    Strobe,
+    Converge,
+    ColourStrobe,
+    OddEvenStrobe,
+    ConvergeThenStrobe,
+    HalvesAccelerating,
+    OddEvenAccelerating,
+    StrobeAccelerating,
+    ConvergeAccelerating,
+    FourPartChaseAccelerating,
+];
 
 impl Pattern {
     /// English name shown in the UI.
     #[must_use]
     pub fn label(self) -> &'static str {
-        use Pattern::*;
         match self {
-            Halves => "Halves",
-            EndsCentre => "Ends \u{2194} centre",
-            OddEven => "Odd / even",
-            Quarters => "Quarters",
-            Snake => "Snake",
-            Mirror => "Mirror",
-            Drift => "Drift",
-            Sparse => "Sparse",
-            GroupFlash => "Group flash",
-            FastSnake => "Fast snake",
+            CrossPairs => "Cross pairs",
+            ColourAndDark => "Colour and dark",
+            WhiteBackbeat => "White backbeat",
+            OutsideIn => "Outside in",
+            HalvesBlink => "Halves blink",
+            CrossPairsWhiteBackbeat => "Cross pairs + white backbeat",
+            ColourDarkWhite => "Colour, dark, white",
+            OutsideInWithDark => "Outside in, with dark",
+            MirrorWithWhite => "Mirror with white",
+            ColourAndDarkTwoBars => "Colour and dark, two bars",
+            EveryOtherBeat => "Every other beat",
+            HalvesWhiteBackbeat => "Halves + white backbeat",
+            OutsideInTwoBars => "Outside in, two bars",
+            CrossPairsWhiteTurnaround => "Cross pairs, white turnaround",
+            EndsCentreAllDark => "Ends, centre, all, dark",
+            WashAndSoften => "Wash and soften",
+            EndsWhiteThenWash => "Ends white, then wash",
+            SlowFadeToDark => "Slow fade to dark",
+            ColourAndWhite => "Colour and white",
+            CentreToEnds => "Centre to ends",
+            ColourCycle => "Colour cycle",
+            FadeAndReturn => "Fade and return",
+            SlowWhiteBreath => "Slow white breath",
+            LongWash => "Long wash",
+            WhiteEndsSlowly => "White ends, slowly",
             Strobe => "Strobe",
+            Converge => "Converge",
+            ColourStrobe => "Colour strobe",
+            OddEvenStrobe => "Odd / even strobe",
+            ConvergeThenStrobe => "Converge, then strobe",
+            HalvesAccelerating => "Halves, accelerating",
+            OddEvenAccelerating => "Odd / even, accelerating",
+            StrobeAccelerating => "Strobe, accelerating",
+            ConvergeAccelerating => "Converge, accelerating",
+            FourPartChaseAccelerating => "Four-part chase, accelerating",
         }
     }
 
     /// The moment this pattern is made for.
     #[must_use]
     pub fn moment(self) -> Moment {
-        use Pattern::*;
-        match self {
-            Halves | EndsCentre | OddEven | Quarters | Snake | Mirror => Moment::Rhythm,
-            Drift | Sparse => Moment::Calm,
-            GroupFlash | FastSnake | Strobe => Moment::BuildUp,
+        if RHYTHM.contains(&self) {
+            Moment::Rhythm
+        } else if CALM.contains(&self) {
+            Moment::Calm
+        } else {
+            Moment::BuildUp
         }
     }
 }
 
+/// The patterns of `m`, in table order.
 #[must_use]
 pub fn for_moment(m: Moment) -> &'static [Pattern] {
-    use Pattern::*;
     match m {
-        Moment::Rhythm => &[Halves, EndsCentre, OddEven, Quarters, Snake, Mirror],
-        Moment::Calm => &[Drift, Sparse],
-        Moment::BuildUp => &[GroupFlash, FastSnake, Strobe],
+        Moment::Rhythm => &RHYTHM,
+        Moment::Calm => &CALM,
+        Moment::BuildUp => &BUILDUP,
     }
 }
 
-type State = Vec<Role>;
+#[derive(Clone, Copy)]
+enum Region {
+    P1,
+    P2,
+    P3,
+    P4,
+    P13,
+    P24,
+    Ends,
+    Centre,
+    H1,
+    H2,
+    Odd,
+    Even,
+}
 
-fn paint(n: usize, base: Role, sets: &[(&[u8], Role)]) -> State {
-    let mut s = vec![base; n];
-    for (segs, r) in sets {
-        for &g in *segs {
-            if let Some(slot) = usize::from(g).checked_sub(1).and_then(|i| s.get_mut(i)) {
-                *slot = *r;
+use Region::*;
+use Role::{Contraste as C, Off as O, Principal as P, Suave as S, White as W};
+use StepLen::{Four, Half, One};
+
+type Layer = (Region, Role);
+type Row = (StepLen, Role, &'static [Layer]);
+
+fn region(p: &Parts, r: Region) -> [&[u8]; 2] {
+    let none: &[u8] = &[];
+    match r {
+        P1 => [&p.p[0], none],
+        P2 => [&p.p[1], none],
+        P3 => [&p.p[2], none],
+        P4 => [&p.p[3], none],
+        P13 => [&p.p[0], &p.p[2]],
+        P24 => [&p.p[1], &p.p[3]],
+        Ends => [&p.ends, none],
+        Centre => [&p.centre, none],
+        H1 => [&p.h1, none],
+        H2 => [&p.h2, none],
+        Odd => [&p.odd, none],
+        Even => [&p.even, none],
+    }
+}
+
+fn paint(p: &Parts, n: u8, base: Role, layers: &[Layer]) -> Vec<Role> {
+    let mut roles = vec![base; usize::from(n)];
+    for (r, role) in layers {
+        for &seg in region(p, *r).into_iter().flatten() {
+            if let Some(slot) = usize::from(seg)
+                .checked_sub(1)
+                .and_then(|i| roles.get_mut(i))
+            {
+                *slot = *role;
             }
         }
     }
-    s
+    roles
 }
 
-/// Splits `items` into at most `c` contiguous merged groups.
-fn merge(items: &[Vec<u8>], c: usize) -> Vec<Vec<u8>> {
-    let (len, c) = (items.len(), c.min(items.len()));
-    (0..c)
-        .map(|k| items[k * len / c..(k + 1) * len / c].concat())
+fn rep(rows: &[Row], times: usize) -> Vec<Row> {
+    rows.iter()
+        .copied()
+        .cycle()
+        .take(rows.len() * times)
         .collect()
 }
 
-/// all `a`, groups turn `b` one by one, all `b`, groups turn back to `a` one by one.
-/// Every transition is one message.
-fn wipe(groups: &[Vec<u8>], a: Role, b: Role, n: usize) -> Vec<State> {
-    let cum = |k: usize, on: Role, rest: Role| {
-        let lit: Vec<u8> = groups[..k].concat();
-        paint(n, rest, &[(&lit, on)])
-    };
-    let g = groups.len();
-    (0..=g)
-        .map(|k| cum(k, b, a))
-        .chain((1..g).map(|k| cum(k, a, b)))
+fn at(rows: &[Row], len: StepLen) -> Vec<Row> {
+    rows.iter().map(|&(_, b, l)| (len, b, l)).collect()
+}
+
+/// Calm: `(bars, base, layers)`, a step of k bars is k `Four` steps.
+fn calm(rows: &[(usize, Role, &'static [Layer])]) -> Vec<Row> {
+    rows.iter()
+        .flat_map(|&(k, b, l)| std::iter::repeat_n((Four, b, l), k))
         .collect()
 }
 
-/// all `a`; `y` turns `b`; all `b`; `y` turns back `a`. One message per transition.
-/// (`x` is the complement of `y`; it needs no painting.)
-fn duel(y: &[u8], a: Role, b: Role, n: usize) -> Vec<State> {
-    vec![
-        paint(n, a, &[]),
-        paint(n, a, &[(y, b)]),
-        paint(n, b, &[]),
-        paint(n, b, &[(y, a)]),
-    ]
+#[allow(clippy::too_many_lines)] // one data table
+fn rows(p: Pattern) -> Vec<Row> {
+    let strobe: [Row; 2] = [(Half, W, &[]), (Half, O, &[])];
+    let converge: [Row; 4] = [
+        (Half, O, &[(Ends, W)]),
+        (Half, O, &[(Centre, P)]),
+        (Half, C, &[]),
+        (Half, O, &[]),
+    ];
+    let halves: [Row; 2] = [(One, O, &[(H1, W), (H2, P)]), (One, O, &[(H1, P), (H2, W)])];
+    let odd_even: [Row; 2] = [
+        (One, O, &[(Odd, W), (Even, P)]),
+        (One, O, &[(Even, W), (Odd, P)]),
+    ];
+    let chase_p: [Row; 4] = [
+        (One, O, &[(P1, P)]),
+        (One, O, &[(P2, P)]),
+        (One, O, &[(P3, P)]),
+        (One, O, &[(P4, P)]),
+    ];
+    let chase_w: [Row; 4] = [
+        (Half, O, &[(P1, W)]),
+        (Half, O, &[(P2, W)]),
+        (Half, O, &[(P3, W)]),
+        (Half, O, &[(P4, W)]),
+    ];
+    match p {
+        CrossPairs => vec![
+            (One, O, &[(P13, P)]),
+            (One, O, &[(P24, P)]),
+            (One, O, &[(P13, P)]),
+            (One, O, &[(P24, P)]),
+            (One, O, &[(P13, C)]),
+            (One, O, &[(P24, C)]),
+            (One, O, &[(P13, C)]),
+            (One, O, &[(P24, C)]),
+        ],
+        ColourAndDark => vec![(One, P, &[]), (One, O, &[]), (One, C, &[]), (One, O, &[])],
+        WhiteBackbeat => vec![
+            (One, O, &[(P13, P)]),
+            (One, W, &[]),
+            (One, O, &[(P24, C)]),
+            (One, W, &[]),
+        ],
+        OutsideIn => vec![
+            (One, O, &[(Ends, P)]),
+            (One, O, &[(Centre, P)]),
+            (One, O, &[(Ends, C)]),
+            (One, O, &[(Centre, W)]),
+        ],
+        HalvesBlink => vec![
+            (One, O, &[(H1, P)]),
+            (One, O, &[(H2, W)]),
+            (One, O, &[(H1, P)]),
+            (One, O, &[(H2, W)]),
+        ],
+        CrossPairsWhiteBackbeat => vec![
+            (One, O, &[(P13, P)]),
+            (One, O, &[(P24, W)]),
+            (One, O, &[(P13, C)]),
+            (One, O, &[(P24, W)]),
+        ],
+        ColourDarkWhite => vec![(One, P, &[]), (One, O, &[]), (One, C, &[]), (One, W, &[])],
+        OutsideInWithDark => vec![
+            (One, O, &[(Ends, P)]),
+            (One, O, &[]),
+            (One, O, &[(Centre, P)]),
+            (One, O, &[]),
+            (One, O, &[(Ends, C)]),
+            (One, O, &[]),
+            (One, W, &[]),
+            (One, O, &[]),
+        ],
+        MirrorWithWhite => vec![
+            (One, O, &[(Ends, P)]),
+            (One, O, &[(Centre, C)]),
+            (One, O, &[(Ends, W)]),
+            (One, O, &[]),
+        ],
+        ColourAndDarkTwoBars => vec![
+            (One, P, &[]),
+            (One, O, &[]),
+            (One, C, &[]),
+            (One, O, &[]),
+            (One, S, &[]),
+            (One, O, &[]),
+            (One, W, &[]),
+            (One, O, &[]),
+        ],
+        EveryOtherBeat => vec![
+            (One, O, &[(P13, P)]),
+            (One, O, &[]),
+            (One, O, &[(P24, C)]),
+            (One, O, &[]),
+        ],
+        HalvesWhiteBackbeat => vec![
+            (One, O, &[(H1, P)]),
+            (One, W, &[]),
+            (One, O, &[(H2, C)]),
+            (One, W, &[]),
+        ],
+        OutsideInTwoBars => vec![
+            (One, O, &[(Ends, P)]),
+            (One, O, &[(Centre, P)]),
+            (One, O, &[(Ends, C)]),
+            (One, O, &[(Centre, C)]),
+            (One, O, &[(Ends, W)]),
+            (One, O, &[]),
+            (One, O, &[(Centre, W)]),
+            (One, O, &[]),
+        ],
+        CrossPairsWhiteTurnaround => vec![
+            (One, O, &[(P13, P)]),
+            (One, O, &[(P24, P)]),
+            (One, O, &[(P13, C)]),
+            (One, W, &[]),
+        ],
+        EndsCentreAllDark => vec![
+            (One, O, &[(Ends, P)]),
+            (One, O, &[(Centre, C)]),
+            (One, W, &[]),
+            (One, O, &[]),
+        ],
+        WashAndSoften => calm(&[(2, P, &[]), (2, S, &[])]),
+        EndsWhiteThenWash => calm(&[
+            (2, O, &[(Ends, W)]),
+            (2, S, &[]),
+            (2, O, &[(Centre, P)]),
+            (2, S, &[]),
+        ]),
+        SlowFadeToDark => calm(&[(2, P, &[]), (2, S, &[]), (2, O, &[(H1, S)]), (2, O, &[])]),
+        ColourAndWhite => calm(&[(2, P, &[]), (2, C, &[]), (2, S, &[(Ends, W)]), (2, S, &[])]),
+        CentreToEnds => calm(&[
+            (2, S, &[(Centre, W)]),
+            (2, P, &[]),
+            (2, S, &[(Ends, W)]),
+            (2, S, &[]),
+        ]),
+        ColourCycle => calm(&[
+            (2, P, &[]),
+            (2, C, &[]),
+            (2, S, &[]),
+            (2, P, &[(Centre, W)]),
+        ]),
+        FadeAndReturn => calm(&[
+            (2, P, &[]),
+            (2, S, &[]),
+            (2, O, &[(Centre, S)]),
+            (2, P, &[]),
+        ]),
+        SlowWhiteBreath => calm(&[(4, S, &[]), (2, W, &[]), (2, P, &[])]),
+        LongWash => calm(&[(4, P, &[]), (4, S, &[])]),
+        WhiteEndsSlowly => calm(&[(4, S, &[(Ends, W)]), (4, P, &[])]),
+        Strobe => strobe.to_vec(),
+        Converge => converge.to_vec(),
+        ColourStrobe => vec![(Half, W, &[]), (Half, P, &[])],
+        OddEvenStrobe => vec![(Half, O, &[(Odd, W)]), (Half, O, &[(Even, W)])],
+        ConvergeThenStrobe => [rep(&converge, 2), rep(&strobe, 4)].concat(),
+        HalvesAccelerating => [rep(&halves, 2), rep(&at(&halves, Half), 4)].concat(),
+        OddEvenAccelerating => [
+            rep(&odd_even, 2),
+            rep(&at(&odd_even, Half), 2),
+            rep(&strobe, 2),
+        ]
+        .concat(),
+        StrobeAccelerating => [rep(&at(&strobe, One), 2), rep(&strobe, 4)].concat(),
+        ConvergeAccelerating => [at(&converge, One), rep(&converge, 2)].concat(),
+        FourPartChaseAccelerating => [chase_p.to_vec(), rep(&chase_w, 2)].concat(),
+    }
 }
 
-fn dedupe(mut v: Vec<State>) -> Vec<State> {
-    v.dedup();
-    if v.len() > 1 && v.first() == v.last() {
-        v.pop();
-    }
-    v
-}
-
-fn singles(n: u8) -> Vec<Vec<u8>> {
-    (1..=n).map(|s| vec![s]).collect()
-}
-
-fn calm_states(p: Pattern, params: Params, n: u8) -> Vec<State> {
-    let nn = usize::from(n);
-    let d = usize::from(params.density);
-    let on = Role::Suave;
-    let lit = |set: &[u8]| paint(nn, Role::Off, &[(set, on)]);
-    if p == Pattern::Sparse {
-        let m = nn.min(2 + d);
-        let mut dots: Vec<u8> = (0..m)
-            .map(|i| u8::try_from(i * nn / m + 1).unwrap_or(u8::MAX))
-            .collect();
-        if params.reverse {
-            dots.reverse();
-        }
-        return (1..=m)
-            .map(|k| lit(&dots[..k]))
-            .chain((1..=m).map(|k| lit(&dots[k..])))
-            .collect();
-    }
-    let mut units = merge(&singles(n), 8);
-    if params.reverse {
-        units.reverse();
-    }
-    let c = units.len();
-    if c < 2 {
-        return vec![lit(&units.concat()), lit(&[])];
-    }
-    let w = d.min(c / 2).max(1);
-    let window = |i: usize, len: usize| -> State {
-        let set: Vec<u8> = (i..i + len).flat_map(|u| units[u % c].clone()).collect();
-        lit(&set)
-    };
-    (0..c)
-        .flat_map(|i| [window(i, w), window(i, w + 1)])
-        .collect()
-}
-
-/// # Panics
-/// Never: all indexing is bounds-checked or clamped.
+/// Deterministic: the same `(p, n)` gives the same sequence (always fades, padded to whole bars).
 #[must_use]
-pub fn build(p: Pattern, params: &Params, groups: &Groups, n: u8) -> Sequence {
-    use Pattern::*;
-    let nn = usize::from(n);
-    let params = Params {
-        density: params.density.clamp(1, 4),
-        ..*params
-    };
-    let d = usize::from(params.density);
-    let (mut a, mut b) = params.roles;
-    if params.reverse {
-        (a, b) = (b, a);
-    }
-    let rev = |mut v: Vec<Vec<u8>>| {
-        if params.reverse {
-            v.reverse();
-        }
-        v
-    };
-    let along = singles(n);
-    let (moment, name, len, states) = match p {
-        Halves => (
-            Moment::Rhythm,
-            p.label(),
-            params.step,
-            duel(&groups.left_right[1], a, b, nn),
-        ),
-        EndsCentre => (
-            Moment::Rhythm,
-            p.label(),
-            params.step,
-            duel(&groups.centre_ends[1], a, b, nn),
-        ),
-        OddEven => (
-            Moment::Rhythm,
-            p.label(),
-            params.step,
-            duel(&groups.odd_even[1], a, b, nn),
-        ),
-        Quarters => (
-            Moment::Rhythm,
-            p.label(),
-            params.step,
-            wipe(
-                &rev(groups.quarters.to_vec()),
-                params.roles.0,
-                params.roles.1,
-                nn,
-            ),
-        ),
-        Snake => (
-            Moment::Rhythm,
-            p.label(),
-            params.step,
-            wipe(
-                &rev(merge(&along, 4 * d)),
-                params.roles.0,
-                params.roles.1,
-                nn,
-            ),
-        ),
-        Mirror => {
-            let pairs: Vec<Vec<u8>> = (0..along.len().div_ceil(2))
-                .map(|k| {
-                    let mut v = along[k].clone();
-                    let o = &along[along.len() - 1 - k];
-                    if o != &v {
-                        v.extend(o);
-                    }
-                    v
-                })
-                .collect();
-            (
-                Moment::Rhythm,
-                p.label(),
-                params.step,
-                wipe(
-                    &rev(merge(&pairs, 4 * d)),
-                    params.roles.0,
-                    params.roles.1,
-                    nn,
-                ),
-            )
-        }
-        Drift | Sparse => (
-            Moment::Calm,
-            p.label(),
-            StepLen::Four,
-            calm_states(p, params, n),
-        ),
-        GroupFlash => (
-            Moment::BuildUp,
-            p.label(),
-            fast(params.step),
-            wipe(
-                &rev(groups.quarters.to_vec()),
-                Role::Off,
-                params.roles.0,
-                nn,
-            ),
-        ),
-        FastSnake => (
-            Moment::BuildUp,
-            p.label(),
-            fast(params.step),
-            wipe(&rev(merge(&along, 4 * d)), Role::Off, params.roles.0, nn),
-        ),
-        Strobe => (
-            Moment::BuildUp,
-            p.label(),
-            fast(params.step),
-            vec![paint(nn, params.roles.0, &[]), paint(nn, Role::Off, &[])],
-        ),
-    };
-    let mut states = dedupe(states);
-    if states.is_empty() {
-        states.push(vec![Role::Off; nn]);
-    }
-    // At most 16 bars (128 half beats): longer cycles get shorter steps.
-    let mut len = len;
-    while states.len() * usize::from(len.half_beats()) > 128 {
-        len = match len {
-            StepLen::Four => StepLen::Two,
-            StepLen::Two => StepLen::One,
-            _ => StepLen::Half,
-        };
-    }
-    let mut steps: Vec<Step> = states
-        .into_iter()
-        .map(|roles| Step { len, roles })
-        .collect();
-    whole_bars(&mut steps);
-    Sequence {
-        name: name.into(),
+pub fn build(p: Pattern, n: u8) -> Sequence {
+    let parts = parts(n);
+    let mut seq = Sequence {
+        name: p.label().into(),
+        moment: p.moment(),
         fade: true,
-        moment,
-        steps,
-    }
-}
-
-/// Half beats in a bar.
-const BAR: u32 = 8;
-
-/// Makes the loop a whole number of bars. Repeating the cycle keeps the loop identical; a cycle
-/// too long for that (over 16 half beats) instead holds its last state for the missing beats.
-fn whole_bars(steps: &mut Vec<Step>) {
-    let total: u32 = steps.iter().map(|s| u32::from(s.len.half_beats())).sum();
-    if total.is_multiple_of(BAR) {
-        return;
-    }
-    let reps = BAR / gcd(total, BAR);
-    if total * reps <= 16 * BAR {
-        let cycle = steps.clone();
-        for _ in 1..reps {
-            steps.extend(cycle.iter().cloned());
-        }
-        return;
-    }
-    let roles = steps.last().map(|s| s.roles.clone()).unwrap_or_default();
-    let mut pad = BAR - total % BAR;
-    for (len, hb) in [(StepLen::Two, 4), (StepLen::One, 2), (StepLen::Half, 1)] {
-        if pad >= hb {
-            steps.push(Step {
+        steps: rows(p)
+            .into_iter()
+            .map(|(len, base, layers)| Step {
                 len,
-                roles: roles.clone(),
-            });
-            pad -= hb;
-        }
-    }
-}
-
-fn gcd(a: u32, b: u32) -> u32 {
-    if b == 0 { a } else { gcd(b, a % b) }
-}
-
-/// Build-up steps are at most one beat.
-fn fast(s: StepLen) -> StepLen {
-    if s.half_beats() > 2 { StepLen::One } else { s }
+                roles: paint(&parts, n, base, layers),
+            })
+            .collect(),
+    };
+    pad_to_bars(&mut seq);
+    seq
 }

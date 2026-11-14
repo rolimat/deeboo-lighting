@@ -195,6 +195,21 @@ fn ids<T>(v: &[(u32, T)]) -> Vec<u32> {
     v.iter().map(|e| e.0).collect()
 }
 
+/// `Library::builtin` plus ten sequences (ids 1-4 Rhythm, 5-7 Calm, 8-10 Build-up), for tests that
+/// need sequences to edit.
+#[cfg(test)]
+pub(crate) fn seeded_builtin(n: u8) -> Library {
+    use light_core::detect::Moment::{BuildUp, Calm, Rhythm};
+    use light_core::patterns::{build, for_moment};
+    let mut l = Library::builtin(n);
+    let picks = [(Rhythm, 4), (Calm, 3), (BuildUp, 3)];
+    let seqs = picks
+        .iter()
+        .flat_map(|(m, k)| for_moment(*m).iter().take(*k).map(move |p| build(*p, n)));
+    l.sequences = (1..).zip(seqs).collect();
+    l
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,7 +222,7 @@ mod tests {
     }
 
     fn with(edit: impl FnOnce(&mut Value)) -> String {
-        let mut v = serde_json::to_value(Library::builtin(10)).unwrap();
+        let mut v = serde_json::to_value(seeded_builtin(10)).unwrap();
         edit(&mut v);
         v.to_string()
     }
@@ -217,7 +232,7 @@ mod tests {
     /// The editor pairs sent and saved entries by index: renumbering never reorders, adds or drops.
     #[test]
     fn assign_ids_keeps_order_and_count_and_changes_only_new_ids() {
-        let prev = Library::builtin(10);
+        let prev = seeded_builtin(10);
         let mut new = prev.clone();
         let (pal, seq, set) = (
             new.palettes[0].clone(),
@@ -348,7 +363,7 @@ mod tests {
         );
         assert_eq!(
             lib.sequences,
-            Library::builtin(10).sequences,
+            seeded_builtin(10).sequences,
             "the rest is kept"
         );
     }
@@ -381,7 +396,7 @@ mod tests {
 
     #[test]
     fn largest_valid_library_survives_a_save_and_reload() {
-        let mut lib = Library::builtin(60);
+        let mut lib = seeded_builtin(60);
         let seq = lib.sequences[0].1.clone();
         let mut big = seq.clone();
         let mut half = seq.steps[0].clone();

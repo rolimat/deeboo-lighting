@@ -229,20 +229,19 @@ impl Library {
         changed
     }
 
-    /// First-run library (spec §6.3): the 8 built-in palettes, the 10 built-in sequences for a row of
-    /// `segments`, and the active set "Auto". A stored library always has palettes and sequences, so
-    /// built-ins are never merged into one; `library_store::load` only uses this when none is usable.
+    /// First-run library (spec §6.3): the 8 built-in palettes, no sequences (the 35 patterns are
+    /// always available) and the active set "Auto". `library_store::load` only uses this when no
+    /// stored library is usable.
     #[must_use]
     pub fn builtin(segments: u8) -> Self {
         let shape = Shape::row(segments);
-        let seqs = builtin::sequences(segments, &crate::groups::groups(&shape));
         let palettes: Vec<(u32, Palette)> = (1..).zip(builtin::palettes()).collect();
         let ids: Vec<u32> = palettes.iter().map(|(i, _)| *i).collect();
         Library {
             schema_version: SCHEMA_VERSION,
             shape,
             palettes,
-            sequences: (1..).zip(seqs).collect(),
+            sequences: Vec::new(),
             sets: vec![builtin::auto_set(1, &ids)],
             active_set: 1,
             active_palette: None,

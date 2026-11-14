@@ -4,7 +4,6 @@ pub mod clock;
 pub mod detect;
 pub mod engine;
 pub mod generator;
-pub mod groups;
 pub mod library;
 #[cfg(feature = "serde")]
 pub mod migrate;

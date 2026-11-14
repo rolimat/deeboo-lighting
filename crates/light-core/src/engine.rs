@@ -3,11 +3,11 @@ use crate::builtin;
 use crate::clock::{ClockEvent, ClockTracker, PhraseBars, Position};
 use crate::detect::Moment;
 use crate::generator::Generator;
-use crate::groups::{Groups, groups};
 use crate::library::{Library, MomentSet, SeqRef, Set};
 use crate::model::{Colour, Palette, Role, Sequence, resolve};
 use crate::moments::MomentControl;
 use crate::paint::PaintCommand;
+use crate::patterns::build;
 use crate::rotation::{PaletteRotator, Rotator};
 use crate::scheduler::Scheduler;
 
@@ -79,7 +79,6 @@ struct Look {
 #[derive(Clone)]
 struct Rotation {
     lib: Library,
-    groups: Groups,
     rots: [Rotator; 3],
     pal: PaletteRotator,
     /// Library ids of what plays now (`None`: generated or built-in), to refresh edited data.
@@ -110,8 +109,8 @@ fn resolve_seq(r: &Rotation, generator: &mut Generator, m: Moment, sr: SeqRef, n
             .iter()
             .find(|(i, q)| *i == id && q.validate(n).is_ok())
             .map(|(_, q)| q.clone()),
-        SeqRef::Pattern(p) => Some(generator.pattern(p, &r.groups, n)),
-        SeqRef::Generated => Some(generator.next(m, &r.groups, n)),
+        SeqRef::Pattern(p) => Some(build(p, n)),
+        SeqRef::Generated => Some(generator.next(m, n)),
     }
     .unwrap_or_else(|| builtin::sequence(m, n))
 }
@@ -139,7 +138,6 @@ impl Look {
             MOMENTS.map(|m| Rotator::new(moment_set(set, m), seed ^ (slot(m) as u64 + 1) << 56));
         let rot = Rotation {
             lib: lib.clone(),
-            groups: groups(&lib.shape),
             shown_pal: lib.current_palette_id(),
             seq_ids: rots.each_ref().map(|r| match r.current() {
                 Some(SeqRef::Id(id)) => Some(id),
