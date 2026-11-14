@@ -315,3 +315,13 @@ fn labels_are_the_spec_names() {
         "Four-part chase, accelerating"
     );
 }
+
+#[test]
+fn each_table_holds_only_patterns_of_its_moment() {
+    use light_core::detect::Moment::{BuildUp, Calm, Rhythm};
+    for m in [Rhythm, Calm, BuildUp] {
+        for p in light_core::patterns::for_moment(m) {
+            assert_eq!(p.moment(), m, "{p:?}");
+        }
+    }
+}

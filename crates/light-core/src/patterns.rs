@@ -142,12 +142,36 @@ impl Pattern {
     /// The moment this pattern is made for.
     #[must_use]
     pub fn moment(self) -> Moment {
-        if RHYTHM.contains(&self) {
-            Moment::Rhythm
-        } else if CALM.contains(&self) {
-            Moment::Calm
-        } else {
-            Moment::BuildUp
+        match self {
+            CrossPairs
+            | ColourAndDark
+            | WhiteBackbeat
+            | OutsideIn
+            | HalvesBlink
+            | CrossPairsWhiteBackbeat
+            | ColourDarkWhite
+            | OutsideInWithDark
+            | MirrorWithWhite
+            | ColourAndDarkTwoBars
+            | EveryOtherBeat
+            | HalvesWhiteBackbeat
+            | OutsideInTwoBars
+            | CrossPairsWhiteTurnaround
+            | EndsCentreAllDark => Moment::Rhythm,
+            WashAndSoften | EndsWhiteThenWash | SlowFadeToDark | ColourAndWhite | CentreToEnds
+            | ColourCycle | FadeAndReturn | SlowWhiteBreath | LongWash | WhiteEndsSlowly => {
+                Moment::Calm
+            }
+            Strobe
+            | Converge
+            | ColourStrobe
+            | OddEvenStrobe
+            | ConvergeThenStrobe
+            | HalvesAccelerating
+            | OddEvenAccelerating
+            | StrobeAccelerating
+            | ConvergeAccelerating
+            | FourPartChaseAccelerating => Moment::BuildUp,
         }
     }
 }
