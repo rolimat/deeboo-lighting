@@ -25,6 +25,7 @@ const pieces: Piece[] = [0, 1].map((i) => ({ x: i * 2, y: 0, angle: 0, len: 1 })
 const seq: Sequence = {
   name: "S",
   moment: "rhythm",
+  fade: true,
   steps: [
     { len: "one", roles: ["principal", "off"] },
     { len: "one", roles: ["off", "principal"] },
@@ -167,6 +168,7 @@ it("a_16_bar_sequence_reaches_bars_9_to_16_while_the_clock_wraps_at_the_phrase",
   const long: Sequence = {
     name: "L",
     moment: "rhythm",
+    fade: true,
     steps: [...Array(8).fill(bar(false)), ...Array(8).fill(bar(true))],
   };
   await mount(pal(0), long);

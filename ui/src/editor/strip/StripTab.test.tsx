@@ -22,7 +22,7 @@ const row = (n: number): Piece[] =>
   Array.from({ length: n }, (_, i) => ({ x: i, y: 0, angle: 0, len: 1 }));
 const lib = (pieces: Piece[]): Library =>
   ({
-    schemaVersion: 2,
+    schemaVersion: 3,
     shape: { pieces },
     palettes: [],
     sequences: [],

@@ -20,7 +20,7 @@ import type { BarActions } from "../sequences/SequencesTab";
 
 const hsv = (h: number, s = 1000, v = 1000) => ({ h, s, v });
 const lib = (): Library => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   shape: { pieces: Array.from({ length: 3 }, (_, i) => ({ x: i * 2, y: 0, angle: 0, len: 1 })) },
   palettes: [
     [1, { name: "Neon", principal: hsv(300), contraste: hsv(180), suave: hsv(260, 600, 700) }],
@@ -33,6 +33,7 @@ const lib = (): Library => ({
       {
         name: "Pulse",
         moment: "rhythm",
+        fade: true,
         steps: [{ len: "one", roles: ["principal", "contraste", "suave"] }],
       },
     ],

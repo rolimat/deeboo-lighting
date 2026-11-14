@@ -24,6 +24,7 @@ const roles = (...r: string[]) => r;
 const pulse = (): Sequence => ({
   name: "Pulse",
   moment: "rhythm",
+  fade: true,
   steps: [
     { len: "one", roles: roles("principal", "off", "off") },
     { len: "two", roles: roles("off", "off", "off") },
@@ -32,7 +33,7 @@ const pulse = (): Sequence => ({
   ],
 });
 const lib = (): Library => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   shape: { pieces: Array.from({ length: 3 }, (_, i) => ({ x: i * 2, y: 0, angle: 0, len: 1 })) },
   palettes: [
     [1, { name: "Neon", principal: hsv(300), contraste: hsv(180), suave: hsv(260) }],
@@ -45,6 +46,7 @@ const lib = (): Library => ({
       {
         name: "Drift",
         moment: "calm",
+        fade: true,
         steps: [
           { len: "four", roles: roles("suave", "off", "off") },
           { len: "four", roles: roles("off", "off", "off") },
@@ -112,8 +114,9 @@ beforeEach(() => {
   vi.mocked(api.saveLibrary).mockImplementation(async (l) => l);
   vi.mocked(api.messageCounts).mockImplementation(async (s) => s.steps.map(() => 1));
   vi.mocked(api.patternSequence).mockResolvedValue({
-    name: "Halves",
-    moment: "rhythm",
+    name: "Long wash",
+    moment: "calm",
+    fade: true,
     steps: [
       { len: "four", roles: roles("principal", "off", "principal") },
       { len: "four", roles: roles("off", "principal", "off") },
@@ -135,9 +138,9 @@ it("browser_groups_by_moment_with_icons", async () => {
   for (const h of heads) expect(h.querySelector("svg")).not.toBeNull();
   const rhythm = heads[0]?.nextElementSibling as HTMLElement;
   expect(rhythm.textContent).toContain("Pulse");
-  expect(rhythm.textContent).toContain("Halves"); // one entry per pattern
+  expect(rhythm.textContent).toContain("Cross pairs"); // one entry per pattern
   expect(rhythm.textContent).toContain("Any pattern");
-  expect(heads[2]?.nextElementSibling?.textContent).toContain("Fast snake");
+  expect(heads[2]?.nextElementSibling?.textContent).toContain("Strobe, accelerating");
   // generated entries carry the teal icon, user sequences do not
   expect(rhythm.querySelector("[data-generated] svg")).not.toBeNull();
   expect(byText("nav button", "Pulse")?.querySelector("[data-generated]")).toBeNull();
@@ -146,7 +149,7 @@ it("browser_groups_by_moment_with_icons", async () => {
 
 it("browser_items_show_grip_and_moment_icon", async () => {
   await mount();
-  for (const label of ["Pulse", "Drift", "Halves", "Fast snake"]) {
+  for (const label of ["Pulse", "Drift", "Cross pairs", "Strobe, accelerating"]) {
     const b = byText("nav button", label);
     expect(b?.querySelector("[data-grip]"), label).not.toBeNull();
     expect(b?.querySelector("[data-moment-icon] svg"), label).not.toBeNull();
@@ -254,9 +257,9 @@ it("multi_message_warning_on_column", async () => {
 
 it("generated_opens_read_only_with_duplicate_to_edit", async () => {
   await mount();
-  await click(byText("nav button", "Halves"));
+  await click(byText("nav button", "Long wash"));
   await tick();
-  expect(api.patternSequence).toHaveBeenCalledWith("halves", expect.any(Number));
+  expect(api.patternSequence).toHaveBeenCalledWith("longWash");
   expect(q("input#seq-name")).toBeNull();
   const before = lib().sequences.length;
   await fire(cell(0, 0), "pointerdown"); // read-only: nothing painted
@@ -265,8 +268,8 @@ it("generated_opens_read_only_with_duplicate_to_edit", async () => {
   await tick();
   expect(store.lib?.sequences).toHaveLength(before + 1);
   const added = store.lib?.sequences[before]?.[1];
-  expect(added).toMatchObject({ name: "Halves", moment: "rhythm" });
-  expect(q<HTMLInputElement>("input#seq-name")?.value).toBe("Halves"); // selected, editable
+  expect(added).toMatchObject({ name: "Long wash", moment: "calm" });
+  expect(q<HTMLInputElement>("input#seq-name")?.value).toBe("Long wash"); // selected, editable
   expect(byText("button", "Duplicate to edit")).toBeUndefined();
 });
 
@@ -304,10 +307,18 @@ it("duplicate_and_delete_act_on_the_selection", async () => {
   actions?.onDelete?.(); // the copy is in no set
   await tick();
   expect(store.lib?.sequences).toHaveLength(2);
-  await click(byText("nav button", "Halves"));
+  await click(byText("nav button", "Cross pairs"));
   await tick();
   expect(actions?.onDuplicate).toBeUndefined(); // generated: nothing to duplicate or delete
   expect(actions?.onDelete).toBeUndefined();
+});
+
+it("new_sequence_has_fade_on", async () => {
+  await mount();
+  await click(byText("button", "New sequence"));
+  await tick();
+  const added = store.lib?.sequences.at(-1)?.[1];
+  expect(added).toMatchObject({ name: "New sequence", fade: true });
 });
 
 it("dropping_a_palette_changes_the_preview", async () => {

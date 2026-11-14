@@ -1,6 +1,14 @@
-import type { Settings, Status } from "../api";
-import type { DetectorEvent, Library, Sequence, Thresholds, api as realApi } from "./api";
+import type { MomentName, Settings, Status } from "../api";
+import type {
+  DetectorEvent,
+  Library,
+  PatternName,
+  Sequence,
+  Thresholds,
+  api as realApi,
+} from "./api";
 import { fromCells } from "./sequences/cells";
+import { PATTERNS as PATTERN_LISTS } from "./sequences/SequencesTab";
 
 /** Dev-only (`npm run dev`, open `editor.html?mock`); the marker lets the build check prove it is gone from dist. */
 export const MOCK_MARKER = "__DEEBOO_EDITOR_MOCK_HARNESS__";
@@ -17,7 +25,7 @@ const gen = (
   const cols = Array.from({ length: bars * 8 }, (_, h) =>
     Array.from({ length: SEGS }, (_, s) => role(s, h)),
   );
-  return { name, moment, steps: fromCells(cols) } satisfies Sequence;
+  return { name, moment, fade: true, steps: fromCells(cols) } satisfies Sequence;
 };
 const PATTERNS: Record<string, (s: number, h: number) => string> = {
   halves: (s, h) => (s < 4 === (Math.floor(h / 2) % 2 === 0) ? "principal" : "contraste"),
@@ -52,7 +60,7 @@ function detectorBeat(b: number): DetectorEvent {
 export function installMock(api: typeof realApi): void {
   console.info(MOCK_MARKER);
   let lib: Library = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     shape: {
       pieces: [
         ...[0, 1, 2, 3].map((i) => ({ x: i * 2, y: 3, angle: 0 as const, len: 2 as const })),
@@ -63,10 +71,87 @@ export function installMock(api: typeof realApi): void {
       ],
     },
     palettes: [
-      [1, { name: "Neon", principal: hsv(300), contraste: hsv(180), suave: hsv(260, 600, 700) }],
-      [2, { name: "Sunset", principal: hsv(20), contraste: hsv(340), suave: hsv(45, 700, 800) }],
-      [3, { name: "Ice", principal: hsv(200), contraste: hsv(0, 0), suave: hsv(220, 500, 600) }],
-      [4, { name: "Acid", principal: hsv(135), contraste: hsv(285), suave: hsv(135, 300, 950) }],
+      [
+        1,
+        {
+          name: "Ocean",
+          principal: hsv(190, 1000, 1000),
+          contraste: hsv(320, 900, 1000),
+          suave: hsv(190, 300, 1000),
+        },
+      ],
+      [
+        2,
+        {
+          name: "Laser",
+          principal: hsv(125, 1000, 1000),
+          contraste: hsv(325, 1000, 1000),
+          suave: hsv(160, 600, 1000),
+        },
+      ],
+      [
+        3,
+        {
+          name: "UV",
+          principal: hsv(257, 1000, 1000),
+          contraste: hsv(177, 1000, 1000),
+          suave: hsv(282, 500, 1000),
+        },
+      ],
+      [
+        4,
+        {
+          name: "Deep sea",
+          principal: hsv(197, 1000, 1000),
+          contraste: hsv(157, 1000, 1000),
+          suave: hsv(182, 400, 1000),
+        },
+      ],
+      [
+        5,
+        {
+          name: "Ember",
+          principal: hsv(28, 1000, 1000),
+          contraste: hsv(53, 1000, 1000),
+          suave: hsv(43, 500, 1000),
+        },
+      ],
+      [
+        6,
+        {
+          name: "Green",
+          principal: hsv(130, 1000, 550),
+          contraste: hsv(130, 1000, 1000),
+          suave: hsv(130, 450, 1000),
+        },
+      ],
+      [
+        7,
+        {
+          name: "Lavender",
+          principal: hsv(270, 550, 1000),
+          contraste: hsv(220, 450, 1000),
+          suave: hsv(220, 250, 1000),
+        },
+      ],
+      [
+        8,
+        {
+          name: "Sorbet",
+          principal: hsv(45, 650, 1000),
+          contraste: hsv(350, 650, 1000),
+          suave: hsv(350, 300, 1000),
+        },
+      ],
+      [
+        9,
+        {
+          name: "Peach and mint",
+          principal: hsv(20, 550, 1000),
+          contraste: hsv(150, 550, 1000),
+          suave: hsv(40, 250, 1000),
+        },
+      ],
     ],
     sequences: [
       [
@@ -90,7 +175,7 @@ export function installMock(api: typeof realApi): void {
         id: 1,
         name: "Warm-up",
         rhythm: {
-          sequences: [{ id: 1 }, { id: 2 }, { pattern: "snake" }],
+          sequences: [{ id: 1 }, { id: 2 }, { pattern: "crossPairs" }],
           order: "inOrder",
           interval: { bars: 8 },
         },
@@ -202,13 +287,18 @@ export function installMock(api: typeof realApi): void {
         2,
         m === "calm" ? pat("drift") : m === "buildUp" ? pat("strobe") : pat("snake"),
       ),
-    patternSequence: async (p: string) =>
-      gen(
-        p,
-        "rhythm",
+    patternSequence: async (p: PatternName) => {
+      const m = (Object.keys(PATTERN_LISTS) as MomentName[]).find((k) =>
+        PATTERN_LISTS[k].some(([n]) => n === p),
+      );
+      const label = PATTERN_LISTS[m ?? "rhythm"].find(([n]) => n === p)?.[1] ?? p;
+      return gen(
+        label,
+        m ?? "rhythm",
         2,
-        p === "snake" || p === "drift" || p === "strobe" ? pat(p) : pat("halves"),
-      ),
+        pat(m === "calm" ? "drift" : m === "buildUp" ? "strobe" : "snake"),
+      );
+    },
     getSettings: async () => settings,
     // Mirrors Rust's switch_input: the map is not the UI's; a new input swaps the detector values.
     saveSettings: async (s: Settings) => {
