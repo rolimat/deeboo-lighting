@@ -4,7 +4,8 @@
 //! `UPDATE_FIXTURES=1 cargo test -p light-core --test player_fixture`.
 use light_core::clock::PhraseBars;
 use light_core::detect::Moment;
-use light_core::engine::{Engine, EngineConfig};
+use light_core::engine::{Engine, EngineConfig, UiCommand};
+use light_core::fade;
 use light_core::library::{Library, SeqRef};
 use light_core::model::{Colour, Role, Sequence, Step, StepLen};
 use light_core::paint::PaintCommand;
@@ -32,11 +33,11 @@ const ROLES: [Role; 5] = [
 ];
 
 /// The first step is never a half beat: the engine skips that one on Start (see `Engine::pulse`).
-fn sequence(lens: &[StepLen]) -> Sequence {
+fn sequence(lens: &[StepLen], moment: Moment, fade: bool) -> Sequence {
     Sequence {
         name: "fixture".into(),
-        fade: true,
-        moment: Moment::Rhythm,
+        fade,
+        moment,
         steps: lens
             .iter()
             .enumerate()
@@ -57,12 +58,19 @@ fn name(l: StepLen) -> &'static str {
     }
 }
 
-/// Runs the engine and reads, 300 ms after each half-beat pulse, which step the strip shows.
-fn shown_steps(seq: &Sequence) -> Vec<usize> {
+/// Runs the engine and reads, 300 ms after each half-beat pulse, which step the strip shows and how
+/// far a fade has got: `(step, t)` with `t` in (0, 1]. Calm is forced right after Start.
+fn shown_steps(seq: &Sequence) -> Vec<(usize, f64)> {
+    let calm = seq.moment == Moment::Calm;
     let mut lib = Library::builtin(SEGMENTS);
     lib.sequences.push((1, seq.clone()));
-    lib.sets[0].rhythm.sequences = vec![SeqRef::Id(1)];
-    lib.sets[0].rhythm.order = light_core::library::Order::InOrder;
+    let track = if calm {
+        &mut lib.sets[0].calm
+    } else {
+        &mut lib.sets[0].rhythm
+    };
+    track.sequences = vec![SeqRef::Id(1)];
+    track.order = light_core::library::Order::InOrder;
     lib.sets[0].palettes = vec![1];
     let mut e = Engine::new(EngineConfig {
         segments: SEGMENTS,
@@ -83,6 +91,10 @@ fn shown_steps(seq: &Sequence) -> Vec<usize> {
     take(&mut strip, c);
     let c = e.on_midi(now, 0xFA, |_| None);
     take(&mut strip, c);
+    if calm {
+        let c = e.command(now, UiCommand::Force(Moment::Calm));
+        take(&mut strip, c);
+    }
     let mut out = Vec::new();
     for k in 0..HALF_BEATS * 12 {
         while let Some(d) = e.next_deadline_us().filter(|d| *d <= now) {
@@ -100,31 +112,53 @@ fn shown_steps(seq: &Sequence) -> Vec<usize> {
         }
         now = next;
         if k % 12 == 7 {
-            out.push(
-                ROLES
-                    .iter()
-                    .position(|r| light_core::model::resolve(*r, &palette, 100) == strip[0])
-                    .expect("strip shows a step colour"),
-            );
+            out.push(read_frame(seq, &palette, strip[0]));
         }
     }
     out
 }
 
+/// Which step the strip colour belongs to, and at which fade position: the target itself (t = 1) or
+/// `mix(previous step, step, j, frames)`.
+fn read_frame(seq: &Sequence, palette: &light_core::model::Palette, shown: Colour) -> (usize, f64) {
+    let colour = |i: usize| light_core::model::resolve(seq.steps[i].roles[0], palette, 100);
+    let n = seq.steps.len();
+    (0..n)
+        .find_map(|i| {
+            if colour(i) == shown {
+                return Some((i, 1.0));
+            }
+            let frames = fade::frames(seq.steps[i].len.half_beats());
+            (1..frames)
+                .find(|j| fade::mix(colour((i + n - 1) % n), colour(i), *j, frames) == shown)
+                .map(|j| (i, f64::from(j) / f64::from(frames)))
+        })
+        .expect("strip shows a step colour or a fade frame")
+}
+
 fn fixture() -> String {
     let cases: Vec<_> = [
-        vec![One, Two, Half, Half, Four],
-        vec![Two, Half, One, Half, Four],
-        vec![Four, One, Two, Half, Half],
+        (vec![One, Two, Half, Half, Four], Moment::Rhythm, true),
+        (vec![Two, Half, One, Half, Four], Moment::Rhythm, true),
+        (vec![Four, One, Two, Half, Half], Moment::Rhythm, true),
+        (vec![Four, Two, One, One, Four], Moment::Calm, true),
+        (vec![Four, Four, Two, Two], Moment::Calm, true),
+        (vec![Four, Two, One, One, Four], Moment::Calm, false),
     ]
     .into_iter()
-    .map(|lens| {
-        let pairs: Vec<_> = shown_steps(&sequence(&lens))
+    .map(|(lens, moment, fade)| {
+        let shown: Vec<_> = shown_steps(&sequence(&lens, moment, fade))
             .into_iter()
             .enumerate()
+            .map(|(half, (idx, t))| (half, idx, t))
             .collect();
         let steps: Vec<_> = lens.iter().map(|l| name(*l)).collect();
-        serde_json::json!({ "steps": steps, "shown": pairs })
+        let moment = if moment == Moment::Calm {
+            "calm"
+        } else {
+            "rhythm"
+        };
+        serde_json::json!({ "steps": steps, "moment": moment, "fade": fade, "shown": shown })
     })
     .collect();
     let mut s = serde_json::to_string_pretty(&cases).expect("json");
