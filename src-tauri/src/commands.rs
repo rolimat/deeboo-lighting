@@ -572,7 +572,9 @@ impl AppState {
     pub fn quit(&self, emit: &Emit) {
         self.wizard.shutdown(emit, QUIT_WAIT);
         self.deliver(Input::Quit);
-        if let Some(h) = lock(&self.runtime).as_ref() {
+        // Taken out of the lock: nothing else may wait on it while this waits for the engine.
+        let handle = lock(&self.runtime).take();
+        if let Some(h) = handle {
             // A closed channel (engine already gone) returns at once.
             let _ = h.done.recv_timeout(ENGINE_DONE_WAIT);
         }
@@ -1230,6 +1232,30 @@ mod tests {
         let t = std::time::Instant::now();
         state.quit(&emit);
         assert!(t.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn quit_does_not_hold_the_runtime_lock_while_waiting_for_the_engine() {
+        let state = AppState::default();
+        let emit: Emit = Arc::new(|_| {});
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let (done_tx, done) = std::sync::mpsc::sync_channel(1);
+        let (got_tx, got) = std::sync::mpsc::channel();
+        state.set_runtime(RuntimeHandle { tx, done });
+        std::thread::scope(|s| {
+            s.spawn(|| state.quit(&emit));
+            s.spawn(move || {
+                assert!(matches!(rx.recv(), Ok(Input::Quit)));
+                got_tx.send(()).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(600));
+                done_tx.send(()).unwrap();
+            });
+            got.recv().unwrap();
+            // Engine commands from other threads (the tray, the UI) are not stuck behind quit.
+            let t = std::time::Instant::now();
+            let _ = state.send(Input::PopoverShown);
+            assert!(t.elapsed() < std::time::Duration::from_millis(300));
+        });
     }
 
     #[test]
