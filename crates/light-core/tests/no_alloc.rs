@@ -85,3 +85,28 @@ fn on_beat_does_not_allocate() {
     assert_eq!(at[95], Moment::BuildUp);
     assert_eq!(at[96], Moment::Rhythm);
 }
+
+#[test]
+fn on_beat_after_import_does_not_allocate() {
+    use light_core::detect::bands::HopFrame;
+    use light_core::detect::moment::{DetectorParams, LearnedRefs, MomentDetector};
+    let mut d = MomentDetector::new(DetectorParams::default(), 0.0058);
+    d.import_refs(&LearnedRefs {
+        kick: vec![-20.0; 64],
+        sub: vec![-20.0; 64],
+        high: vec![-30.0; 64],
+    });
+    assert_no_alloc(|| {
+        for _ in 0..200 {
+            for _ in 0..90 {
+                d.push(HopFrame {
+                    kick: 0.5,
+                    sub: 0.5,
+                    high: 0.3,
+                    onset: 0.0,
+                });
+            }
+            let _ = d.on_beat(None);
+        }
+    });
+}
