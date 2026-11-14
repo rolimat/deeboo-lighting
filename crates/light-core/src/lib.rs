@@ -3,6 +3,7 @@ pub mod builtin;
 pub mod clock;
 pub mod detect;
 pub mod engine;
+pub mod fade;
 pub mod generator;
 pub mod library;
 #[cfg(feature = "serde")]

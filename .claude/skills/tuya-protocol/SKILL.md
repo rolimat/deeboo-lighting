@@ -54,6 +54,7 @@ White is `S=0, V=1000`.
 - Two back-to-back messages per change at 2/s lost some and showed intermediate states and wrong order: space messages out.
 - The strip acks in ~100 ms and reports new state in ~400 ms; when the change becomes visible is NOT measured.
 - ICMP ping takes 1-2 s (wifi power saving); TCP is unaffected.
+- Calm fades: one frame per half beat for up to 2 beats, each through `scene::diff` + `Scheduler::plan`; two-colour Build-up steps at 140 BPM rely on the drop rule
 - M (`reported`) comes from the header byte seen when the user paints in Smart Life (the strip does not announce it).
   N (`segments`, the wired ones, N <= M) is chosen by the user; the controller may report more than are wired
   (e2e: M=10, N=8; Smart Life paints with header 10 and leaves 9-10 dark). `strip.json` holds both
