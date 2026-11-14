@@ -6,7 +6,7 @@ import { Icon } from "../../icons/Icon";
 import { help } from "../shell/Help";
 import { H } from "../help-texts";
 import { bounds } from "../strip/shape";
-import { stepAt } from "./player";
+import { frameAt } from "./player";
 import { roleColour } from "./RolePicker";
 
 const MARGIN = 1;
@@ -94,7 +94,14 @@ export function Simulation({
   useEffect(() => onHalf?.(playing ? half : null), [playing, half]);
 
   const match = sequence.steps.every((s) => s.roles.length === pieces.length);
-  const step = sequence.steps[stepAt(sequence, half)];
+  const frame = frameAt(sequence, half);
+  const step = sequence.steps[frame.idx];
+  const from = frame.from === null ? undefined : sequence.steps[frame.from];
+  const fill = (i: number) => {
+    const to = roleColour(step?.roles[i] ?? "off", palette);
+    if (!from || frame.t >= 1) return to;
+    return `color-mix(in srgb, ${to} ${Math.round(frame.t * 100)}%, ${roleColour(from.roles[i] ?? "off", palette)})`;
+  };
   const b = bounds(pieces);
 
   return (
@@ -125,7 +132,7 @@ export function Simulation({
               height={0.7}
               rx={0.35}
               transform={`rotate(${p.angle} ${p.x} ${p.y})`}
-              fill={roleColour(step.roles[i] ?? "off", palette)}
+              fill={fill(i)}
             />
           ))}
         </svg>

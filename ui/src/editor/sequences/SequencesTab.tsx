@@ -555,6 +555,25 @@ export function SequencesTab({
                   ))}
                 </select>
               </div>
+              {!readOnly && shown.moment === "calm" && (
+                <div class="flex items-center gap-2">
+                  <span class="t-label">Fade</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={shown.fade}
+                    aria-label="Fade"
+                    {...help(H.fade)}
+                    onClick={() => editSeq((s) => ({ ...s, fade: !s.fade }))}
+                    class={`relative h-5 w-9 shrink-0 rounded-full border focus-visible:outline-2 focus-visible:outline-accent ${shown.fade ? "border-accent bg-accent" : "border-border bg-bg"}`}
+                  >
+                    <span
+                      class={`absolute top-0.5 h-3.5 w-3.5 rounded-full ${shown.fade ? "left-4 bg-bg" : "left-0.5 bg-dim"}`}
+                    />
+                  </button>
+                  <span class="text-dim">Smooth changes between steps</span>
+                </div>
+              )}
               {readOnly && (
                 <button
                   type="button"

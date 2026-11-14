@@ -481,3 +481,31 @@ it("a_duplicate_stays_selected_after_renumbering", async () => {
   });
   expect(store.lib?.sequences.map(([, x]) => x.name)).toEqual(["Pulse", "Drift", "Renamed"]);
 });
+
+const fadeSwitch = () => q("button[role=switch][aria-label=Fade]");
+
+it("fade_switch_only_for_calm", async () => {
+  await mount();
+  expect(fadeSwitch()).toBeNull(); // Pulse is Rhythm
+  await click(byText("nav button", "Drift"));
+  expect(fadeSwitch()?.getAttribute("aria-checked")).toBe("true");
+  expect(root.textContent).toContain("Smooth changes between steps");
+  await click(fadeSwitch());
+  expect(store.lib?.sequences[1]?.[1].fade).toBe(false);
+  expect(fadeSwitch()?.getAttribute("aria-checked")).toBe("false");
+  await act(() => store.undo());
+  expect(store.lib?.sequences[1]?.[1].fade).toBe(true);
+  await click(byText("nav button", "Long wash")); // generated Calm: read only
+  expect(fadeSwitch()).toBeNull();
+});
+
+it("fade_switch_is_absent_for_build_up", async () => {
+  const l = lib();
+  const drift = l.sequences[1]?.[1];
+  if (drift) drift.moment = "buildUp";
+  vi.mocked(api.getLibrary).mockResolvedValue(l);
+  await mount();
+  await click(byText("nav button", "Drift"));
+  expect(q<HTMLInputElement>("input#seq-name")?.value).toBe("Drift");
+  expect(fadeSwitch()).toBeNull();
+});
