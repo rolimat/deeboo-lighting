@@ -63,3 +63,17 @@ fn rhythm_halves_matches_the_example() {
     assert_eq!(&s.steps[1].roles[..5], &[Role::Off; 5]);
     assert_eq!(&s.steps[1].roles[5..], &[Role::White; 5]);
 }
+
+#[test]
+fn missing_fade_reads_as_on() {
+    use light_core::model::Sequence;
+    let base = |fade: &str| {
+        format!(
+            r#"{{{fade}"name":"a","moment":"calm","steps":[{{"len":"four","roles":["suave"]}},{{"len":"four","roles":["off"]}}]}}"#
+        )
+    };
+    let s: Sequence = serde_json::from_str(&base("")).expect("parses");
+    assert!(s.fade);
+    let s: Sequence = serde_json::from_str(&base(r#""fade":false,"#)).expect("parses");
+    assert!(!s.fade);
+}

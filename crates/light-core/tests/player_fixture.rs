@@ -35,6 +35,7 @@ const ROLES: [Role; 5] = [
 fn sequence(lens: &[StepLen]) -> Sequence {
     Sequence {
         name: "fixture".into(),
+        fade: true,
         moment: Moment::Rhythm,
         steps: lens
             .iter()

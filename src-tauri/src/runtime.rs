@@ -1319,6 +1319,7 @@ mod tests {
         };
         let seq = Sequence {
             name: "S".into(),
+            fade: true,
             moment: Moment::Rhythm,
             steps: vec![Step {
                 len: StepLen::One,

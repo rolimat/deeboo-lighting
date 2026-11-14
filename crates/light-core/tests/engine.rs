@@ -939,6 +939,7 @@ fn preview_pair() -> (light_core::model::Palette, light_core::model::Sequence) {
         },
         Sequence {
             name: "S".into(),
+            fade: true,
             moment: Rhythm,
             steps: vec![step(Role::Principal), step(Role::Contraste)],
         },

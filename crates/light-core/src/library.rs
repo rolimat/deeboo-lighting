@@ -1,7 +1,7 @@
 //! The user library: shape, palettes, sequences and sets, with strict validation (plan 5).
 use crate::builtin::{self, test_palette};
 use crate::detect::Moment;
-use crate::model::{Palette, Sequence};
+use crate::model::{Palette, Sequence, Step, StepLen};
 use crate::paint::Hsv;
 use crate::patterns::Pattern;
 use std::fmt;
@@ -414,5 +414,42 @@ impl Library {
             return err("active_palette", "references an unknown palette");
         }
         Ok(())
+    }
+}
+
+/// Appends steps repeating from the first until the sequence fills whole bars, then cuts it to
+/// 16 bars; the step that crosses the limit is shortened (largest lengths first) to fit exactly.
+pub fn pad_to_bars(seq: &mut Sequence) {
+    const MAX: u32 = MAX_BARS as u32 * BAR_HALF_BEATS;
+    let hb = |s: &Step| u32::from(s.len.half_beats());
+    let n = seq.steps.len();
+    let mut total: u32 = seq.steps.iter().map(hb).sum();
+    let mut i = 0;
+    while n > 0 && !total.is_multiple_of(BAR_HALF_BEATS) && total < MAX {
+        seq.steps.push(seq.steps[i % n].clone());
+        total += hb(&seq.steps[n + i]);
+        i += 1;
+    }
+    if total <= MAX {
+        return;
+    }
+    let mut kept = 0;
+    let mut sum = 0;
+    while sum + hb(&seq.steps[kept]) <= MAX {
+        sum += hb(&seq.steps[kept]);
+        kept += 1;
+    }
+    let cross = seq.steps[kept].clone();
+    seq.steps.truncate(kept);
+    while sum < MAX {
+        let len = [StepLen::Four, StepLen::Two, StepLen::One, StepLen::Half]
+            .into_iter()
+            .find(|l| sum + u32::from(l.half_beats()) <= MAX)
+            .unwrap_or(StepLen::Half);
+        sum += u32::from(len.half_beats());
+        seq.steps.push(Step {
+            len,
+            ..cross.clone()
+        });
     }
 }

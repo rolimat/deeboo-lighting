@@ -315,6 +315,7 @@ pub fn build(p: Pattern, params: &Params, groups: &Groups, n: u8) -> Sequence {
     whole_bars(&mut steps);
     Sequence {
         name: name.into(),
+        fade: true,
         moment,
         steps,
     }

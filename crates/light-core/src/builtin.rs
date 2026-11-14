@@ -77,6 +77,7 @@ pub fn sequence(moment: Moment, segments: u8) -> Sequence {
     };
     Sequence {
         name: name.into(),
+        fade: true,
         moment,
         steps,
     }

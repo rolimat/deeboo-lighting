@@ -517,3 +517,28 @@ fn dropping_foreign_refs_keeps_the_rest_and_leaves_a_track_never_empty() {
     );
     assert_eq!(l.validate(), Ok(()));
 }
+
+#[test]
+fn pad_to_bars_is_public() {
+    use light_core::library::pad_to_bars;
+    use light_core::model::Sequence;
+    let step = |len, r| Step {
+        len,
+        roles: vec![r],
+    };
+    let mut s = Sequence {
+        name: "a".into(),
+        moment: Moment::Calm,
+        steps: vec![
+            step(StepLen::One, Role::Principal),
+            step(StepLen::Half, Role::Off),
+        ],
+        fade: true,
+    };
+    // One (2) + Half (1) = 3 half beats -> 8 repeating from the first step.
+    pad_to_bars(&mut s);
+    let total: u32 = s.steps.iter().map(|x| u32::from(x.len.half_beats())).sum();
+    assert_eq!(total, 8);
+    assert_eq!(s.steps[2].len, StepLen::One);
+    assert_eq!(s.steps[2].roles, vec![Role::Principal]);
+}

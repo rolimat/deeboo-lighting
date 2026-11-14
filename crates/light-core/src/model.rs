@@ -70,6 +70,14 @@ pub struct Sequence {
     pub name: String,
     pub moment: Moment,
     pub steps: Vec<Step>,
+    /// Calm only: cross-fade between its steps.
+    #[cfg_attr(feature = "serde", serde(default = "fade_default"))]
+    pub fade: bool,
+}
+
+#[cfg(feature = "serde")]
+fn fade_default() -> bool {
+    true
 }
 
 impl Sequence {

@@ -1501,6 +1501,7 @@ mod tests {
         };
         let seq = Sequence {
             name: "t".into(),
+            fade: true,
             moment: Moment::Rhythm,
             steps: vec![
                 step([P, P, P, P]),         // from the last (all off): 1 bucket
