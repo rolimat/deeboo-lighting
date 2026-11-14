@@ -78,7 +78,7 @@ pub enum Interval {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum SeqRef {
     Id(u32),
@@ -86,6 +86,31 @@ pub enum SeqRef {
     Generated,
     /// This pattern, with new parameters each time.
     Pattern(Pattern),
+}
+
+/// An unknown pattern name (a file from another version) reads as `Generated`: loading never fails.
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for SeqRef {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{IntoDeserializer, value::Error};
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        enum Raw {
+            Id(u32),
+            Generated,
+            Pattern(String),
+        }
+        Ok(match Raw::deserialize(d)? {
+            Raw::Id(id) => SeqRef::Id(id),
+            Raw::Generated => SeqRef::Generated,
+            Raw::Pattern(name) => {
+                let known = <Pattern as serde::Deserialize>::deserialize(
+                    IntoDeserializer::<Error>::into_deserializer(name.as_str()),
+                );
+                known.map_or(SeqRef::Generated, SeqRef::Pattern)
+            }
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

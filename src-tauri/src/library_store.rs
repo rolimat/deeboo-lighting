@@ -303,6 +303,26 @@ mod tests {
     }
 
     #[test]
+    fn v3_with_an_unknown_pattern_loads_it_as_generated() {
+        let (dir, p) = tmp();
+        let mut v = serde_json::to_value(seeded_builtin(10)).unwrap();
+        v["sets"][0]["rhythm"]["sequences"] =
+            json!([{"pattern": "snake"}, {"pattern": "crossPairs"}]);
+        std::fs::write(&p, v.to_string()).unwrap();
+        let lib = load(&p, 10, 8);
+        assert_eq!(
+            lib.sets[0].rhythm.sequences,
+            [
+                SeqRef::Generated,
+                SeqRef::Pattern(light_core::patterns::Pattern::CrossPairs)
+            ]
+        );
+        assert!(!dir.path().join("library.json.bad").exists());
+        let again: Library = serde_json::from_str(&serde_json::to_string(&lib).unwrap()).unwrap();
+        assert_eq!(again, lib, "a known pattern round-trips");
+    }
+
+    #[test]
     fn load_v2_writes_backup_once_and_saves_v3() {
         use std::os::unix::fs::PermissionsExt;
         let (dir, p) = tmp();
