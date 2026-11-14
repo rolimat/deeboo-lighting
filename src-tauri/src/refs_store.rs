@@ -48,6 +48,9 @@ impl RefsFile {
                     return Err("reference out of range".into());
                 }
             }
+            if e.refs.kick.len() != e.refs.sub.len() || e.refs.kick.len() != e.refs.high.len() {
+                return Err("unequal reference rings".into());
+            }
         }
         Ok(())
     }
@@ -129,8 +132,8 @@ mod tests {
     fn refs(v: f32) -> LearnedRefs {
         LearnedRefs {
             kick: vec![v; 3],
-            sub: vec![v],
-            high: vec![],
+            sub: vec![v; 3],
+            high: vec![v; 3],
         }
     }
 
@@ -181,9 +184,10 @@ mod tests {
             "x".repeat(70 << 10),
             good.replace("-20.0", "\"NaN\""),
             good.replace(
-                "\"sub\":[-20.0]",
+                "\"sub\":[-20.0,-20.0,-20.0]",
                 &format!("\"sub\":[{}]", vec!["-20.0"; 65].join(",")),
             ),
+            good.replace("\"sub\":[-20.0,-20.0,-20.0]", "\"sub\":[]"),
             good.replace("\"version\":1", "\"version\":2"),
             good.replace("Mic", "a\\u0007b"),
             good.replace("-20.0", "99.0"),
