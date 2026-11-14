@@ -538,6 +538,14 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
         }
     }
 
+    /// The live detector's references differ from what the store holds (engine thread, once per beat).
+    fn refs_changed(&self) -> bool {
+        self.detect.as_ref().is_some_and(|d| {
+            let stored = self.refs.inputs.get(&key_of(self.detect_key.as_deref()));
+            stored.map(|e| &e.refs) != Some(&d.moment.export_refs())
+        })
+    }
+
     /// Exports the current detector into the store and writes the file (engine thread only).
     fn save_refs(&mut self, now_us: u64) {
         let Some(path) = &self.refs_path else { return };
@@ -586,6 +594,14 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 Ok(info) => {
                     self.swap_detector_for_input();
                     if self.detect.as_ref().is_none_or(|d| d.rate != info.rate) {
+                        // The old detector's learning moves to the new one through the store.
+                        if let Some(old) = &self.detect {
+                            self.refs.put(
+                                &key_of(self.detect_key.as_deref()),
+                                old.moment.export_refs(),
+                            );
+                            self.refs_dirty = true;
+                        }
                         let mut d = Detect::new(info.rate, detector_params(&self.settings));
                         if let Some(e) = self.refs.inputs.get(&key_of(self.detect_key.as_deref())) {
                             d.moment.import_refs(&e.refs);
@@ -723,7 +739,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 if let Some(silent) = beat_silent {
                     self.check_capture(silent);
                 }
-                if features.is_some() {
+                if features.is_some() && self.refs_changed() {
                     self.refs_dirty = true;
                 }
                 if let Some((f, moment)) = features {
@@ -1136,6 +1152,8 @@ mod tests {
         closes: Rc<RefCell<u32>>,
         samples: Vec<f32>,
         errored: bool,
+        /// 0 reads as 48 kHz.
+        rate: u32,
     }
 
     impl AudioPort for FakeAudio {
@@ -1145,7 +1163,7 @@ mod tests {
                 return Err(AudioError::NoDevice);
             }
             Ok(AudioInfo {
-                rate: 48_000,
+                rate: if self.rate == 0 { 48_000 } else { self.rate },
                 name: "Fake mic".into(),
             })
         }
@@ -1964,6 +1982,54 @@ mod tests {
         run_ticks(&mut c, 49..3_500, 20_000);
         assert!(c.refs_writes >= 1, "saved at all");
         assert!(c.refs_writes <= 3, "70 s: {} writes", c.refs_writes);
+    }
+
+    #[test]
+    fn frozen_references_stop_being_written() {
+        let d = tempfile::tempdir().unwrap();
+        let mut c = refs_core(&d.path().join(refs_store::FILE), None);
+        run_ticks(&mut c, 49..1_600, 20_000);
+        // The rings fill with one exact value (digital silence) and stop changing.
+        let silent = |c: &mut TestCore, ticks: std::ops::Range<u64>| {
+            for i in ticks {
+                c.audio.samples = vec![0.0; 4_800];
+                let at = i * 20_000;
+                c.handle(
+                    Input::Midi(MidiEvent {
+                        at_us: at,
+                        status: 0xF8,
+                    }),
+                    at,
+                );
+            }
+        };
+        silent(&mut c, 1_600..5_000);
+        let before = c.refs_writes;
+        assert!(before >= 2, "saved while learning: {before}");
+        silent(&mut c, 5_000..8_600);
+        assert_eq!(c.refs_writes, before, "unchanged references were rewritten");
+    }
+
+    #[test]
+    fn a_new_sample_rate_keeps_the_learned_references() {
+        let d = tempfile::tempdir().unwrap();
+        let mut c = refs_core(&d.path().join(refs_store::FILE), None);
+        run_ticks(&mut c, 49..400, 20_000);
+        let want = c.detect.as_ref().unwrap().moment.export_refs();
+        assert!(want.kick.len() > 8);
+        c.handle(
+            Input::Midi(MidiEvent {
+                at_us: 8_000_000,
+                status: 0xFC,
+            }),
+            8_000_000,
+        );
+        c.audio.rate = 44_100;
+        start(&mut c);
+        let d = c.detect.as_ref().unwrap();
+        assert_eq!(d.rate, 44_100);
+        // The restart's own beats come after what was learned before.
+        assert_eq!(d.moment.export_refs().kick[..want.kick.len()], want.kick);
     }
 
     #[test]
