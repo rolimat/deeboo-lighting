@@ -1,4 +1,4 @@
-import type { Hsv } from "../api";
+import type { Hsv, Palette } from "../api";
 
 /** The wheel's unit disc: hue is the angle clockwise from the east, saturation the distance from the centre. */
 export function fromWheel(x: number, y: number, v: number): Hsv {
@@ -51,5 +51,16 @@ export function fromHex(text: string): Hsv | null {
     h: Math.round(h * 60) % 360,
     s: max === 0 ? 0 : Math.round((d / max) * 1000),
     v: Math.round(max * 1000),
+  };
+}
+
+/** The analogous pastel rule for a new palette: contrast 40 degrees on, soft 20 degrees on. */
+export function pastelPalette(h: number): Palette {
+  const hue = ((Math.round(h) % 360) + 360) % 360;
+  return {
+    name: "New palette",
+    principal: { h: hue, s: 600, v: 1000 },
+    contraste: { h: (hue + 40) % 360, s: 600, v: 1000 },
+    suave: { h: (hue + 20) % 360, s: 250, v: 1000 },
   };
 }

@@ -9,7 +9,7 @@ import { css } from "../sequences/RolePicker";
 import { Simulation } from "../sequences/Simulation";
 import type { useLibrary } from "../state/library";
 import { ColourWheel } from "./ColourWheel";
-import { fromHex, toHex } from "./colour";
+import { fromHex, pastelPalette, toHex } from "./colour";
 
 type Store = ReturnType<typeof useLibrary>;
 type RoleKey = "principal" | "contraste" | "suave";
@@ -39,12 +39,6 @@ const QUICK = [
   "#FFFFFF",
   "#FFE0B2",
 ];
-const NEW_PALETTE: Palette = {
-  name: "New palette",
-  principal: { h: 340, s: 830, v: 1000 },
-  contraste: { h: 245, s: 600, v: 840 },
-  suave: { h: 350, s: 300, v: 1000 },
-};
 
 const nameOk = (n: string) => {
   const len = [...n].length;
@@ -275,7 +269,7 @@ export function PalettesTab({
           type="button"
           disabled={lib.palettes.length >= MAX_PALETTES}
           {...help(H.newPalette)}
-          onClick={() => add(NEW_PALETTE)}
+          onClick={() => add(pastelPalette(Math.floor(Math.random() * 360)))}
           class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-body text-dim disabled:opacity-40"
         >
           <Icon name="plus" />

@@ -258,6 +258,17 @@ it("browser_lists_palettes_with_three_swatches_and_new_palette", async () => {
   expect(root.textContent).toContain("Background, calm moments");
 });
 
+it("new_palette_is_pastel", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  await mount();
+  const b = [...root.querySelectorAll("button")].find((x) =>
+    x.textContent?.includes("New palette"),
+  );
+  await click(b);
+  expect(store.lib?.palettes.at(-1)?.[1].principal).toEqual({ h: 180, s: 600, v: 1000 });
+  vi.mocked(Math.random).mockRestore();
+});
+
 it("a_duplicate_stays_selected_after_renumbering_and_recolour_edits_it", async () => {
   vi.mocked(api.saveLibrary).mockImplementation(renumbering(lib()));
   await mount();
