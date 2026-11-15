@@ -238,3 +238,47 @@ it("line_and_page_wheel_modes_step_once_per_event", async () => {
     });
   expect(onChange).toHaveBeenCalledTimes(3);
 });
+
+it("dragging_past_the_limit_rebases_so_reversing_moves_at_once", async () => {
+  const onChange = vi.fn();
+  const Host = () => {
+    const [v, setV] = useState(28);
+    return (
+      <Knob
+        name="K"
+        label="Calm"
+        above={false}
+        value={v}
+        min={0}
+        max={30}
+        def={14}
+        hint="H"
+        onChange={(n) => {
+          onChange(n);
+          setV(n);
+        }}
+      />
+    );
+  };
+  root = document.createElement("div");
+  document.body.append(root);
+  await act(async () => render(<Host />, root));
+  const el = root.querySelector<HTMLElement>("[role=slider]") as HTMLElement;
+  await act(() => {
+    el.dispatchEvent(new MouseEvent("pointerdown", { clientY: 200, bubbles: true }));
+  });
+  await act(() => {
+    window.dispatchEvent(new MouseEvent("pointermove", { clientY: 80 }));
+  });
+  await act(() => {
+    window.dispatchEvent(new MouseEvent("pointermove", { clientY: 60 }));
+  });
+  expect(onChange.mock.calls.map((c) => c[0])).toEqual([30]);
+  await act(() => {
+    window.dispatchEvent(new MouseEvent("pointermove", { clientY: 66 }));
+  });
+  expect(onChange).toHaveBeenLastCalledWith(29);
+  await act(() => {
+    window.dispatchEvent(new MouseEvent("pointerup"));
+  });
+});

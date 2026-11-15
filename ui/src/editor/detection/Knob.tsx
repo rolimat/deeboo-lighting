@@ -82,8 +82,15 @@ export function Knob(p: Props) {
         baseV = cur.current.value;
       }
       const steps = Math.trunc((baseY - m.clientY) / PX_PER_STEP);
-      const next = baseV + steps * (fine ? 0.1 : 1);
-      if (Math.round(next * 10) / 10 !== cur.current.value) set(next);
+      const { min, max, value } = cur.current;
+      const next = Math.round((baseV + steps * (fine ? 0.1 : 1)) * 10) / 10;
+      const clamped = Math.min(max, Math.max(min, next));
+      // Past a limit, re-base so reversing moves at once instead of paying back the overshoot.
+      if (clamped !== next) {
+        baseV = clamped;
+        baseY = m.clientY;
+      }
+      if (clamped !== value) set(clamped);
     };
     const end = () => stop.current?.();
     stop.current = () => {
