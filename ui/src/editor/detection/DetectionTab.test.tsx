@@ -502,3 +502,18 @@ it("status_bar_is_above_the_moment_changes_slider", async () => {
     Node.DOCUMENT_POSITION_FOLLOWING,
   );
 });
+
+const press = (el: HTMLElement, k: string, shiftKey = false) =>
+  act(() => {
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: k, shiftKey, bubbles: true }));
+  });
+
+it("line_arrows_keep_the_tenths", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(settings({ calmKickDb: 14.3 }));
+  await lane();
+  await press(line("Kick drop"), "ArrowUp");
+  expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("15.3");
+  await press(line("Kick drop"), "ArrowDown");
+  await press(line("Kick drop"), "ArrowDown");
+  expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("13.3");
+});

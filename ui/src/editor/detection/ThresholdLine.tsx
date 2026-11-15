@@ -46,7 +46,7 @@ export function ThresholdLine(p: Props) {
           : 0;
     if (!d) return;
     e.preventDefault();
-    set(p.value + d * (e.shiftKey ? 0.1 : 1), e.shiftKey);
+    set(p.value + d * (e.shiftKey ? 0.1 : 1), true);
   };
   const label =
     "absolute left-9 z-20 -translate-y-1/2 select-none whitespace-nowrap rounded border bg-card px-1.5 text-small text-accent";
