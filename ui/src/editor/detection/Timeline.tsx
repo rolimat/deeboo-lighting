@@ -175,9 +175,14 @@ function Lane(props: {
             key={tk}
             data-scale
             style={{ top: `${yPct(tk, v)}%` }}
-            class="pointer-events-none absolute inset-x-0 border-t border-border/40 pl-1 text-small leading-none text-dim"
+            class="pointer-events-none absolute inset-x-0 border-t border-border/40"
           >
-            {tk}
+            <span
+              data-scale-num
+              class="absolute left-1 top-0 z-[15] -translate-y-1/2 rounded bg-bg px-0.5 text-small leading-none text-dim"
+            >
+              {tk}
+            </span>
           </div>
         ))}
         <svg

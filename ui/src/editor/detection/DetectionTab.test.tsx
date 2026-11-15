@@ -227,6 +227,10 @@ it("zoom_in_shows_finer_scale", async () => {
   await lane();
   expect(scale("high").length).toBeGreaterThan(0);
   expect(scale("high").every((n) => n % 10 === 0)).toBe(true);
+  // Numbers are centred on their mark.
+  expect(root.querySelector("[data-lane='high'] [data-scale-num]")?.className).toContain(
+    "-translate-y-1/2",
+  );
   await click("Zoom in", "high");
   await click("Zoom in", "high");
   const fine = scale("high");
