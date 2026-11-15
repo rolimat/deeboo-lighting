@@ -335,7 +335,7 @@ Donde esta sección contradiga a las anteriores, manda esta.
   de macOS, se adapta a barra clara u oscura) con las luces apagadas. El icono del momento y el BPM se quedan como hoy.
 - **Dock:** el icono aparece en el Dock mientras la ventana del editor está abierta y se va al cerrarla. En Setup,
   «Show in Dock: While the editor is open | Always».
-- **Detection:** los indicadores de dB de cada carril van en una columna fija a la derecha, fuera de la forma de onda.
+- **Detection:** los indicadores de dB de cada carril van en una columna fija a la derecha, fuera de la forma de onda. (Sustituido por `2026-11-15-detection-zoom-knobs-design.md`: etiquetas sobre la línea, zoom vertical y knobs.)
 - **Ayuda al pasar el ratón:** con «?» activo, todos los botones, controles y opciones de las seis pestañas muestran una
   explicación corta en inglés, en un globo con el estilo de la app que aparece al momento.
 - **Longitud de una secuencia:** botones **×2** (dobla la longitud repitiendo el contenido, hasta 16 compases) y **÷2**

@@ -1,21 +1,23 @@
-import { useRef } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import { H } from "../help-texts";
+import { help } from "../shell/Help";
 import type { MomentName } from "../../api";
 import { Icon } from "../../icons/Icon";
 import type { IconName } from "../../icons";
 import type { DetectorEvent, Thresholds } from "../api";
 import { RING_BEATS } from "./history";
+import { Knob } from "./Knob";
 import { ThresholdLine } from "./ThresholdLine";
+import { ZOOMS, fitLevel, fmtDb, ticks, view, yPct } from "./zoom";
 
 const MOMENTS: Record<MomentName, [IconName, string]> = {
   rhythm: ["rhythm", "Rhythm"],
   calm: ["calm", "Calm"],
   buildUp: ["buildup", "Build-up"],
 };
-/** Lanes span -60 dB (bottom) to 0 dB (top). */
-const FLOOR_DB = 60;
-const yPct = (db: number) => Math.min(100, Math.max(0, (-db / FLOOR_DB) * 100));
-const COL = "grid grid-cols-[120px_1fr_12rem]";
+const COL = "grid grid-cols-[120px_44px_1fr_7.5rem]";
+const ZBTN =
+  "h-5 w-8 rounded border border-border text-small leading-none enabled:hover:border-accent disabled:opacity-40";
 const HEAD = "border-b border-r border-border bg-card p-2 text-small";
 const BAR_LABELS = ["8 bars ago", "7", "6", "5", "4", "3", "2", "1"];
 
@@ -27,6 +29,8 @@ interface Line {
   above: boolean;
   min: number;
   max: number;
+  /** Factory default, for the knob's double-click. */
+  def: number;
   label: string;
   hint: string;
 }
@@ -50,6 +54,7 @@ const LANES: LaneDef[] = [
         above: false,
         min: 8,
         max: 30,
+        def: 16,
         label: "Calm",
         hint: H.thresholdKick,
       },
@@ -68,6 +73,7 @@ const LANES: LaneDef[] = [
         above: true,
         min: 3,
         max: 15,
+        def: 7,
         label: "Build-up",
         hint: H.thresholdRiser,
       },
@@ -77,6 +83,7 @@ const LANES: LaneDef[] = [
         above: false,
         min: 6,
         max: 24,
+        def: 12,
         label: "Calm",
         hint: H.thresholdHigh,
       },
@@ -89,11 +96,11 @@ const REF: Record<Band, keyof DetectorEvent> = {
   highDb: "highRefDb",
 };
 
-const points = (ring: DetectorEvent[], pick: (e: DetectorEvent) => number) =>
+const points = (ring: DetectorEvent[], v: [number, number], pick: (e: DetectorEvent) => number) =>
   ring
     .map(
       (e, i) =>
-        `${(((RING_BEATS - ring.length + i) / (RING_BEATS - 1)) * 1000).toFixed(1)},${yPct(pick(e)).toFixed(1)}`,
+        `${(((RING_BEATS - ring.length + i) / (RING_BEATS - 1)) * 1000).toFixed(1)},${yPct(pick(e), v).toFixed(1)}`,
     )
     .join(" ");
 
@@ -107,23 +114,79 @@ function Lane(props: {
 }) {
   const { def, ring, t } = props;
   const box = useRef<HTMLDivElement>(null);
+  const [level, setLevel] = useState(0);
   const refKey = REF[def.band];
   const last = ring[ring.length - 1];
   const ref = last ? Number(last[refKey]) : -30;
+  const v = view(ref, level);
+  const span = v[0] - v[1];
+  const shown = (l: Line) => t[l.key] - (l.above ? 0 : props.shift);
+  const lineDb = (l: Line) => ref + (l.above ? shown(l) : -shown(l));
   return (
     <>
       <div class={HEAD}>
         <b class="t-head">{def.title}</b>
         <small class="mt-0.5 block text-dim">{def.desc}</small>
       </div>
-      <div ref={box} data-lane={def.id} class="relative h-20 border-b border-border bg-bg">
+      <div
+        data-lane-row={def.id}
+        class="flex flex-col items-center justify-center gap-1 border-b border-r border-border bg-card"
+      >
+        <button
+          type="button"
+          aria-label="Zoom in"
+          disabled={level >= ZOOMS.length - 1}
+          onClick={() => setLevel(level + 1)}
+          class={ZBTN}
+          {...help(H.bandZoomIn)}
+        >
+          +
+        </button>
+        <span class="text-small text-dim">×{ZOOMS[level]}</span>
+        <button
+          type="button"
+          aria-label="Zoom out"
+          disabled={level <= 0}
+          onClick={() => setLevel(level - 1)}
+          class={ZBTN}
+          {...help(H.bandZoomOut)}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          aria-label="Zoom to fit"
+          onClick={() =>
+            setLevel(fitLevel(ref, [...ring.map((e) => e[def.band]), ...def.lines.map(lineDb)]))
+          }
+          class={ZBTN}
+          {...help(H.bandZoomFit)}
+        >
+          Fit
+        </button>
+      </div>
+      <div
+        ref={box}
+        data-lane={def.id}
+        class="relative h-24 overflow-hidden border-b border-border bg-bg"
+      >
+        {ticks(v).map((tk) => (
+          <div
+            key={tk}
+            data-scale
+            style={{ top: `${yPct(tk, v)}%` }}
+            class="pointer-events-none absolute inset-x-0 border-t border-border/40 pl-1 text-small leading-none text-dim"
+          >
+            {tk}
+          </div>
+        ))}
         <svg
           viewBox="0 0 1000 100"
           preserveAspectRatio="none"
           class="absolute inset-0 h-full w-full"
         >
           <polyline
-            points={points(ring, (e) => Number(e[refKey]))}
+            points={points(ring, v, (e) => Number(e[refKey]))}
             fill="none"
             stroke="currentColor"
             stroke-width="1"
@@ -131,7 +194,7 @@ function Lane(props: {
             class="text-dim"
           />
           <polyline
-            points={points(ring, (e) => e[def.band])}
+            points={points(ring, v, (e) => e[def.band])}
             fill="none"
             stroke="currentColor"
             stroke-width="2"
@@ -141,39 +204,56 @@ function Lane(props: {
         </svg>
         {def.lines.map((l) => {
           const sh = l.above ? 0 : props.shift;
-          const v = t[l.key] - sh;
+          const val = shown(l);
           return (
             <ThresholdLine
               key={l.key}
               name={l.name}
               hint={l.hint}
-              words={`${l.label} when ${v} dB ${l.above ? "above" : "below"}`}
-              value={v}
+              words={`${l.label} when ${fmtDb(val)} dB ${l.above ? "above" : "below"}`}
+              value={val}
               min={l.min - sh}
               max={l.max - sh}
-              topPct={yPct(ref + (l.above ? v : -v))}
+              topPct={yPct(lineDb(l), v)}
               toValue={(clientY) => {
                 const r = box.current?.getBoundingClientRect();
-                if (!r || !r.height) return v;
-                const db = -((clientY - r.top) / r.height) * FLOOR_DB;
+                if (!r || !r.height) return val;
+                const db = v[0] - ((clientY - r.top) / r.height) * span;
                 return l.above ? db - ref : ref - db;
               }}
               onChange={(n) => props.onChange(l.key, n + sh)}
+              onOutside={() => {
+                let n = level - 1;
+                while (
+                  n > 0 &&
+                  (yPct(lineDb(l), view(ref, n)) < 0 || yPct(lineDb(l), view(ref, n)) > 100)
+                )
+                  n--;
+                setLevel(Math.max(0, n));
+              }}
             />
           );
         })}
       </div>
-      <div data-readouts class="relative h-20 border-b border-l border-border bg-card">
+      <div
+        data-knobs={def.id}
+        class="flex items-center justify-center gap-1 border-b border-l border-border bg-card"
+      >
         {def.lines.map((l) => {
-          const v = t[l.key] - (l.above ? 0 : props.shift);
+          const sh = l.above ? 0 : props.shift;
           return (
-            <span
+            <Knob
               key={l.key}
-              style={{ top: `${yPct(ref + (l.above ? v : -v))}%` }}
-              class="absolute left-1.5 -translate-y-1/2 select-none whitespace-nowrap rounded border border-accent bg-card px-1.5 text-small text-accent"
-            >
-              {l.label} when {v} dB {l.above ? "above" : "below"}
-            </span>
+              name={`${l.name} knob`}
+              label={l.label}
+              above={l.above}
+              value={shown(l)}
+              min={l.min - sh}
+              max={l.max - sh}
+              def={l.def - sh}
+              hint={l.hint}
+              onChange={(n) => props.onChange(l.key, n + sh)}
+            />
           );
         })}
       </div>
@@ -203,6 +283,7 @@ export function Timeline(props: {
   return (
     <div class={`${COL} overflow-hidden rounded-card border border-border`}>
       <div class={`${HEAD} text-dim`}>Last 8 bars</div>
+      <div class="border-b border-r border-border bg-card p-2 text-small text-dim">Zoom</div>
       <div class="grid grid-cols-8 border-b border-border bg-card text-small text-dim">
         {BAR_LABELS.map((b, i) => (
           <span key={b} data-bar class="flex justify-between border-l border-border px-1 py-1">
@@ -216,6 +297,7 @@ export function Timeline(props: {
         <b class="t-head">Moment</b>
         <small class="mt-0.5 block text-dim">What the show used</small>
       </div>
+      <div class="border-b border-r border-border bg-card" />
       <div class="flex h-[34px] border-b border-border bg-bg">
         <div style={{ flex: RING_BEATS - props.ring.length }} />
         {r.map(([m, n], i) => {

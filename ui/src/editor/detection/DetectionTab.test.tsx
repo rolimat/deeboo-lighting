@@ -127,9 +127,9 @@ it("threshold_label_in_words", async () => {
   push(beat());
   await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
   const text = root.textContent ?? "";
-  expect(text).toContain("Calm when 14 dB below");
-  expect(text).toContain("Calm when 10 dB below");
-  expect(text).toContain("Build-up when 6 dB above");
+  expect(text).toContain("Calm when 14.0 dB below");
+  expect(text).toContain("Calm when 10.0 dB below");
+  expect(text).toContain("Build-up when 6.0 dB above");
   expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("14");
 });
 
@@ -140,9 +140,9 @@ it("calm_lines_show_the_sensitivity_the_detector_applies", async () => {
   push(beat());
   await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
   const text = root.textContent ?? "";
-  expect(text).toContain("Calm when 10 dB below");
-  expect(text).toContain("Calm when 6 dB below");
-  expect(text).toContain("Build-up when 6 dB above");
+  expect(text).toContain("Calm when 10.0 dB below");
+  expect(text).toContain("Calm when 6.0 dB below");
+  expect(text).toContain("Build-up when 6.0 dB above");
   expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("10");
   await act(async () => {
     line("Kick drop").dispatchEvent(
@@ -158,17 +158,159 @@ it("calm_lines_show_the_sensitivity_the_detector_applies", async () => {
   });
 });
 
-it("threshold_labels_sit_in_a_column_beside_the_waveform", async () => {
+it("threshold_labels_sit_on_their_line_inside_the_lane", async () => {
   await mount();
   push(beat());
   await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
-  const cols = root.querySelectorAll<HTMLElement>("[data-readouts]");
-  expect(cols.length).toBe(3);
-  for (const lane of root.querySelectorAll("[data-lane]"))
-    expect(lane.textContent).not.toMatch(/ dB /);
-  const high = cols[2];
-  expect(high?.textContent).toContain("Build-up when 6 dB above");
-  expect(high?.textContent).toContain("Calm when");
+  expect(root.querySelector("[data-readouts]")).toBeNull();
+  const high = root.querySelector("[data-lane='high']")?.textContent ?? "";
+  expect(high).toContain("Build-up when 6.0 dB above");
+  expect(high).toContain("Calm when 10.0 dB below");
+});
+
+const knobs = (lane: string) => root.querySelectorAll(`[data-knobs='${lane}'] [role=slider]`);
+const knob = (name: string) => {
+  const el = root.querySelector<HTMLElement>(`[role=slider][aria-label='${name}']`);
+  if (!el) throw new Error(`no ${name}`);
+  return el;
+};
+const lane = async (n = 1) => {
+  await mount();
+  for (let i = 0; i < n; i++) push(beat());
+  await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+};
+const click = async (label: string, id: string) => {
+  const b = root.querySelector<HTMLButtonElement>(
+    `[data-lane-row='${id}'] button[aria-label='${label}']`,
+  );
+  if (!b) throw new Error(`no ${label}`);
+  await act(async () => b.click());
+  return b;
+};
+const scale = (id: string) =>
+  [...root.querySelectorAll(`[data-lane='${id}'] [data-scale]`)].map((e) => Number(e.textContent));
+
+it("knob_column_has_one_knob_per_threshold", async () => {
+  await lane();
+  expect(knobs("kick").length).toBe(1);
+  expect(knobs("sub").length).toBe(0);
+  expect(knobs("high").length).toBe(2);
+});
+
+it("knob_arrow_changes_threshold_and_saves", async () => {
+  await lane();
+  await act(async () => {
+    knob("Kick drop knob").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(400);
+  });
+  expect(api.setDetectionThresholds).toHaveBeenLastCalledWith({
+    calmKickDb: 15,
+    calmHighDb: 10,
+    riserDb: 6,
+  });
+  await act(async () => {
+    knob("Kick drop knob").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", shiftKey: true, bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(400);
+  });
+  expect(api.setDetectionThresholds).toHaveBeenLastCalledWith({
+    calmKickDb: 15.1,
+    calmHighDb: 10,
+    riserDb: 6,
+  });
+});
+
+it("zoom_in_shows_finer_scale", async () => {
+  await lane();
+  expect(scale("high").length).toBeGreaterThan(0);
+  expect(scale("high").every((n) => n % 10 === 0)).toBe(true);
+  await click("Zoom in", "high");
+  await click("Zoom in", "high");
+  const fine = scale("high");
+  expect(fine.length).toBeGreaterThan(2);
+  expect(fine.every((n) => n % 2 === 0)).toBe(true);
+  expect(fine.some((n) => n % 10 !== 0)).toBe(true);
+  await click("Zoom in", "high");
+  expect((await click("Zoom in", "high")).disabled).toBe(true);
+});
+
+it("threshold_outside_view_pins_its_label_and_click_zooms_out", async () => {
+  await lane();
+  await click("Zoom in", "kick");
+  await click("Zoom in", "kick");
+  await click("Zoom in", "kick");
+  // Kick ref -20, view -23.75..-16.25 at x8; the line at -34 is below it.
+  const pinned = root.querySelector<HTMLButtonElement>("[data-lane='kick'] button");
+  expect(pinned?.textContent).toContain("▼");
+  expect(pinned?.textContent).toContain("Calm when 14.0 dB below");
+  expect(root.querySelector("[data-lane='kick'] [role=slider]")).toBeNull();
+  await act(async () => pinned?.click());
+  expect(root.querySelector("[data-lane='kick'] button")).toBeNull();
+  expect(root.querySelector("[data-lane='kick'] [role=slider]")).not.toBeNull();
+});
+
+it("fit_picks_a_closer_view", async () => {
+  await lane();
+  await click("Zoom to fit", "high");
+  // Highs ref -25, thresholds at -19 and -37: x2 (step 5) is the closest view still holding both.
+  expect(scale("high").every((n) => n % 5 === 0)).toBe(true);
+  expect(scale("high").some((n) => n % 10 !== 0)).toBe(true);
+  await click("Zoom to fit", "sub");
+  // Sub has no thresholds and a flat signal: fits tight.
+  expect(scale("sub").some((n) => n % 10 !== 0)).toBe(true);
+});
+
+it("drag_label_changes_value", async () => {
+  await lane();
+  const box = root.querySelector<HTMLElement>("[data-lane='kick']");
+  vi.spyOn(box as HTMLElement, "getBoundingClientRect").mockReturnValue({
+    top: 0,
+    height: 100,
+  } as DOMRect);
+  const label = root.querySelector<HTMLElement>("[data-lane='kick'] [data-label]");
+  await act(() => {
+    label?.dispatchEvent(new MouseEvent("pointerdown", { clientY: 50, bubbles: true }));
+    window.dispatchEvent(
+      new MouseEvent("pointermove", { clientY: 70, shiftKey: true, bubbles: true }),
+    );
+  });
+  await act(async () => {
+    mouse("pointerup", 70);
+    await vi.advanceTimersByTimeAsync(400);
+  });
+  // y 70 = -42 dB; reference -20: 22 below.
+  expect(api.setDetectionThresholds).toHaveBeenLastCalledWith({
+    calmKickDb: 22,
+    calmHighDb: 10,
+    riserDb: 6,
+  });
+});
+
+it("shift_drag_snaps_to_tenths", async () => {
+  await lane();
+  const box = root.querySelector<HTMLElement>("[data-lane='kick']");
+  vi.spyOn(box as HTMLElement, "getBoundingClientRect").mockReturnValue({
+    top: 0,
+    height: 100,
+  } as DOMRect);
+  await act(() => {
+    line("Kick drop").dispatchEvent(new MouseEvent("pointerdown", { clientY: 60, bubbles: true }));
+    window.dispatchEvent(
+      new MouseEvent("pointermove", { clientY: 70.4, shiftKey: true, bubbles: true }),
+    );
+  });
+  await act(async () => {
+    mouse("pointerup", 70.4);
+    await vi.advanceTimersByTimeAsync(400);
+  });
+  expect(api.setDetectionThresholds).toHaveBeenLastCalledWith({
+    calmKickDb: 22.2,
+    calmHighDb: 10,
+    riserDb: 6,
+  });
 });
 
 it("moment_lane_shows_what_the_show_used", async () => {

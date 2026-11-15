@@ -202,8 +202,9 @@ export function DetectionTab({ onGoSetup }: { onGoSetup: () => void }) {
       )}
       {live && (
         <p class="text-small text-dim">
-          The drop is detected when the kick comes back after a Build-up. Drag the dashed lines to
-          change when each moment starts. Changes apply on the next beat.
+          The drop is detected when the kick comes back after a Build-up. Drag the dashed lines, the
+          green labels or the knobs to change when each moment starts. Hold Shift for 0.1 dB steps.
+          Changes apply on the next beat.
         </p>
       )}
       {error && <p class="text-red">{error}</p>}
