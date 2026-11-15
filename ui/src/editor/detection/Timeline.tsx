@@ -6,6 +6,7 @@ import { Icon } from "../../icons/Icon";
 import type { IconName } from "../../icons";
 import type { DetectorEvent, Thresholds } from "../api";
 import { RING_BEATS } from "./history";
+import { DEFAULTS } from "./defaults";
 import { Knob } from "./Knob";
 import { ThresholdLine } from "./ThresholdLine";
 import { ZOOMS, fitLevel, fmtDb, ticks, view, yPct } from "./zoom";
@@ -29,8 +30,6 @@ interface Line {
   above: boolean;
   min: number;
   max: number;
-  /** Factory default, for the knob's double-click. */
-  def: number;
   label: string;
   hint: string;
 }
@@ -54,7 +53,6 @@ const LANES: LaneDef[] = [
         above: false,
         min: 8,
         max: 30,
-        def: 16,
         label: "Calm",
         hint: H.thresholdKick,
       },
@@ -73,7 +71,6 @@ const LANES: LaneDef[] = [
         above: true,
         min: 3,
         max: 15,
-        def: 7,
         label: "Build-up",
         hint: H.thresholdRiser,
       },
@@ -83,7 +80,6 @@ const LANES: LaneDef[] = [
         above: false,
         min: 6,
         max: 24,
-        def: 12,
         label: "Calm",
         hint: H.thresholdHigh,
       },
@@ -258,7 +254,7 @@ function Lane(props: {
               value={shown(l)}
               min={l.min - sh}
               max={l.max - sh}
-              def={l.def - sh}
+              def={DEFAULTS[l.key] - sh}
               hint={l.hint}
               onChange={(n) => props.onChange(l.key, n + sh)}
             />

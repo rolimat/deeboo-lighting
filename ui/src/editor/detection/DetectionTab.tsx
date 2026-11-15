@@ -5,11 +5,11 @@ import { api, type DetectorEvent, type Thresholds } from "../api";
 import { help } from "../shell/Help";
 import { H } from "../help-texts";
 import { ChangesSlider } from "./ChangesSlider";
+import { DEFAULTS } from "./defaults";
 import { pushBeat } from "./history";
 import { Timeline } from "./Timeline";
 
 /** The Rust defaults (`Settings::default`). */
-const DEFAULTS = { sensitivity: 5, calmKickDb: 16, calmHighDb: 12, riserDb: 7 };
 const SEND_DELAY_MS = 300;
 const LEVEL_SEGMENTS = 12;
 
