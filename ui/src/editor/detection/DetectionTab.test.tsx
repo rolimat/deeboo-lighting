@@ -250,10 +250,11 @@ it("threshold_outside_view_pins_its_label_and_click_zooms_out", async () => {
   const pinned = root.querySelector<HTMLButtonElement>("[data-lane='kick'] button");
   expect(pinned?.textContent).toContain("▼");
   expect(pinned?.textContent).toContain("Calm when 14.0 dB below");
-  expect(root.querySelector("[data-lane='kick'] [role=slider]")).toBeNull();
+  // The slider stays mounted at the edge so keyboard focus is never lost.
+  expect(line("Kick drop").style.top).toBe("100%");
   await act(async () => pinned?.click());
   expect(root.querySelector("[data-lane='kick'] button")).toBeNull();
-  expect(root.querySelector("[data-lane='kick'] [role=slider]")).not.toBeNull();
+  expect(root.querySelector("[data-lane='kick'] [data-label]")).not.toBeNull();
 });
 
 it("fit_picks_a_closer_view", async () => {
@@ -516,4 +517,32 @@ it("line_arrows_keep_the_tenths", async () => {
   await press(line("Kick drop"), "ArrowDown");
   await press(line("Kick drop"), "ArrowDown");
   expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("13.3");
+});
+
+it("at_zoom_1_a_line_below_the_floor_stays_at_the_edge_and_draggable", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(settings({ calmKickDb: 20 }));
+  await mount();
+  push(beat({ kickDb: -45, kickRefDb: -45 }));
+  await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+  // -45 - 20 = -65: below the -60 floor, but at x1 it is clamped, never pinned.
+  expect(root.querySelector("[data-lane='kick'] button")).toBeNull();
+  expect(line("Kick drop").style.top).toBe("100%");
+});
+
+it("a_focused_line_that_leaves_the_view_keeps_focus_and_keys", async () => {
+  await lane();
+  await click("Zoom in", "kick");
+  const el = line("Kick drop");
+  await act(async () => el.focus());
+  // Ref -20, x2 view -35..-5: 14 dB below is inside, 16 is out.
+  await press(el, "ArrowUp");
+  await press(el, "ArrowUp");
+  await press(el, "ArrowUp");
+  const pinned = root.querySelector("[data-lane='kick'] button");
+  expect(pinned?.textContent).toContain("▼");
+  expect(line("Kick drop")).toBe(el);
+  expect(document.activeElement).toBe(el);
+  expect(el.style.top).toBe("100%");
+  await press(el, "ArrowUp");
+  expect(el.getAttribute("aria-valuenow")).toBe("18");
 });

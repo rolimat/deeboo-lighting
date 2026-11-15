@@ -50,23 +50,22 @@ export function ThresholdLine(p: Props) {
   };
   const label =
     "absolute left-9 z-20 -translate-y-1/2 select-none whitespace-nowrap rounded border bg-card px-1.5 text-small text-accent";
-  if (p.topPct < 0 || p.topPct > 100) {
-    const above = p.topPct < 0;
-    return (
-      <button
-        type="button"
-        onClick={p.onOutside}
-        style={{ top: above ? "9%" : "91%" }}
-        class={`${label} cursor-pointer border-dashed border-accent`}
-        {...help(H.bandZoomOutside)}
-      >
-        {above ? "▲ " : "▼ "}
-        {p.words}
-      </button>
-    );
-  }
+  const above = p.topPct < 0;
+  const out = above || p.topPct > 100;
   return (
     <>
+      {out && (
+        <button
+          type="button"
+          onClick={p.onOutside}
+          style={{ top: above ? "9%" : "91%" }}
+          class={`${label} cursor-pointer border-dashed border-accent`}
+          {...help(H.bandZoomOutside)}
+        >
+          {above ? "▲ " : "▼ "}
+          {p.words}
+        </button>
+      )}
       <div
         role="slider"
         tabIndex={0}
@@ -77,21 +76,25 @@ export function ThresholdLine(p: Props) {
         aria-valuetext={p.words}
         onPointerDown={down}
         onKeyDown={key}
-        style={{ top: `${p.topPct}%` }}
+        style={{ top: `${Math.min(100, Math.max(0, p.topPct))}%` }}
         class="group absolute inset-x-0 z-10 -mt-2 h-4 cursor-ns-resize outline-none"
         {...help(`${p.hint} ${H.thresholdDrag}`)}
       >
-        <div class="absolute inset-x-0 top-2 border-t-2 border-dashed border-accent group-focus-visible:border-solid" />
+        <div
+          class={`absolute inset-x-0 top-2 border-t-2 border-dashed border-accent group-focus-visible:border-solid ${out ? "invisible" : ""}`}
+        />
       </div>
-      <span
-        data-label
-        onPointerDown={down}
-        style={{ top: `${Math.min(91, Math.max(9, p.topPct))}%` }}
-        class={`${label} cursor-ns-resize border-accent`}
-        {...help(`${p.hint} ${H.thresholdDrag}`)}
-      >
-        {p.words}
-      </span>
+      {!out && (
+        <span
+          data-label
+          onPointerDown={down}
+          style={{ top: `${Math.min(91, Math.max(9, p.topPct))}%` }}
+          class={`${label} cursor-ns-resize border-accent`}
+          {...help(`${p.hint} ${H.thresholdDrag}`)}
+        >
+          {p.words}
+        </span>
+      )}
     </>
   );
 }

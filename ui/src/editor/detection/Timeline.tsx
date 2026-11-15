@@ -219,7 +219,10 @@ function Lane(props: {
               value={val}
               min={l.min - sh}
               max={l.max - sh}
-              topPct={yPct(lineDb(l), v)}
+              // At x1 the view is the whole scale: keep a line below the floor visible at the edge.
+              topPct={
+                level === 0 ? Math.min(100, Math.max(0, yPct(lineDb(l), v))) : yPct(lineDb(l), v)
+              }
               toValue={(clientY) => {
                 const r = box.current?.getBoundingClientRect();
                 if (!r || !r.height) return val;
