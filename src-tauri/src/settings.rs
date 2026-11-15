@@ -49,13 +49,13 @@ pub const MAX_INPUTS: usize = 16;
 pub const SYSTEM_DEFAULT: &str = "";
 
 /// The detector settings that belong to one audio input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DetectorConfig {
     pub sensitivity: u8,
-    pub calm_kick_db: u8,
-    pub calm_high_db: u8,
-    pub riser_db: u8,
+    pub calm_kick_db: f32,
+    pub calm_high_db: f32,
+    pub riser_db: f32,
 }
 
 impl Default for DetectorConfig {
@@ -63,9 +63,9 @@ impl Default for DetectorConfig {
     fn default() -> Self {
         Self {
             sensitivity: 5,
-            calm_kick_db: 16,
-            calm_high_db: 12,
-            riser_db: 7,
+            calm_kick_db: 16.0,
+            calm_high_db: 12.0,
+            riser_db: 7.0,
         }
     }
 }
@@ -88,7 +88,7 @@ impl DetectorConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Settings {
     pub midi_source: Option<String>,
@@ -102,12 +102,12 @@ pub struct Settings {
     /// 0..=500.
     pub lead_ms: u16,
     pub lights_on: bool,
-    /// Detection panel: whole dB under the learned level that count as quiet. 8..=30.
-    pub calm_kick_db: u8,
+    /// Detection panel: dB under the learned level that count as quiet. 8..=30.
+    pub calm_kick_db: f32,
     /// 6..=24.
-    pub calm_high_db: u8,
+    pub calm_high_db: f32,
     /// Rise of the bar means of highs that makes a riser. 3..=15.
-    pub riser_db: u8,
+    pub riser_db: f32,
     /// Show the `?` help tooltips in the editor.
     pub help_tooltips: bool,
     pub show_in_dock: ShowInDock,
@@ -116,9 +116,15 @@ pub struct Settings {
     pub detector_by_input: BTreeMap<String, DetectorConfig>,
 }
 
-pub const CALM_KICK_DB: RangeInclusive<u8> = 8..=30;
-pub const CALM_HIGH_DB: RangeInclusive<u8> = 6..=24;
-pub const RISER_DB: RangeInclusive<u8> = 3..=15;
+/// Nearest tenth of a dB.
+#[must_use]
+pub fn round_db(x: f32) -> f32 {
+    (x * 10.0).round() / 10.0
+}
+
+pub const CALM_KICK_DB: RangeInclusive<f32> = 8.0..=30.0;
+pub const CALM_HIGH_DB: RangeInclusive<f32> = 6.0..=24.0;
+pub const RISER_DB: RangeInclusive<f32> = 3.0..=15.0;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -130,9 +136,9 @@ impl Default for Settings {
             brightness_pct: 100,
             lead_ms: 100,
             lights_on: true,
-            calm_kick_db: 16,
-            calm_high_db: 12,
-            riser_db: 7,
+            calm_kick_db: 16.0,
+            calm_high_db: 12.0,
+            riser_db: 7.0,
             help_tooltips: true,
             show_in_dock: ShowInDock::Editor,
             detector_by_input: BTreeMap::new(),
@@ -178,6 +184,22 @@ impl Settings {
             return Err("lead must be 0 to 500 ms".into());
         }
         Ok(())
+    }
+
+    /// Snaps every threshold (top-level and per input) to a tenth of a dB.
+    pub fn round_thresholds(&mut self) {
+        for (k, h, r) in std::iter::once((
+            &mut self.calm_kick_db,
+            &mut self.calm_high_db,
+            &mut self.riser_db,
+        ))
+        .chain(
+            self.detector_by_input
+                .values_mut()
+                .map(|c| (&mut c.calm_kick_db, &mut c.calm_high_db, &mut c.riser_db)),
+        ) {
+            (*k, *h, *r) = (round_db(*k), round_db(*h), round_db(*r));
+        }
     }
 
     /// The active input's detector settings.
@@ -254,8 +276,11 @@ pub fn load(path: &Path) -> Settings {
         }
     };
     match serde_json::from_str::<Settings>(&text) {
-        Ok(s) => match s.validate() {
-            Ok(()) => s,
+        Ok(mut s) => match s.validate() {
+            Ok(()) => {
+                s.round_thresholds();
+                s
+            }
             Err(e) => {
                 log::warn!("settings invalid, using defaults: {e}");
                 keep_aside(path);
@@ -301,9 +326,9 @@ pub fn save(path: &Path, s: &Settings) -> io::Result<()> {
 pub fn detector_params(s: &Settings) -> DetectorParams {
     let shift = f32::from(s.sensitivity) - 5.0;
     DetectorParams {
-        calm_kick_db: f32::from(s.calm_kick_db) - shift,
-        calm_high_db: f32::from(s.calm_high_db) - shift,
-        riser_db: f32::from(s.riser_db),
+        calm_kick_db: s.calm_kick_db - shift,
+        calm_high_db: s.calm_high_db - shift,
+        riser_db: s.riser_db,
         ..DetectorParams::default()
     }
 }
@@ -511,20 +536,20 @@ mod tests {
                 ..away.clone()
             },
         );
-        assert_eq!((back.sensitivity, back.calm_kick_db), (8, 20));
+        assert_eq!((back.sensitivity, back.calm_kick_db), (8, 20.0));
     }
 
     #[test]
     fn each_input_keeps_its_thresholds() {
         let a = Settings {
             sensitivity: 9,
-            riser_db: 4,
+            riser_db: 4.0,
             ..on(Some("Mic A"))
         };
         let b = saved(&a, on(Some("Mic B")));
         assert_eq!(b.detector(), DetectorConfig::default());
         let b = Settings {
-            calm_high_db: 20,
+            calm_high_db: 20.0,
             ..b
         };
         let a2 = saved(
@@ -534,7 +559,10 @@ mod tests {
                 ..b.clone()
             },
         );
-        assert_eq!((a2.sensitivity, a2.riser_db, a2.calm_high_db), (9, 4, 12));
+        assert_eq!(
+            (a2.sensitivity, a2.riser_db, a2.calm_high_db),
+            (9, 4.0, 12.0)
+        );
         let b2 = saved(
             &a2,
             Settings {
@@ -542,7 +570,7 @@ mod tests {
                 ..a2.clone()
             },
         );
-        assert_eq!((b2.sensitivity, b2.calm_high_db), (5, 20));
+        assert_eq!((b2.sensitivity, b2.calm_high_db), (5, 20.0));
         let sys = saved(
             &b2,
             Settings {
@@ -598,9 +626,15 @@ mod tests {
         assert!(with("bad\nname", ok).validate().is_err());
         assert!(with(" x", ok).validate().is_err());
         assert!(
-            with("USB", DetectorConfig { riser_db: 99, ..ok })
-                .validate()
-                .is_err()
+            with(
+                "USB",
+                DetectorConfig {
+                    riser_db: 99.0,
+                    ..ok
+                }
+            )
+            .validate()
+            .is_err()
         );
         let mut many = Settings::default();
         for i in 0..=MAX_INPUTS {
@@ -614,24 +648,59 @@ mod tests {
         let d = DetectorParams::default();
         let s = Settings::default();
         assert_eq!(
-            (
-                f32::from(s.calm_kick_db),
-                f32::from(s.calm_high_db),
-                f32::from(s.riser_db)
-            ),
+            (s.calm_kick_db, s.calm_high_db, s.riser_db),
             (d.calm_kick_db, d.calm_high_db, d.riser_db)
         );
         let old: Settings = serde_json::from_str(r#"{"sensitivity":7}"#).unwrap();
-        assert_eq!((old.sensitivity, old.calm_kick_db), (7, 16));
+        assert_eq!((old.sensitivity, old.calm_kick_db), (7, 16.0));
         let bad = |f: fn(&mut Settings)| {
             let mut s = Settings::default();
             f(&mut s);
             s.validate().is_err()
         };
-        assert!(bad(|s| s.calm_kick_db = 7) && bad(|s| s.calm_kick_db = 31));
-        assert!(bad(|s| s.calm_high_db = 5) && bad(|s| s.calm_high_db = 25));
-        assert!(bad(|s| s.riser_db = 2) && bad(|s| s.riser_db = 16));
-        assert!(!bad(|s| s.riser_db = 15));
+        assert!(
+            bad(|s| s.calm_kick_db = 7.0)
+                && bad(|s| s.calm_kick_db = 31.0)
+                && bad(|s| s.calm_kick_db = 7.9)
+                && bad(|s| s.calm_kick_db = f32::NAN)
+        );
+        assert!(bad(|s| s.calm_high_db = 5.0) && bad(|s| s.calm_high_db = 25.0));
+        assert!(
+            bad(|s| s.riser_db = 2.0) && bad(|s| s.riser_db = 16.0) && bad(|s| s.riser_db = 15.1)
+        );
+        assert!(!bad(|s| s.riser_db = 15.0));
+        assert!(bad(|s| s.riser_db = f32::INFINITY));
+    }
+
+    #[test]
+    fn old_integer_settings_file_loads() {
+        let (_d, p) = tmp();
+        std::fs::write(
+            &p,
+            r#"{"calmKickDb":16,"calmHighDb":12,"riserDb":7,
+                "detectorByInput":{"USB":{"sensitivity":5,"calmKickDb":16,"calmHighDb":12,"riserDb":7}}}"#,
+        )
+        .unwrap();
+        let s = load(&p);
+        assert_eq!(
+            (s.calm_kick_db, s.calm_high_db, s.riser_db),
+            (16.0, 12.0, 7.0)
+        );
+        let u = s.detector_by_input["USB"];
+        assert_eq!(
+            (u.calm_kick_db, u.calm_high_db, u.riser_db),
+            (16.0, 12.0, 7.0)
+        );
+    }
+
+    #[test]
+    fn detector_params_shift_keeps_tenths() {
+        let s = Settings {
+            sensitivity: 7,
+            calm_kick_db: 14.3,
+            ..Settings::default()
+        };
+        assert!((detector_params(&s).calm_kick_db - 12.3).abs() < 1e-4);
     }
 
     #[test]
@@ -679,9 +748,9 @@ mod tests {
                             brightness_pct,
                             lead_ms,
                             lights_on,
-                            calm_kick_db: k,
-                            calm_high_db: h,
-                            riser_db: r,
+                            calm_kick_db: f32::from(k),
+                            calm_high_db: f32::from(h),
+                            riser_db: f32::from(r),
                             ..Settings::default()
                         }
                     },

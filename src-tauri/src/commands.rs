@@ -436,6 +436,7 @@ impl AppState {
     }
 
     fn persist(&self, cur: &mut Settings, mut new: Settings) -> Result<Settings, String> {
+        new.round_thresholds();
         new.validate()?;
         new.switch_input(cur);
         let path = lock(&self.settings_path)
@@ -606,14 +607,14 @@ pub fn save_settings(
     Ok(saved)
 }
 
-/// The Detection panel's sliders (whole dB); serde rejects anything that is not an integer.
+/// The Detection panel's sliders, in dB; rounded to a tenth and range-checked on save.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[allow(clippy::struct_field_names)] // the wire names are the settings keys
 pub struct Thresholds {
-    calm_kick_db: u8,
-    calm_high_db: u8,
-    riser_db: u8,
+    calm_kick_db: f32,
+    calm_high_db: f32,
+    riser_db: f32,
 }
 
 #[tauri::command]
@@ -1422,16 +1423,16 @@ mod tests {
         });
         for i in 0..50_u8 {
             let t = Thresholds {
-                calm_kick_db: 10 + i % 10,
-                calm_high_db: 12,
-                riser_db: 7,
+                calm_kick_db: f32::from(10 + i % 10),
+                calm_high_db: 12.0,
+                riser_db: 7.0,
             };
             state.set_thresholds(t).unwrap();
         }
         source.join().unwrap();
         let s = state.settings();
         assert_eq!(s.midi_source.as_deref(), Some("IAC"));
-        assert_eq!(s.calm_kick_db, 10 + 49 % 10);
+        assert!((s.calm_kick_db - 19.0).abs() < 1e-4);
     }
 
     #[test]
@@ -1445,33 +1446,66 @@ mod tests {
             calm_high_db: high,
             riser_db: riser,
         };
-        let saved = state.set_thresholds(t(20, 10, 5)).unwrap();
+        let saved = state.set_thresholds(t(20.0, 10.0, 5.0)).unwrap();
         assert_eq!(
             (saved.calm_kick_db, saved.calm_high_db, saved.riser_db),
-            (20, 10, 5)
+            (20.0, 10.0, 5.0)
         );
         assert_eq!(settings::load(&path), saved, "persisted");
         for bad in [
-            t(7, 12, 7),
-            t(31, 12, 7),
-            t(16, 5, 7),
-            t(16, 25, 7),
-            t(16, 12, 2),
-            t(16, 12, 16),
+            t(7.0, 12.0, 7.0),
+            t(31.0, 12.0, 7.0),
+            t(16.0, 5.0, 7.0),
+            t(16.0, 25.0, 7.0),
+            t(16.0, 12.0, 2.0),
+            t(16.0, 12.0, 16.0),
+            t(7.9, 12.0, 7.0),
+            t(16.0, 12.0, 15.1),
+            t(f32::NAN, 12.0, 7.0),
+            t(16.0, f32::INFINITY, 7.0),
         ] {
             assert!(state.set_thresholds(bad).is_err());
         }
         assert_eq!(state.settings(), saved, "a refused value changes nothing");
         assert!(
-            serde_json::from_str::<Thresholds>(
-                r#"{"calmKickDb":16.5,"calmHighDb":12,"riserDb":7}"#
-            )
-            .is_err()
-        );
-        assert!(
             serde_json::from_str::<Thresholds>(r#"{"calmKickDb":"x","calmHighDb":12,"riserDb":7}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn thresholds_keep_tenths() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let state = AppState::default();
+        state.init_settings(path.clone());
+        let saved = state
+            .set_thresholds(Thresholds {
+                calm_kick_db: 14.3,
+                calm_high_db: 10.5,
+                riser_db: 6.7,
+            })
+            .unwrap();
+        assert_eq!(
+            (saved.calm_kick_db, saved.calm_high_db, saved.riser_db),
+            (14.3, 10.5, 6.7)
+        );
+        assert_eq!(settings::load(&path), saved);
+    }
+
+    #[test]
+    fn thresholds_round_to_tenths() {
+        let state = AppState::default();
+        state.init_settings(tempfile::tempdir().unwrap().keep().join("settings.json"));
+        let saved = state
+            .set_thresholds(Thresholds {
+                calm_kick_db: 14.349,
+                calm_high_db: 10.0,
+                riser_db: 6.76,
+            })
+            .unwrap();
+        assert!((saved.calm_kick_db - 14.3).abs() < 1e-4);
+        assert!((saved.riser_db - 6.8).abs() < 1e-4);
     }
 
     #[test]
