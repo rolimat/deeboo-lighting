@@ -216,6 +216,13 @@ it("a_trackpad_swipe_moves_one_step_per_16_px", async () => {
   expect(onChange.mock.calls.map((c) => c[0])).toEqual([17, 17, 17]);
 });
 
+it("a_fast_mouse_wheel_spin_moves_one_step_per_notch", async () => {
+  const { onChange, el } = await mount();
+  for (let i = 0; i < 3; i++) await wheel(el, -100, false, 0, 1000 + i * 50);
+  // The mounted value stays 16, so every call is one step: never several per notch.
+  expect(onChange.mock.calls.map((c) => c[0])).toEqual([17, 17, 17]);
+});
+
 it("a_single_small_wheel_event_after_a_pause_is_one_step", async () => {
   const { onChange, el } = await mount();
   await wheel(el, -4, false, 0, 1000);

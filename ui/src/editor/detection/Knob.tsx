@@ -42,7 +42,7 @@ export function Knob(p: Props) {
   };
   useEffect(() => {
     const node = el.current;
-    // Pixel deltas (trackpads, momentum) add up to one step per WHEEL_PX; a new gesture steps at once.
+    // Pixel deltas (trackpads, momentum) add up to one step per WHEEL_PX, at most one per event; a new gesture steps at once.
     let acc = 0;
     let last = -Infinity;
     const wheel = (e: WheelEvent) => {
@@ -56,8 +56,9 @@ export function Knob(p: Props) {
           acc = 0;
         } else {
           acc += d;
-          n = Math.trunc(Math.abs(acc) / WHEEL_PX);
-          acc -= Math.sign(acc) * n * WHEEL_PX;
+          // At most one step per event: a fast mouse-wheel notch is 100 px or more.
+          n = Math.abs(acc) >= WHEEL_PX ? 1 : 0;
+          if (n) acc = 0;
         }
       }
       last = e.timeStamp;
