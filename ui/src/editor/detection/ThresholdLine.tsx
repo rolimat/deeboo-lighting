@@ -1,29 +1,33 @@
 import { useEffect, useRef } from "preact/hooks";
+import { H } from "../help-texts";
 import { help } from "../shell/Help";
 
 interface Props {
   name: string;
-  /** The words on the label, e.g. "Calm when 14 dB below". */
+  /** The words on the label, e.g. "Calm when 14.0 dB below". */
   words: string;
   value: number;
   min: number;
   max: number;
-  /** Position inside the lane, 0 (top) to 100. */
+  /** Position inside the lane in percent from the top; outside 0..100 means outside the view. */
   topPct: number;
   /** dB margin the pointer height means, before clamping. */
   toValue: (clientY: number) => number;
   onChange: (value: number) => void;
+  /** Clicked on the pinned label of a line outside the view. */
+  onOutside: () => void;
   hint: string;
 }
 
-/** A dashed line over a lane (its dB label lives in the lane's right column): drag it, or focus it and use the arrow keys (1 dB per press). */
+/** A dashed line over a lane with its green label at the left end: drag either, or focus the line and use the arrow keys (1 dB per press, Shift 0.1 dB). */
 export function ThresholdLine(p: Props) {
   const stop = useRef<(() => void) | null>(null);
   useEffect(() => () => stop.current?.(), []);
-  const set = (v: number) => p.onChange(Math.min(p.max, Math.max(p.min, Math.round(v))));
+  const set = (v: number, fine: boolean) =>
+    p.onChange(Math.min(p.max, Math.max(p.min, fine ? Math.round(v * 10) / 10 : Math.round(v))));
   const down = (e: Event) => {
     e.preventDefault();
-    const move = (m: MouseEvent) => set(p.toValue(m.clientY));
+    const move = (m: MouseEvent) => set(p.toValue(m.clientY), m.shiftKey);
     const end = () => stop.current?.();
     stop.current = () => {
       window.removeEventListener("pointermove", move);
@@ -42,24 +46,55 @@ export function ThresholdLine(p: Props) {
           : 0;
     if (!d) return;
     e.preventDefault();
-    set(p.value + d);
+    set(p.value + d * (e.shiftKey ? 0.1 : 1), true);
   };
+  const label =
+    "absolute left-9 z-20 -translate-y-1/2 select-none whitespace-nowrap rounded border bg-card px-1.5 text-small text-accent";
+  const above = p.topPct < 0;
+  const out = above || p.topPct > 100;
   return (
-    <div
-      role="slider"
-      tabIndex={0}
-      aria-label={p.name}
-      aria-valuemin={p.min}
-      aria-valuemax={p.max}
-      aria-valuenow={p.value}
-      aria-valuetext={p.words}
-      onPointerDown={down}
-      onKeyDown={key}
-      style={{ top: `${p.topPct}%` }}
-      class="group absolute inset-x-0 z-10 -mt-2 h-4 cursor-ns-resize outline-none"
-      {...help(p.hint)}
-    >
-      <div class="absolute inset-x-0 top-2 border-t-2 border-dashed border-accent group-focus-visible:border-solid" />
-    </div>
+    <>
+      {out && (
+        <button
+          type="button"
+          onClick={p.onOutside}
+          style={{ top: above ? "9%" : "91%" }}
+          class={`${label} cursor-pointer border-dashed border-accent`}
+          {...help(H.bandZoomOutside)}
+        >
+          {above ? "▲ " : "▼ "}
+          {p.words}
+        </button>
+      )}
+      <div
+        role="slider"
+        tabIndex={0}
+        aria-label={p.name}
+        aria-valuemin={p.min}
+        aria-valuemax={p.max}
+        aria-valuenow={p.value}
+        aria-valuetext={p.words}
+        onPointerDown={down}
+        onKeyDown={key}
+        style={{ top: `${Math.min(100, Math.max(0, p.topPct))}%` }}
+        class="group absolute inset-x-0 z-10 -mt-2 h-4 cursor-ns-resize outline-none"
+        {...help(`${p.hint} ${H.thresholdDrag}`)}
+      >
+        <div
+          class={`absolute inset-x-0 top-2 border-t-2 border-dashed border-accent group-focus-visible:border-solid ${out ? "invisible" : ""}`}
+        />
+      </div>
+      {!out && (
+        <span
+          data-label
+          onPointerDown={down}
+          style={{ top: `${Math.min(91, Math.max(9, p.topPct))}%` }}
+          class={`${label} cursor-ns-resize border-accent`}
+          {...help(`${p.hint} ${H.thresholdDrag}`)}
+        >
+          {p.words}
+        </span>
+      )}
+    </>
   );
 }

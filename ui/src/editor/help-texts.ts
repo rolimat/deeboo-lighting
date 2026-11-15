@@ -132,6 +132,13 @@ export const H = {
   thresholdKick: "How far the kick must fall below its reference to count as a break.",
   thresholdRiser: "How far the highs must climb above their reference to count as a riser.",
   thresholdHigh: "How far the highs must fall below their reference to help Calm.",
+  thresholdDrag: "Drag to change. Hold Shift for 0.1 dB steps.",
+  knob: (def: number) =>
+    `Drag up or down, scroll, or use the arrow keys: 1 dB per step. Hold Shift for 0.1 dB steps. Double-click resets it to ${def} dB.`,
+  bandZoomIn: "Zoom in on this band.",
+  bandZoomOut: "Zoom out.",
+  bandZoomFit: "Zoom to the closest view that shows the music and every threshold.",
+  bandZoomOutside: "This threshold is outside the view. Click to zoom out until it shows.",
 
   // Setup
   midiInput: "Pick the app or device that sends the MIDI clock.",
