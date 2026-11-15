@@ -276,17 +276,18 @@ pub fn load(path: &Path) -> Settings {
         }
     };
     match serde_json::from_str::<Settings>(&text) {
-        Ok(mut s) => match s.validate() {
-            Ok(()) => {
-                s.round_thresholds();
-                s
+        Ok(mut s) => {
+            // Same order as `AppState::persist`: a 7.96 that saves as 8.0 must load as 8.0.
+            s.round_thresholds();
+            match s.validate() {
+                Ok(()) => s,
+                Err(e) => {
+                    log::warn!("settings invalid, using defaults: {e}");
+                    keep_aside(path);
+                    Settings::default()
+                }
             }
-            Err(e) => {
-                log::warn!("settings invalid, using defaults: {e}");
-                keep_aside(path);
-                Settings::default()
-            }
-        },
+        }
         Err(e) => {
             log::warn!("settings corrupt, using defaults: {}", describe(&e));
             keep_aside(path);
@@ -670,6 +671,14 @@ mod tests {
         );
         assert!(!bad(|s| s.riser_db = 15.0));
         assert!(bad(|s| s.riser_db = f32::INFINITY));
+    }
+
+    #[test]
+    fn load_rounds_thresholds_before_validating() {
+        let (_d, p) = tmp();
+        std::fs::write(&p, r#"{"calmKickDb":7.96,"phraseBars":4}"#).unwrap();
+        let s = load(&p);
+        assert_eq!((s.calm_kick_db, s.phrase_bars), (8.0, 4));
     }
 
     #[test]
