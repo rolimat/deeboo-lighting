@@ -17,6 +17,8 @@ interface Props {
 }
 
 const PX_PER_STEP = 6;
+const WHEEL_PX = 16;
+const WHEEL_GESTURE_MS = 200;
 const R = 13;
 const pt = (deg: number): [number, number] => [
   17 + R * Math.sin((deg * Math.PI) / 180),
@@ -40,9 +42,26 @@ export function Knob(p: Props) {
   };
   useEffect(() => {
     const node = el.current;
+    // Pixel deltas (trackpads, momentum) add up to one step per WHEEL_PX; a new gesture steps at once.
+    let acc = 0;
+    let last = -Infinity;
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
-      if (e.deltaY) set(cur.current.value + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.1 : 1));
+      // macOS sends Shift+wheel as horizontal scroll.
+      const d = e.deltaY || e.deltaX;
+      if (!d) return;
+      let n = 1;
+      if (e.deltaMode === 0) {
+        if (e.timeStamp - last > WHEEL_GESTURE_MS || acc * d < 0) {
+          acc = 0;
+        } else {
+          acc += d;
+          n = Math.trunc(Math.abs(acc) / WHEEL_PX);
+          acc -= Math.sign(acc) * n * WHEEL_PX;
+        }
+      }
+      last = e.timeStamp;
+      if (n) set(cur.current.value + (d < 0 ? 1 : -1) * n * (e.shiftKey ? 0.1 : 1));
     };
     node?.addEventListener("wheel", wheel, { passive: false });
     return () => {

@@ -35,11 +35,17 @@ const key = (el: HTMLElement, k: string, shiftKey = false) =>
   act(() => {
     el.dispatchEvent(new KeyboardEvent("keydown", { key: k, shiftKey, bubbles: true }));
   });
-const wheel = (el: HTMLElement, deltaY: number, shiftKey = false) =>
+const wheel = (el: HTMLElement, deltaY: number, shiftKey = false, deltaX = 0, t = 0) =>
   act(() => {
-    el.dispatchEvent(
-      new WheelEvent("wheel", { deltaY, shiftKey, bubbles: true, cancelable: true }),
-    );
+    const e = new WheelEvent("wheel", {
+      deltaY,
+      deltaX,
+      shiftKey,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(e, "timeStamp", { value: t });
+    el.dispatchEvent(e);
   });
 
 it("arrows_step_by_one_and_shift_by_a_tenth", async () => {
@@ -86,9 +92,9 @@ it("clamps_at_max", async () => {
 
 it("wheel_steps_and_prevents_scroll", async () => {
   const { onChange, el } = await mount();
-  await wheel(el, -100);
-  await wheel(el, -100, true);
-  await wheel(el, 100);
+  await wheel(el, -100, false, 0, 1000);
+  await wheel(el, -100, true, 0, 2000);
+  await wheel(el, 100, false, 0, 3000);
   expect(onChange.mock.calls.map((c) => c[0])).toEqual([17, 16.1, 15]);
 });
 
@@ -194,4 +200,41 @@ it("coarse_moves_keep_the_tenths", async () => {
   await act(() => {
     window.dispatchEvent(new MouseEvent("pointerup"));
   });
+});
+
+it("shift_wheel_works_when_the_os_sends_it_as_horizontal_scroll", async () => {
+  const { onChange, el } = await mount();
+  await wheel(el, 0, true, -3, 1000);
+  expect(onChange).toHaveBeenLastCalledWith(16.1);
+});
+
+it("a_trackpad_swipe_moves_one_step_per_16_px", async () => {
+  const { onChange, el } = await mount();
+  for (let i = 0; i < 20; i++) await wheel(el, -2, false, 0, 1000 + i * 10);
+  // First event at once, then 19 x 2 px = 38 px: two more steps.
+  expect(onChange).toHaveBeenCalledTimes(3);
+  expect(onChange.mock.calls.map((c) => c[0])).toEqual([17, 17, 17]);
+});
+
+it("a_single_small_wheel_event_after_a_pause_is_one_step", async () => {
+  const { onChange, el } = await mount();
+  await wheel(el, -4, false, 0, 1000);
+  await wheel(el, -4, false, 0, 1300);
+  expect(onChange).toHaveBeenCalledTimes(2);
+});
+
+it("line_and_page_wheel_modes_step_once_per_event", async () => {
+  const { onChange, el } = await mount();
+  for (let i = 0; i < 3; i++)
+    await act(() => {
+      const e = new WheelEvent("wheel", {
+        deltaY: -1,
+        deltaMode: 1,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(e, "timeStamp", { value: 1000 + i });
+      el.dispatchEvent(e);
+    });
+  expect(onChange).toHaveBeenCalledTimes(3);
 });
