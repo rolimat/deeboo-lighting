@@ -172,3 +172,26 @@ it("exposes_aria_and_help", async () => {
   expect(el.getAttribute("data-help")).toContain("Shift");
   expect(el.textContent).toContain("14.3 dB");
 });
+
+it("coarse_moves_keep_the_tenths", async () => {
+  const { onChange, el } = await mount(14.3);
+  await key(el, "ArrowUp");
+  await key(el, "ArrowDown");
+  await wheel(el, -100);
+  expect(onChange.mock.calls.map((c) => c[0])).toEqual([15.3, 13.3, 15.3]);
+  onChange.mockClear();
+  await act(() => {
+    el.dispatchEvent(new MouseEvent("pointerdown", { clientY: 200, bubbles: true }));
+  });
+  await act(() => {
+    window.dispatchEvent(new MouseEvent("pointermove", { clientY: 197 }));
+  });
+  expect(onChange).not.toHaveBeenCalled();
+  await act(() => {
+    window.dispatchEvent(new MouseEvent("pointermove", { clientY: 194 }));
+  });
+  expect(onChange).toHaveBeenLastCalledWith(15.3);
+  await act(() => {
+    window.dispatchEvent(new MouseEvent("pointerup"));
+  });
+});

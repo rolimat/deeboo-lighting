@@ -34,17 +34,15 @@ export function Knob(p: Props) {
   const stop = useRef<(() => void) | null>(null);
   const cur = useRef(p);
   cur.current = p;
-  const set = (v: number, fine: boolean) => {
+  const set = (v: number) => {
     const { min, max, onChange } = cur.current;
-    const r = fine ? Math.round(v * 10) / 10 : Math.round(v);
-    onChange(Math.min(max, Math.max(min, r)));
+    onChange(Math.min(max, Math.max(min, Math.round(v * 10) / 10)));
   };
   useEffect(() => {
     const node = el.current;
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
-      if (e.deltaY)
-        set(cur.current.value + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.1 : 1), e.shiftKey);
+      if (e.deltaY) set(cur.current.value + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.1 : 1));
     };
     node?.addEventListener("wheel", wheel, { passive: false });
     return () => {
@@ -65,7 +63,8 @@ export function Knob(p: Props) {
         baseV = cur.current.value;
       }
       const steps = Math.trunc((baseY - m.clientY) / PX_PER_STEP);
-      set(baseV + steps * (fine ? 0.1 : 1), fine);
+      const next = baseV + steps * (fine ? 0.1 : 1);
+      if (Math.round(next * 10) / 10 !== cur.current.value) set(next);
     };
     const end = () => stop.current?.();
     stop.current = () => {
@@ -85,7 +84,7 @@ export function Knob(p: Props) {
           : 0;
     if (!d) return;
     e.preventDefault();
-    set(p.value + d * (e.shiftKey ? 0.1 : 1), e.shiftKey);
+    set(p.value + d * (e.shiftKey ? 0.1 : 1));
   };
   const t = (p.value - p.min) / (p.max - p.min || 1);
   const angle = -135 + 270 * Math.min(1, Math.max(0, t));
@@ -102,7 +101,7 @@ export function Knob(p: Props) {
       aria-valuetext={`${p.label} when ${fmtDb(p.value)} dB ${p.above ? "above" : "below"}`}
       onPointerDown={down}
       onKeyDown={key}
-      onDblClick={() => set(p.def, true)}
+      onDblClick={() => set(p.def)}
       class="flex w-14 cursor-ns-resize select-none flex-col items-center text-small leading-tight outline-none focus-visible:ring-1 focus-visible:ring-accent"
       {...help(`${p.hint} ${H.knob(p.def)}`)}
     >
