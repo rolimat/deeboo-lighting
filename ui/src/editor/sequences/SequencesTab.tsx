@@ -364,8 +364,11 @@ export function SequencesTab({
   const info = shown ? momentInfo(shown.moment) : null;
 
   return (
-    <div class="-m-6 flex min-h-[calc(100%+3rem)]">
-      <nav aria-label="Sequences" class="w-52 shrink-0 space-y-2 border-r border-border p-3">
+    <div class="-m-6 flex h-[calc(100%+3rem)]">
+      <nav
+        aria-label="Sequences"
+        class="min-h-0 w-52 shrink-0 space-y-2 overflow-y-auto border-r border-border p-3"
+      >
         <input
           type="search"
           aria-label="Search sequences"
@@ -483,7 +486,7 @@ export function SequencesTab({
           ))}
         </ul>
       </nav>
-      <div class="min-w-0 flex-1 space-y-3 p-4">
+      <div class="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto p-4">
         {stripSegments !== undefined && stripSegments !== pieces && (
           <p class="text-dim">
             These sequences are for {pieces} segments; the strip has {stripSegments}. Save the strip

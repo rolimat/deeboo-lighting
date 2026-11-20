@@ -509,3 +509,14 @@ it("fade_switch_is_absent_for_build_up", async () => {
   expect(q<HTMLInputElement>("input#seq-name")?.value).toBe("Drift");
   expect(fadeSwitch()).toBeNull();
 });
+
+it("sidebar_scrolls_on_its_own", async () => {
+  await mount();
+  const nav = q("nav") as HTMLElement;
+  expect(nav.className).toContain("overflow-y-auto");
+  expect(nav.className).toContain("min-h-0");
+  const wrap = nav.parentElement as HTMLElement;
+  expect(wrap.className).toContain("h-[calc(100%+3rem)]");
+  expect(wrap.className).not.toContain("min-h-[");
+  expect(nav.nextElementSibling?.className).toContain("overflow-y-auto");
+});

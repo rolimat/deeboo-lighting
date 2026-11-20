@@ -432,3 +432,14 @@ it("a_new_set_stays_open_after_its_id_is_renumbered_and_edits_it_not_the_live_se
   expect(store.lib?.sets.map((s) => s.id)).toEqual([1, 2, 3]);
   expect(store.lib?.activeSet).toBe(1);
 });
+
+it("sidebar_scrolls_on_its_own", async () => {
+  await mount();
+  const nav = q("nav") as HTMLElement;
+  expect(nav.className).toContain("overflow-y-auto");
+  expect(nav.className).toContain("min-h-0");
+  const wrap = nav.parentElement as HTMLElement;
+  expect(wrap.className).toContain("h-[calc(100%+3rem)]");
+  expect(wrap.className).not.toContain("min-h-[");
+  expect(nav.nextElementSibling?.className).toContain("min-h-0");
+});

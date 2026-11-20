@@ -254,7 +254,7 @@ export function SetsTab({
     <div class="-m-6 flex h-[calc(100%+3rem)]">
       <nav
         aria-label="Sets"
-        class="w-52 shrink-0 space-y-1 overflow-y-auto border-r border-border p-3"
+        class="min-h-0 w-52 shrink-0 space-y-1 overflow-y-auto border-r border-border p-3"
       >
         <input
           type="search"

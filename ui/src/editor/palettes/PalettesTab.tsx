@@ -218,8 +218,11 @@ export function PalettesTab({
     `flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-body ${on ? "bg-card text-accent outline outline-1 outline-accent" : ""}`;
 
   return (
-    <div class="-m-6 flex min-h-[calc(100%+3rem)]">
-      <nav aria-label="Palettes" class="w-52 shrink-0 space-y-2 border-r border-border p-3">
+    <div class="-m-6 flex h-[calc(100%+3rem)]">
+      <nav
+        aria-label="Palettes"
+        class="min-h-0 w-52 shrink-0 space-y-2 overflow-y-auto border-r border-border p-3"
+      >
         <input
           type="search"
           aria-label="Search palettes"
@@ -276,7 +279,7 @@ export function PalettesTab({
           New palette
         </button>
       </nav>
-      <div class="min-w-0 flex-1 space-y-3 p-4">
+      <div class="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto p-4">
         {palette && colour && pickedId !== null ? (
           <>
             <div class="flex items-center gap-2">
