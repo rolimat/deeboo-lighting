@@ -9,7 +9,7 @@ import { RING_BEATS } from "./history";
 import { DEFAULTS } from "./defaults";
 import { Knob } from "./Knob";
 import { ThresholdLine } from "./ThresholdLine";
-import { ZOOMS, fitLevel, fmtDb, ticks, view, yPct } from "./zoom";
+import { ZOOMS, centreOf, fitLevel, fmtDb, ticks, view, yPct } from "./zoom";
 
 const MOMENTS: Record<MomentName, [IconName, string]> = {
   rhythm: ["rhythm", "Rhythm"],
@@ -39,6 +39,8 @@ interface LaneDef {
   desc: string;
   band: Band;
   lines: Line[];
+  /** Zoom level the lane opens at. */
+  zoom?: number;
 }
 const LANES: LaneDef[] = [
   {
@@ -64,12 +66,13 @@ const LANES: LaneDef[] = [
     title: "Highs",
     desc: "Hi-hats and noise. A steady climb means a riser → Build-up; a fall helps Calm.",
     band: "highDb",
+    zoom: 2,
     lines: [
       {
         key: "riserDb",
         name: "Riser",
         above: true,
-        min: 3,
+        min: 1,
         max: 15,
         label: "Build-up",
         hint: H.thresholdRiser,
@@ -110,14 +113,18 @@ function Lane(props: {
 }) {
   const { def, ring, t } = props;
   const box = useRef<HTMLDivElement>(null);
-  const [level, setLevel] = useState(0);
+  const [level, setLevel] = useState(def.zoom ?? 0);
   const refKey = REF[def.band];
   const last = ring[ring.length - 1];
   const ref = last ? Number(last[refKey]) : -30;
-  const v = view(ref, level);
-  const span = v[0] - v[1];
   const shown = (l: Line) => t[l.key] - (l.above ? 0 : props.shift);
   const lineDb = (l: Line) => ref + (l.above ? shown(l) : -shown(l));
+  // The view is frozen while a line is dragged, so the scale does not slide under the pointer.
+  const held = useRef<number | null>(null);
+  const [, redraw] = useState(0);
+  const centre = held.current ?? centreOf(ref, def.lines.map(lineDb));
+  const v = view(centre, level);
+  const span = v[0] - v[1];
   return (
     <>
       <div class={HEAD}>
@@ -153,7 +160,7 @@ function Lane(props: {
           type="button"
           aria-label="Zoom to fit"
           onClick={() =>
-            setLevel(fitLevel(ref, [...ring.map((e) => e[def.band]), ...def.lines.map(lineDb)]))
+            setLevel(fitLevel(centre, [...ring.map((e) => e[def.band]), ...def.lines.map(lineDb)]))
           }
           class={ZBTN}
           {...help(H.bandZoomFit)}
@@ -226,11 +233,15 @@ function Lane(props: {
                 return l.above ? db - ref : ref - db;
               }}
               onChange={(n) => props.onChange(l.key, n + sh)}
+              onDrag={(on) => {
+                held.current = on ? centre : null;
+                redraw((n) => n + 1);
+              }}
               onOutside={() => {
                 let n = level - 1;
                 while (
                   n > 0 &&
-                  (yPct(lineDb(l), view(ref, n)) < 0 || yPct(lineDb(l), view(ref, n)) > 100)
+                  (yPct(lineDb(l), view(centre, n)) < 0 || yPct(lineDb(l), view(centre, n)) > 100)
                 )
                   n--;
                 setLevel(Math.max(0, n));

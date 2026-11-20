@@ -8,6 +8,12 @@ export function view(ref: number, level: number): [number, number] {
   return [top, top - span];
 }
 
+/** Midpoint of the reference and its threshold lines: the view centres here so every line sits inside it. */
+export function centreOf(ref: number, lines: number[]): number {
+  const all = [ref, ...lines];
+  return (Math.min(...all) + Math.max(...all)) / 2;
+}
+
 /** Percent from the top (may be <0 or >100 when outside the view). */
 export const yPct = (db: number, v: [number, number]): number =>
   ((v[0] - db) / (v[0] - v[1])) * 100;

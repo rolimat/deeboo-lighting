@@ -17,12 +17,16 @@ interface Props {
   /** Clicked on the pinned label of a line outside the view. */
   onOutside: () => void;
   hint: string;
+  /** True on pointer-down, false when the drag ends. */
+  onDrag?: (active: boolean) => void;
 }
 
 /** A dashed line over a lane with its green label at the left end: drag either, or focus the line and use the arrow keys (1 dB per press, Shift 0.1 dB). */
 export function ThresholdLine(p: Props) {
   const stop = useRef<(() => void) | null>(null);
   useEffect(() => () => stop.current?.(), []);
+  const onDrag = useRef(p.onDrag);
+  onDrag.current = p.onDrag;
   const set = (v: number, fine: boolean) =>
     p.onChange(Math.min(p.max, Math.max(p.min, fine ? Math.round(v * 10) / 10 : Math.round(v))));
   const down = (e: Event) => {
@@ -33,7 +37,9 @@ export function ThresholdLine(p: Props) {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", end);
       stop.current = null;
+      onDrag.current?.(false);
     };
+    onDrag.current?.(true);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end);
   };

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { fitLevel, fmtDb, tickStep, ticks, view, yPct } from "./zoom";
+import { centreOf, fitLevel, fmtDb, tickStep, ticks, view, yPct } from "./zoom";
 
 it("view_centres_on_ref_and_stays_inside_the_scale", () => {
   expect(view(-14, 0)).toEqual([0, -60]);
@@ -30,4 +30,9 @@ it("fit_level_picks_the_closest_view_showing_everything", () => {
 it("fmt_db_keeps_one_decimal", () => {
   expect(fmtDb(7)).toBe("7.0");
   expect(fmtDb(14.3)).toBe("14.3");
+});
+
+it("centre_is_the_midpoint_of_the_reference_and_its_lines", () => {
+  expect(centreOf(-35, [-32, -45])).toBe(-38.5);
+  expect(centreOf(-20, [])).toBe(-20);
 });
