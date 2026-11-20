@@ -1,4 +1,4 @@
-//! The 35 fixed sequences (spec 2026-11-14 §3): 15 Rhythm, 10 Calm, 10 Build-up.
+//! The 33 fixed sequences (spec 2026-11-14 §3): 15 Rhythm, 10 Calm, 8 Build-up.
 //!
 //! Each is a table of `(length, base role, layers)`: the base fills the strip, then the layers paint
 //! parts of it in order (the last one wins where they overlap). Parts come from `parts::parts(n)`.
@@ -40,16 +40,19 @@ pub enum Pattern {
     LongWash,
     WhiteEndsSlowly,
     // Build-up
+    #[cfg_attr(feature = "serde", serde(alias = "strobeAccelerating"))]
     Strobe,
+    #[cfg_attr(feature = "serde", serde(alias = "convergeAccelerating"))]
     Converge,
     ColourStrobe,
     OddEvenStrobe,
     ConvergeThenStrobe,
-    HalvesAccelerating,
-    OddEvenAccelerating,
-    StrobeAccelerating,
-    ConvergeAccelerating,
-    FourPartChaseAccelerating,
+    #[cfg_attr(feature = "serde", serde(alias = "halvesAccelerating"))]
+    Halves,
+    #[cfg_attr(feature = "serde", serde(alias = "oddEvenAccelerating"))]
+    OddEvenThenStrobe,
+    #[cfg_attr(feature = "serde", serde(alias = "fourPartChaseAccelerating"))]
+    FourPartChase,
 }
 
 use Pattern::*;
@@ -83,17 +86,15 @@ const CALM: [Pattern; 10] = [
     LongWash,
     WhiteEndsSlowly,
 ];
-const BUILDUP: [Pattern; 10] = [
+const BUILDUP: [Pattern; 8] = [
     Strobe,
     Converge,
     ColourStrobe,
     OddEvenStrobe,
     ConvergeThenStrobe,
-    HalvesAccelerating,
-    OddEvenAccelerating,
-    StrobeAccelerating,
-    ConvergeAccelerating,
-    FourPartChaseAccelerating,
+    Halves,
+    OddEvenThenStrobe,
+    FourPartChase,
 ];
 
 impl Pattern {
@@ -131,11 +132,9 @@ impl Pattern {
             ColourStrobe => "Colour strobe",
             OddEvenStrobe => "Odd / even strobe",
             ConvergeThenStrobe => "Converge, then strobe",
-            HalvesAccelerating => "Halves, accelerating",
-            OddEvenAccelerating => "Odd / even, accelerating",
-            StrobeAccelerating => "Strobe, accelerating",
-            ConvergeAccelerating => "Converge, accelerating",
-            FourPartChaseAccelerating => "Four-part chase, accelerating",
+            Halves => "Halves",
+            OddEvenThenStrobe => "Odd / even, then strobe",
+            FourPartChase => "Four-part chase",
         }
     }
 
@@ -162,16 +161,8 @@ impl Pattern {
             | ColourCycle | FadeAndReturn | SlowWhiteBreath | LongWash | WhiteEndsSlowly => {
                 Moment::Calm
             }
-            Strobe
-            | Converge
-            | ColourStrobe
-            | OddEvenStrobe
-            | ConvergeThenStrobe
-            | HalvesAccelerating
-            | OddEvenAccelerating
-            | StrobeAccelerating
-            | ConvergeAccelerating
-            | FourPartChaseAccelerating => Moment::BuildUp,
+            Strobe | Converge | ColourStrobe | OddEvenStrobe | ConvergeThenStrobe | Halves
+            | OddEvenThenStrobe | FourPartChase => Moment::BuildUp,
         }
     }
 }
@@ -419,16 +410,9 @@ fn rows(p: Pattern) -> Vec<Row> {
         ColourStrobe => vec![(Half, W, &[]), (Half, P, &[])],
         OddEvenStrobe => vec![(Half, O, &[(Odd, W)]), (Half, O, &[(Even, W)])],
         ConvergeThenStrobe => [rep(&converge, 2), rep(&strobe, 4)].concat(),
-        HalvesAccelerating => [rep(&halves, 2), rep(&at(&halves, Half), 4)].concat(),
-        OddEvenAccelerating => [
-            rep(&odd_even, 2),
-            rep(&at(&odd_even, Half), 2),
-            rep(&strobe, 2),
-        ]
-        .concat(),
-        StrobeAccelerating => [rep(&at(&strobe, One), 2), rep(&strobe, 4)].concat(),
-        ConvergeAccelerating => [at(&converge, One), rep(&converge, 2)].concat(),
-        FourPartChaseAccelerating => [chase_p.to_vec(), rep(&chase_w, 2)].concat(),
+        Halves => at(&halves, Half),
+        OddEvenThenStrobe => [rep(&at(&odd_even, Half), 2), rep(&strobe, 2)].concat(),
+        FourPartChase => [at(&chase_p, Half), chase_w.to_vec()].concat(),
     }
 }
 

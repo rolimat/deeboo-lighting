@@ -178,11 +178,9 @@ table! {
     colour_strobe_matches_table: ColourStrobe = "@4(1 W;1 P)";
     odd_even_strobe_matches_table: OddEvenStrobe = "@4(1 - o=W;1 - ev=W)";
     converge_then_strobe_matches_table: ConvergeThenStrobe = "@2(1 - e=W;1 - c=P;1 C;1 -);@4(1 W;1 -)";
-    halves_accelerating_matches_table: HalvesAccelerating = "@2(2 - h1=W h2=P;2 - h1=P h2=W);@4(1 - h1=W h2=P;1 - h1=P h2=W)";
-    odd_even_accelerating_matches_table: OddEvenAccelerating = "@2(2 - o=W ev=P;2 - ev=W o=P);@2(1 - o=W ev=P;1 - ev=W o=P);@2(1 W;1 -)";
-    strobe_accelerating_matches_table: StrobeAccelerating = "@2(2 W;2 -);@4(1 W;1 -)";
-    converge_accelerating_matches_table: ConvergeAccelerating = "2 - e=W;2 - c=P;2 C;2 -;@2(1 - e=W;1 - c=P;1 C;1 -)";
-    four_part_chase_accelerating_matches_table: FourPartChaseAccelerating = "2 - p1=P;2 - p2=P;2 - p3=P;2 - p4=P;@2(1 - p1=W;1 - p2=W;1 - p3=W;1 - p4=W)";
+    halves_matches_table: Halves = "@4(1 - h1=W h2=P;1 - h1=P h2=W)";
+    odd_even_then_strobe_matches_table: OddEvenThenStrobe = "@2(1 - o=W ev=P;1 - ev=W o=P);@2(1 W;1 -)";
+    four_part_chase_matches_table: FourPartChase = "1 - p1=P;1 - p2=P;1 - p3=P;1 - p4=P;1 - p1=W;1 - p2=W;1 - p3=W;1 - p4=W";
 }
 
 #[test]
@@ -285,11 +283,11 @@ fn every_pattern_validates_for_1_to_16_segments() {
 }
 
 #[test]
-fn for_moment_lists_35_in_table_order() {
+fn for_moment_lists_33_in_table_order() {
     let len = |m| for_moment(m).len();
     assert_eq!(
         (len(Moment::Rhythm), len(Moment::Calm), len(Moment::BuildUp)),
-        (15, 10, 10)
+        (15, 10, 8)
     );
     assert_eq!(for_moment(Moment::Rhythm)[0], Pattern::CrossPairs);
     assert_eq!(for_moment(Moment::Calm)[9], Pattern::WhiteEndsSlowly);
@@ -307,13 +305,11 @@ fn labels_are_the_spec_names() {
         "Cross pairs + white backbeat"
     );
     assert_eq!(
-        Pattern::OddEvenAccelerating.label(),
-        "Odd / even, accelerating"
+        Pattern::OddEvenThenStrobe.label(),
+        "Odd / even, then strobe"
     );
-    assert_eq!(
-        Pattern::FourPartChaseAccelerating.label(),
-        "Four-part chase, accelerating"
-    );
+    assert_eq!(Pattern::FourPartChase.label(), "Four-part chase");
+    assert_eq!(Pattern::Halves.label(), "Halves");
 }
 
 #[test]
@@ -323,5 +319,31 @@ fn each_table_holds_only_patterns_of_its_moment() {
         for p in light_core::patterns::for_moment(m) {
             assert_eq!(p.moment(), m, "{p:?}");
         }
+    }
+}
+
+#[test]
+fn every_generated_buildup_step_is_half_a_beat() {
+    for p in for_moment(Moment::BuildUp) {
+        for n in 1..=16 {
+            for s in &build(*p, n).steps {
+                assert_eq!(s.len, StepLen::Half, "{p:?} n={n}");
+            }
+        }
+    }
+}
+
+#[test]
+fn old_buildup_names_read_as_their_replacement() {
+    use light_core::library::SeqRef;
+    for (old, want) in [
+        ("strobeAccelerating", Pattern::Strobe),
+        ("convergeAccelerating", Pattern::Converge),
+        ("halvesAccelerating", Pattern::Halves),
+        ("oddEvenAccelerating", Pattern::OddEvenThenStrobe),
+        ("fourPartChaseAccelerating", Pattern::FourPartChase),
+    ] {
+        let r: SeqRef = serde_json::from_str(&format!(r#"{{"pattern":"{old}"}}"#)).expect("json");
+        assert_eq!(r, SeqRef::Pattern(want), "{old}");
     }
 }

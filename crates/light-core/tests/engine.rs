@@ -1761,8 +1761,8 @@ fn rhythm_and_buildup_never_fade() {
 
 #[test]
 fn two_colour_buildups_at_140_bpm_accumulate_no_delay() {
-    use light_core::patterns::Pattern::{HalvesAccelerating, OddEvenAccelerating, OddEvenStrobe};
-    for p in [OddEvenStrobe, HalvesAccelerating, OddEvenAccelerating] {
+    use light_core::patterns::Pattern::{Halves, OddEvenStrobe, OddEvenThenStrobe};
+    for p in [OddEvenStrobe, Halves, OddEvenThenStrobe] {
         let mut lib = Library::builtin(4);
         lib.sets[0].buildup.sequences = vec![SeqRef::Pattern(p)];
         lib.sets[0].buildup.order = Order::InOrder;

@@ -66,11 +66,9 @@ export const PATTERNS: Record<MomentName, [PatternName, string][]> = {
     ["colourStrobe", "Colour strobe"],
     ["oddEvenStrobe", "Odd / even strobe"],
     ["convergeThenStrobe", "Converge, then strobe"],
-    ["halvesAccelerating", "Halves, accelerating"],
-    ["oddEvenAccelerating", "Odd / even, accelerating"],
-    ["strobeAccelerating", "Strobe, accelerating"],
-    ["convergeAccelerating", "Converge, accelerating"],
-    ["fourPartChaseAccelerating", "Four-part chase, accelerating"],
+    ["halves", "Halves"],
+    ["oddEvenThenStrobe", "Odd / even, then strobe"],
+    ["fourPartChase", "Four-part chase"],
   ],
 };
 

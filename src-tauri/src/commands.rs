@@ -2053,7 +2053,7 @@ mod tests {
     fn pattern_sequence_rejects_unknown_pattern() {
         use light_core::patterns::Pattern;
         assert!(serde_json::from_str::<Pattern>(r#""nope""#).is_err());
-        assert!(serde_json::from_str::<Pattern>(r#""halves""#).is_err());
+        assert!(serde_json::from_str::<Pattern>(r#""halvesBlinkX""#).is_err());
         assert!(serde_json::from_str::<Pattern>(r#""crossPairs""#).is_ok());
     }
 

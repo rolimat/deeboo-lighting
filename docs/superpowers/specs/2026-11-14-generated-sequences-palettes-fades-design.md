@@ -92,6 +92,8 @@ Pasos de más de 4 beats se representan como pasos de 4 beats repetidos (`StepLe
 | B16 | Converge, accelerating | (E W, Cn P, todo C, –) a 1 beat, luego lo mismo a ½ dos veces |
 | B19 | Four-part chase, accelerating | p1, p2, p3, p4 en P a 1 beat, luego p1..p4 dos veces en W a ½ |
 
+Sustituida por la tabla de `2026-11-20-e2e-feedback-buildup-zoom-sidebar-design.md` §1.
+
 Nota: B15 se define según su descripción. En la página de propuestas su animación tenía un fallo y se veía igual que B1.
 
 ### Uso

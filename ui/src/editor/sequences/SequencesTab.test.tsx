@@ -140,7 +140,7 @@ it("browser_groups_by_moment_with_icons", async () => {
   expect(rhythm.textContent).toContain("Pulse");
   expect(rhythm.textContent).toContain("Cross pairs"); // one entry per pattern
   expect(rhythm.textContent).toContain("Any pattern");
-  expect(heads[2]?.nextElementSibling?.textContent).toContain("Strobe, accelerating");
+  expect(heads[2]?.nextElementSibling?.textContent).toContain("Odd / even, then strobe");
   // generated entries carry the teal icon, user sequences do not
   expect(rhythm.querySelector("[data-generated] svg")).not.toBeNull();
   expect(byText("nav button", "Pulse")?.querySelector("[data-generated]")).toBeNull();
@@ -149,7 +149,7 @@ it("browser_groups_by_moment_with_icons", async () => {
 
 it("browser_items_show_grip_and_moment_icon", async () => {
   await mount();
-  for (const label of ["Pulse", "Drift", "Cross pairs", "Strobe, accelerating"]) {
+  for (const label of ["Pulse", "Drift", "Cross pairs", "Odd / even, then strobe"]) {
     const b = byText("nav button", label);
     expect(b?.querySelector("[data-grip]"), label).not.toBeNull();
     expect(b?.querySelector("[data-moment-icon] svg"), label).not.toBeNull();

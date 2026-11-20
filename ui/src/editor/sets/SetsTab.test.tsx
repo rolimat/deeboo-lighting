@@ -161,18 +161,18 @@ it("drop_appends_clip", async () => {
   expect(refs("rhythm")?.at(-1)).toEqual({ pattern: "crossPairs" });
 });
 
-it("pattern_browser_lists_35_grouped", async () => {
+it("pattern_browser_lists_33_grouped", async () => {
   const all = [...document.querySelectorAll("[data-drag-pattern]")]
     .filter((e) => e.getAttribute("data-drag-pattern") !== "any")
     .map((e) => e.textContent?.trim());
   const names = (m: string) =>
     m === "rhythm" ? all.slice(0, 15) : m === "calm" ? all.slice(15, 25) : all.slice(25);
-  expect(all).toHaveLength(35);
+  expect(all).toHaveLength(33);
   expect(names("rhythm")).toHaveLength(15);
   expect(names("rhythm")[0]).toBe("Cross pairs");
   expect(names("rhythm")[14]).toBe("Ends, centre, all, dark");
   expect(names("calm")).toHaveLength(10);
-  expect(names("buildUp")).toHaveLength(10);
+  expect(names("buildUp")).toHaveLength(8);
   await dragDrop(
     q("[data-drag-pattern='convergeThenStrobe']"),
     q("[data-track='buildup'] [data-zone]"),
