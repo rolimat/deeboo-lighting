@@ -82,7 +82,7 @@ impl DetectorConfig {
             return Err("highs threshold must be 6 to 24 dB".into());
         }
         if !RISER_DB.contains(&self.riser_db) {
-            return Err("riser threshold must be 1 to 15 dB".into());
+            return Err("riser threshold must be 2 to 15 dB".into());
         }
         Ok(())
     }
@@ -106,7 +106,7 @@ pub struct Settings {
     pub calm_kick_db: f32,
     /// 6..=24.
     pub calm_high_db: f32,
-    /// Rise of the bar means of highs that makes a riser. 1..=15.
+    /// Rise of the bar means of highs that makes a riser. 2..=15.
     pub riser_db: f32,
     /// Show the `?` help tooltips in the editor.
     pub help_tooltips: bool,
@@ -124,7 +124,7 @@ pub fn round_db(x: f32) -> f32 {
 
 pub const CALM_KICK_DB: RangeInclusive<f32> = 8.0..=30.0;
 pub const CALM_HIGH_DB: RangeInclusive<f32> = 6.0..=24.0;
-pub const RISER_DB: RangeInclusive<f32> = 1.0..=15.0;
+pub const RISER_DB: RangeInclusive<f32> = 2.0..=15.0;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -667,9 +667,9 @@ mod tests {
         );
         assert!(bad(|s| s.calm_high_db = 5.0) && bad(|s| s.calm_high_db = 25.0));
         assert!(
-            bad(|s| s.riser_db = 0.9) && bad(|s| s.riser_db = 16.0) && bad(|s| s.riser_db = 15.1)
+            bad(|s| s.riser_db = 1.9) && bad(|s| s.riser_db = 16.0) && bad(|s| s.riser_db = 15.1)
         );
-        assert!(!bad(|s| s.riser_db = 15.0) && !bad(|s| s.riser_db = 1.0));
+        assert!(!bad(|s| s.riser_db = 15.0) && !bad(|s| s.riser_db = 2.0));
         assert!(bad(|s| s.riser_db = f32::INFINITY));
     }
 

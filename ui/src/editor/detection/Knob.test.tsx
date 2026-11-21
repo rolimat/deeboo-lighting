@@ -17,8 +17,8 @@ const mount = async (value = 16, max = 30) => {
     render(
       <Knob
         name="Kick drop"
-        label="Calm"
-        above={false}
+        title="Kick drop"
+        words="Calm when 14.3 dB below"
         value={value}
         min={0}
         max={max}
@@ -65,8 +65,8 @@ it("three_shift_steps_from_16_make_exactly_16_3", async () => {
     return (
       <Knob
         name="K"
-        label="Calm"
-        above={false}
+        title="Kick drop"
+        words="Calm when 14.3 dB below"
         value={v}
         min={0}
         max={30}
@@ -137,8 +137,8 @@ it("shift_mid_drag_does_not_jump", async () => {
     return (
       <Knob
         name="K"
-        label="Calm"
-        above={false}
+        title="Kick drop"
+        words="Calm when 14.3 dB below"
         value={v}
         min={0}
         max={30}
@@ -176,7 +176,7 @@ it("exposes_aria_and_help", async () => {
   expect(el.getAttribute("aria-valuenow")).toBe("14.3");
   expect(el.getAttribute("aria-label")).toBe("Kick drop");
   expect(el.getAttribute("data-help")).toContain("Shift");
-  expect(el.textContent).toContain("14.3 dB");
+  expect(el.textContent).toBe("Kick drop");
 });
 
 it("coarse_moves_keep_the_tenths", async () => {
@@ -253,8 +253,8 @@ it("dragging_past_the_limit_rebases_so_reversing_moves_at_once", async () => {
     return (
       <Knob
         name="K"
-        label="Calm"
-        above={false}
+        title="Kick drop"
+        words="Calm when 14.3 dB below"
         value={v}
         min={0}
         max={30}

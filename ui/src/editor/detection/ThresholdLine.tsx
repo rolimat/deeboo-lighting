@@ -16,7 +16,10 @@ interface Props {
   onChange: (value: number) => void;
   /** Clicked on the pinned label of a line outside the view. */
   onOutside: () => void;
+  /** The tooltip text. */
   hint: string;
+  /** Where the line starts, in percent of the lane width. */
+  leftPct?: number;
   /** True on pointer-down, false when the drag ends. */
   onDrag?: (active: boolean) => void;
 }
@@ -58,8 +61,9 @@ export function ThresholdLine(p: Props) {
     e.preventDefault();
     set(p.value + d * (e.shiftKey ? 0.1 : 1), true);
   };
+  const left = p.leftPct ?? 0;
   const label =
-    "absolute left-9 z-20 -translate-y-1/2 select-none whitespace-nowrap rounded border bg-card px-1.5 text-small text-accent";
+    "absolute z-20 -translate-y-1/2 select-none whitespace-nowrap rounded border bg-card px-1.5 text-small text-accent";
   const above = p.topPct < 0;
   const out = above || p.topPct > 100;
   return (
@@ -68,7 +72,7 @@ export function ThresholdLine(p: Props) {
         <button
           type="button"
           onClick={p.onOutside}
-          style={{ top: above ? "9%" : "91%" }}
+          style={{ top: above ? "9%" : "91%", left: "2.25rem" }}
           class={`${label} cursor-pointer border-dashed border-accent`}
           {...help(H.bandZoomOutside)}
         >
@@ -86,8 +90,8 @@ export function ThresholdLine(p: Props) {
         aria-valuetext={p.words}
         onPointerDown={down}
         onKeyDown={key}
-        style={{ top: `${Math.min(100, Math.max(0, p.topPct))}%` }}
-        class="group absolute inset-x-0 z-10 -mt-2 h-4 cursor-ns-resize outline-none"
+        style={{ top: `${Math.min(100, Math.max(0, p.topPct))}%`, left: `${left}%` }}
+        class="group absolute right-0 z-10 -mt-2 h-4 cursor-ns-resize outline-none"
         {...help(`${p.hint} ${H.thresholdDrag}`)}
       >
         <div
@@ -98,7 +102,10 @@ export function ThresholdLine(p: Props) {
         <span
           data-label
           onPointerDown={down}
-          style={{ top: `${Math.min(91, Math.max(9, p.topPct))}%` }}
+          style={{
+            top: `${Math.min(91, Math.max(9, p.topPct))}%`,
+            left: left ? `calc(${left}% + 0.5rem)` : "2.25rem",
+          }}
           class={`${label} cursor-ns-resize border-accent`}
           {...help(`${p.hint} ${H.thresholdDrag}`)}
         >
