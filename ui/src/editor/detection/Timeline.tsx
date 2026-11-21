@@ -4,8 +4,10 @@ import { help } from "../shell/Help";
 import type { MomentName } from "../../api";
 import { Icon } from "../../icons/Icon";
 import type { IconName } from "../../icons";
-import type { DetectorEvent, Thresholds } from "../api";
+import type { Cause, DetectorEvent, Thresholds } from "../api";
 import { RING_BEATS } from "./history";
+import { DEBUG } from "./debug";
+import { DebugPanel } from "./DebugPanel";
 import { DEFAULTS } from "./defaults";
 import { Knob } from "./Knob";
 import { ThresholdLine } from "./ThresholdLine";
@@ -102,6 +104,23 @@ const points = (ring: DetectorEvent[], v: [number, number], pick: (e: DetectorEv
         `${(((RING_BEATS - ring.length + i) / (RING_BEATS - 1)) * 1000).toFixed(1)},${yPct(pick(e), v).toFixed(1)}`,
     )
     .join(" ");
+
+/** The bar means the detector decided on, held between bars as a stepped line. */
+function barSteps(ring: DetectorEvent[], v: [number, number]): string {
+  const out: string[] = [];
+  let y: number | null = null;
+  ring.forEach((e, i) => {
+    const x = (((RING_BEATS - ring.length + i) / (RING_BEATS - 1)) * 1000).toFixed(1);
+    const next = e.progress.highBarDb;
+    if (next === null && y === null) return;
+    if (next !== null) {
+      if (y !== null) out.push(`${x},${y.toFixed(1)}`);
+      y = yPct(next, v);
+    }
+    out.push(`${x},${(y as number).toFixed(1)}`);
+  });
+  return out.join(" ");
+}
 
 function Lane(props: {
   def: LaneDef;
@@ -205,6 +224,18 @@ function Lane(props: {
             vector-effect="non-scaling-stroke"
             class="text-dim"
           />
+          {DEBUG && def.band === "highDb" && (
+            <polyline
+              data-debug
+              data-bar-steps
+              points={barSteps(ring, v)}
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              vector-effect="non-scaling-stroke"
+              class="text-accent opacity-40"
+            />
+          )}
           <polyline
             points={points(ring, v, (e) => e[def.band])}
             fill="none"
@@ -281,12 +312,12 @@ function Lane(props: {
 }
 
 /** What the show used per beat, as runs of equal moments (oldest first). */
-function runs(ring: DetectorEvent[]): [MomentName, number][] {
-  const out: [MomentName, number][] = [];
+function runs(ring: DetectorEvent[]): [MomentName, number, Cause | null][] {
+  const out: [MomentName, number, Cause | null][] = [];
   for (const e of ring) {
     const tail = out[out.length - 1];
     if (tail?.[0] === e.moment) tail[1] += 1;
-    else out.push([e.moment, 1]);
+    else out.push([e.moment, 1, e.cause]);
   }
   return out;
 }
@@ -300,53 +331,61 @@ export function Timeline(props: {
 }) {
   const r = runs(props.ring);
   return (
-    <div class={`${COL} overflow-hidden rounded-card border border-border`}>
-      <div class={`${HEAD} text-dim`}>Last 8 bars</div>
-      <div class="border-b border-r border-border bg-card p-2 text-small text-dim">Zoom</div>
-      <div class="grid grid-cols-8 border-b border-border bg-card text-small text-dim">
-        {BAR_LABELS.map((b, i) => (
-          <span key={b} data-bar class="flex justify-between border-l border-border px-1 py-1">
-            {b}
-            {i === 7 && <b class="text-accent">now ▸</b>}
-          </span>
+    <>
+      <div class={`${COL} overflow-hidden rounded-card border border-border`}>
+        <div class={`${HEAD} text-dim`}>Last 8 bars</div>
+        <div class="border-b border-r border-border bg-card p-2 text-small text-dim">Zoom</div>
+        <div class="grid grid-cols-8 border-b border-border bg-card text-small text-dim">
+          {BAR_LABELS.map((b, i) => (
+            <span key={b} data-bar class="flex justify-between border-l border-border px-1 py-1">
+              {b}
+              {i === 7 && <b class="text-accent">now ▸</b>}
+            </span>
+          ))}
+        </div>
+        <div class="border-b border-l border-border bg-card" />
+        <div class={HEAD}>
+          <b class="t-head">Moment</b>
+          <small class="mt-0.5 block text-dim">What the show used</small>
+        </div>
+        <div class="border-b border-r border-border bg-card" />
+        <div class="flex h-[34px] border-b border-border bg-bg">
+          <div style={{ flex: RING_BEATS - props.ring.length }} />
+          {r.map(([m, n, cause], i) => {
+            const [icon, name] = MOMENTS[m];
+            const now = i === r.length - 1;
+            return (
+              <div
+                key={i}
+                data-moment-run
+                {...(now ? { "data-now": "" } : {})}
+                style={{ flex: n }}
+                class={`flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap border-r border-bg bg-card px-1.5 text-small ${now ? "outline outline-1 -outline-offset-1 outline-accent" : ""}`}
+              >
+                <Icon name={icon} />
+                {name}
+                {DEBUG && cause && (
+                  <span data-debug class="text-dim">
+                    · {cause}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div class="border-b border-l border-border bg-card" />
+        {LANES.map((def) => (
+          <Lane
+            key={def.id}
+            def={def}
+            ring={props.ring}
+            t={props.t}
+            shift={props.shift}
+            onChange={props.onChange}
+          />
         ))}
       </div>
-      <div class="border-b border-l border-border bg-card" />
-      <div class={HEAD}>
-        <b class="t-head">Moment</b>
-        <small class="mt-0.5 block text-dim">What the show used</small>
-      </div>
-      <div class="border-b border-r border-border bg-card" />
-      <div class="flex h-[34px] border-b border-border bg-bg">
-        <div style={{ flex: RING_BEATS - props.ring.length }} />
-        {r.map(([m, n], i) => {
-          const [icon, name] = MOMENTS[m];
-          const now = i === r.length - 1;
-          return (
-            <div
-              key={i}
-              data-moment-run
-              {...(now ? { "data-now": "" } : {})}
-              style={{ flex: n }}
-              class={`flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap border-r border-bg bg-card px-1.5 text-small ${now ? "outline outline-1 -outline-offset-1 outline-accent" : ""}`}
-            >
-              <Icon name={icon} />
-              {name}
-            </div>
-          );
-        })}
-      </div>
-      <div class="border-b border-l border-border bg-card" />
-      {LANES.map((def) => (
-        <Lane
-          key={def.id}
-          def={def}
-          ring={props.ring}
-          t={props.t}
-          shift={props.shift}
-          onChange={props.onChange}
-        />
-      ))}
-    </div>
+      {DEBUG && <DebugPanel last={props.ring[props.ring.length - 1]} riserDb={props.t.riserDb} />}
+    </>
   );
 }
