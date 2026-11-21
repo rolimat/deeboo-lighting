@@ -416,7 +416,7 @@ it("reset_to_defaults_is_one_call", async () => {
   });
   expect(api.saveSettings).toHaveBeenCalledTimes(1);
   expect(api.saveSettings).toHaveBeenCalledWith(
-    settings({ sensitivity: 5, calmKickDb: 16, calmHighDb: 12, riserDb: 7 }),
+    settings({ sensitivity: 5, calmKickDb: 16, calmHighDb: 12, riserDb: 5 }),
   );
   expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("16");
 });
@@ -441,7 +441,7 @@ it("reset_keeps_settings_changed_elsewhere_since_mount", async () => {
       sensitivity: 5,
       calmKickDb: 16,
       calmHighDb: 12,
-      riserDb: 7,
+      riserDb: 5,
     }),
   );
 });

@@ -196,13 +196,13 @@ impl Default for DetectorParams {
             teaser_beats: 16,
             teaser_kick_db: 6.0,
             riser_bars: 4,
-            riser_db: 7.0,
+            riser_db: 5.0,
             riser_level_db: 6.0,
             riser_tol_db: 0.5,
-            approach_calm_beats: 16,
+            approach_calm_beats: 32,
             approach_above_db: 2.0,
             approach_rise_db: 2.0,
-            approach_bars: 4,
+            approach_bars: 8,
             collapse_beats: 16,
             refractory_beats: 16,
             buildup_max_beats: 96,
@@ -1316,7 +1316,7 @@ mod tests {
         assert_eq!((p.calm_after_quiet, p.rhythm_after_full), (2, 2));
         assert_eq!((p.hats_after_full, p.slow_return_beats), (4, 24));
         assert_eq!((p.teaser_beats, p.riser_bars), (16, 4));
-        assert_eq!((p.approach_calm_beats, p.approach_bars), (16, 4));
+        assert_eq!((p.approach_calm_beats, p.approach_bars), (32, 8));
         assert!((p.riser_tol_db - 0.5).abs() < f32::EPSILON);
         assert_eq!((p.collapse_beats, p.refractory_beats), (16, 16));
         assert_eq!(p.buildup_max_beats, 96);
@@ -1334,7 +1334,7 @@ mod tests {
             (p.sub_back_db, 10.0),
             (p.jump_db, 10.0),
             (p.teaser_kick_db, 6.0),
-            (p.riser_db, 7.0),
+            (p.riser_db, 5.0),
             (p.riser_level_db, 6.0),
             (p.approach_above_db, 2.0),
             (p.approach_rise_db, 2.0),
@@ -1551,7 +1551,11 @@ mod tests {
     fn late_phrase_keeps_four_bar_risers() {
         // Bars 4..7 of the phrase: -12, -8, -6, -5 dB (bars 3..7 start at -12). The last three rise
         // 3 dB, all four 7 dB, and no earlier four-bar window reaches 7.
-        let m = riser_run(0, PhraseBars::Eight, PositionRules::ALL, |k| match k {
+        let seven = DetectorParams {
+            riser_db: 7.0,
+            ..DetectorParams::default()
+        };
+        let m = riser_run_with(0, PhraseBars::Eight, seven, |k| match k {
             0..=31 => 0.0,
             32..=79 => -12.0,
             80..=83 => -8.0,
@@ -1622,8 +1626,15 @@ mod tests {
 
     #[test]
     fn approach_fires_after_four_bars_of_calm() {
-        // Calm began at 33; the rise starts at 49, when Calm is 16 beats old (it took 32 before).
-        let m = moments(&groove(66, |k| k < 32, late_hats(49)));
+        // Calm began at 33; the rise starts at 49, when Calm is 16 beats old.
+        let four_bars = DetectorParams {
+            approach_calm_beats: 16,
+            approach_bars: 4,
+            ..DetectorParams::default()
+        };
+        let lens = beats(128.0, 66);
+        let sig = synth(&lens, |k| k < 32, |_| true, late_hats(49));
+        let m = moments(&drive_with(&sig, &lens, four_bars, |_| None));
         assert!(m[33..49].iter().all(|&m| m == Moment::Calm), "{m:?}");
         assert_eq!(m[65], Moment::BuildUp, "{m:?}");
         // Calm only 12 beats old when the rise starts and 16 beats are needed: nothing yet at 48.
@@ -1647,6 +1658,7 @@ mod tests {
             ..ONLY_LATE
         };
         let tol = |riser_tol_db| DetectorParams {
+            riser_db: 7.0,
             riser_tol_db,
             rules,
             ..DetectorParams::default()
@@ -1663,6 +1675,7 @@ mod tests {
     fn level_run(off: u64, rules: PositionRules) -> Vec<Moment> {
         let params = DetectorParams {
             rules,
+            riser_db: 7.0,
             approach_above_db: 100.0,
             ..DetectorParams::default()
         };
@@ -1699,13 +1712,19 @@ mod tests {
     #[test]
     fn a_short_fill_inside_a_break_is_not_a_buildup() {
         // Two loud beats of hats (a fill) do not make a bar that rises 7 dB. They come before the approach
-        // rule wakes up (16 beats of Calm); after that the 4-beat mean would see them.
-        let o = groove(
-            72,
+        // rule wakes up (32 beats of Calm); after that the 4-beat mean would see them.
+        let lens = beats(128.0, 72);
+        let sig = synth(
+            &lens,
             |k| k < 32,
+            |_| true,
             |k| if (40..42).contains(&k) { 10.0 } else { 0.0 },
         );
-        let m = moments(&o);
+        let seven = DetectorParams {
+            riser_db: 7.0,
+            ..DetectorParams::default()
+        };
+        let m = moments(&drive_with(&sig, &lens, seven, |_| None));
         assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
     }
 

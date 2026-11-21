@@ -65,7 +65,7 @@ impl Default for DetectorConfig {
             sensitivity: 5,
             calm_kick_db: 16.0,
             calm_high_db: 12.0,
-            riser_db: 7.0,
+            riser_db: 5.0,
         }
     }
 }
@@ -138,7 +138,7 @@ impl Default for Settings {
             lights_on: true,
             calm_kick_db: 16.0,
             calm_high_db: 12.0,
-            riser_db: 7.0,
+            riser_db: 5.0,
             help_tooltips: true,
             show_in_dock: ShowInDock::Editor,
             detector_by_input: BTreeMap::new(),

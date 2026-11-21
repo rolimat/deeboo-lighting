@@ -44,7 +44,7 @@ export function installMock(api: typeof realApi): void {
     lightsOn: true,
     calmKickDb: 16,
     calmHighDb: 12,
-    riserDb: 7,
+    riserDb: 5,
     helpTooltips: true,
     showInDock: "editor",
     detectorByInput: {},

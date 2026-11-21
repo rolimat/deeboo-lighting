@@ -70,3 +70,12 @@ Cambiar otras reglas (Calm, drop), mostrar la vista al usuario final, guardar la
 - detect-probe: `--set` acepta las claves y rechaza las desconocidas.
 - UI: sin la variable no aparece nada; con ella (en test se fuerza), panel, causas y escalones.
 - Medición (§3) y e2e del usuario con música real.
+
+## 7. Valores elegidos (medición 2026-11-21)
+
+- **Approach:** 8 compases y 2 dB (a 4 compases añadía 3 Build-up falsos y retrasaba uno real 9 s).
+- **Riser de 3 compases en cualquier punto:** activo.
+- **Tolerancia del riser:** 0.5 dB (1.0 y 1.5 sin efecto).
+- **Umbral del riser:** 5 dB por defecto (el más bajo sin falsas alarmas extra).
+- **Regla de nivel:** desactivada por defecto (añade 1 falso en song-2, no acierta ninguno; pendiente medir con la
+  canción del usuario).
