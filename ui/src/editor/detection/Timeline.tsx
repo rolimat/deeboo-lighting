@@ -5,6 +5,7 @@ import type { MomentName } from "../../api";
 import { Icon } from "../../icons/Icon";
 import type { IconName } from "../../icons";
 import type { Cause, DetectorEvent, Thresholds } from "../api";
+import { CAUSE_WORDS } from "./causes";
 import { RING_BEATS } from "./history";
 import { DEBUG } from "./debug";
 import { DebugPanel } from "./DebugPanel";
@@ -366,7 +367,7 @@ export function Timeline(props: {
                 {name}
                 {DEBUG && cause && (
                   <span data-debug class="text-dim">
-                    · {cause}
+                    · {CAUSE_WORDS[cause]}
                   </span>
                 )}
               </div>
