@@ -1,5 +1,7 @@
 # Secuencias autogeneradas, paletas, fundidos en Calma y niveles aprendidos persistentes
 
+> Actualización 2026-11-20: los patrones son 33 (15 Ritmo, 10 Calma, 8 Subidón), no 35; ver `2026-11-20-e2e-feedback-buildup-zoom-sidebar-design.md`. Donde este texto dice 35, léase 33.
+
 Fecha: 2026-11-14. Complementa la spec principal (`2026-11-06-deeboo-lighting-design.md`, §6.4 patrones y §6.2 detector).
 Las decisiones salen de la sesión de diseño con páginas de propuestas (`.superpowers/brainstorm/generated-proposals-3.html`,
 `palette-final.html`). El texto de la app sigue en inglés.
