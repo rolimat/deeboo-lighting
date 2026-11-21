@@ -1664,6 +1664,14 @@ mod tests {
     }
 
     #[test]
+    fn the_same_rise_before_32_beats_of_calm_is_not_a_buildup_by_default() {
+        // Calm began at 33; the rise starts at 49 (16 beats old). Until it is 32 beats old (beat 65)
+        // the approach rule is silent with the default timing.
+        let m = moments(&groove(66, |k| k < 32, late_hats(49)));
+        assert!(m[33..65].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
     fn riser_tolerates_a_one_db_dip_when_tol_is_1_5() {
         // Bars at -14, -8, -9, -2 dB (beats 56..72): a 12 dB rise with a 1 dB dip, ending near the groove.
         // Only the four-bar rule applies; the earlier windows rise less than 7 dB.
