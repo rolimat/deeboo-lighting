@@ -229,8 +229,9 @@ fn unique_ids<'a>(field: &str, ids: impl Iterator<Item = &'a u32>) -> Result<(),
 
 impl Library {
     /// Removes references to another moment's sequence (a track left empty falls back to
-    /// `Generated`): old files may hold them and `validate` rejects them. Returns whether
-    /// anything changed.
+    /// `Generated`): old files may hold them and `validate` rejects them. Also lists each
+    /// reference once per moment (aliases fold removed patterns into existing ones). Returns
+    /// whether anything changed.
     pub fn drop_foreign_refs(&mut self) -> bool {
         let mut changed = false;
         let seqs = &self.sequences;
@@ -241,6 +242,12 @@ impl Library {
                 (&mut set.buildup, Moment::BuildUp),
             ] {
                 let before = m.sequences.len();
+                let mut seen = Vec::new();
+                m.sequences.retain(|r| {
+                    let new = !seen.contains(r);
+                    seen.push(*r);
+                    new
+                });
                 m.sequences.retain(|r| match r {
                     SeqRef::Id(id) => !seqs.iter().any(|(s, q)| s == id && q.moment != moment),
                     _ => true,
@@ -254,7 +261,7 @@ impl Library {
         changed
     }
 
-    /// First-run library (spec §6.3): the 9 built-in palettes, no sequences (the 35 patterns are
+    /// First-run library (spec §6.3): the 9 built-in palettes, no sequences (the 33 patterns are
     /// always available) and the active set "Auto". `library_store::load` only uses this when no
     /// stored library is usable.
     #[must_use]
