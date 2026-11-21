@@ -10,6 +10,21 @@ const ev = (n: number): DetectorEvent => ({
   subRefDb: -n,
   highRefDb: -n,
   moment: "rhythm",
+  cause: null,
+  progress: {
+    highBarDb: null,
+    riserBars: 0,
+    riserNeedBars: 4,
+    riserRiseDb: 0,
+    riserNeedDb: 6,
+    approachCalmBars: 0,
+    approachNeedBars: 4,
+    approachAboveDb: 0,
+    approachRiseDb: 0,
+    approachNeedRiseDb: 2,
+    levelOn: false,
+    levelAboveDb: null,
+  },
 });
 
 it("ring_keeps_last_32_beats", () => {

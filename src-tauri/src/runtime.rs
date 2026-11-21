@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use crate::refs_store::{self, RefsFile};
 use light_core::clock::{PhraseBars, Position};
-use light_core::detect::{BandAnalyzer, BeatFeatures, DetectorParams, Moment, MomentDetector};
+use light_core::detect::{
+    BandAnalyzer, BeatFeatures, Cause, DetectorParams, Moment, MomentDetector, Progress,
+};
 use light_core::engine::{Engine, EngineConfig, EngineStatus, UiCommand};
 use light_core::library::Library;
 use light_core::model::{Palette, Sequence};
@@ -129,13 +131,16 @@ fn key_of(input: Option<&str>) -> String {
     input.unwrap_or(crate::settings::SYSTEM_DEFAULT).to_string()
 }
 
+/// One beat's features, moment, cause of the last change and evidence progress.
+type Beat = (BeatFeatures, Moment, Option<Cause>, Progress);
+
 /// Runs the beat's audio through the detector: its moment, or `None` without audio.
 fn detect_beat<A: AudioPort>(
     audio: &mut A,
     detect: &mut Option<Detect>,
     buf: &mut Vec<f32>,
     level_db: &mut Option<f32>,
-    features: &mut Option<(BeatFeatures, Moment)>,
+    features: &mut Option<Beat>,
     closed: Option<Position>,
 ) -> Option<Moment> {
     let d = detect.as_mut()?;
@@ -150,7 +155,7 @@ fn detect_beat<A: AudioPort>(
     let partial = std::mem::take(&mut d.fresh);
     let closed = closed.filter(|_| !partial);
     let (moment, f) = d.moment.on_beat(closed);
-    *features = f.map(|f| (f, moment));
+    *features = f.map(|f| (f, moment, d.moment.cause(), d.moment.progress()));
     Some(moment)
 }
 
@@ -165,6 +170,9 @@ pub struct DetectorEvent {
     pub sub_ref_db: f32,
     pub high_ref_db: f32,
     pub moment: Moment,
+    /// Why the moment last changed (`None` before any change).
+    pub cause: Option<Cause>,
+    pub progress: Progress,
 }
 
 type MeterSink = Box<dyn FnMut(&DetectorEvent)>;
@@ -657,7 +665,7 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
     }
 
     /// Sends this beat's features to the editor if it is watching and the rate cap allows.
-    fn meter(&mut self, f: &BeatFeatures, moment: Moment, now_us: u64) {
+    fn meter(&mut self, (f, moment, cause, progress): Beat, now_us: u64) {
         if !self.watching
             || self
                 .meter_last_us
@@ -677,6 +685,8 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
             sub_ref_db: f.sub_ref_db,
             high_ref_db: f.high_ref_db,
             moment,
+            cause,
+            progress,
         });
     }
 
@@ -742,8 +752,8 @@ impl<M: MidiPort, A: AudioPort, E: FnMut(&Status)> Core<M, A, E> {
                 if features.is_some() && self.refs_changed() {
                     self.refs_dirty = true;
                 }
-                if let Some((f, moment)) = features {
-                    self.meter(&f, moment, now_us);
+                if let Some(beat) = features {
+                    self.meter(beat, now_us);
                 }
             }
             Input::SourcesChanged(list) => self.on_sources(&list),
@@ -1937,6 +1947,32 @@ mod tests {
         c.handle(Input::DetectionWatch(false), 3_500_000);
         run_ticks(&mut c, 169..241, 20_000);
         assert_eq!(seen.borrow().len(), n, "closed: zero events");
+    }
+
+    #[test]
+    fn a_detector_event_carries_cause_and_progress_in_camel_case() {
+        let e = DetectorEvent {
+            kick_db: -20.0,
+            sub_db: -20.0,
+            high_db: -20.0,
+            kick_ref_db: -20.0,
+            sub_ref_db: -20.0,
+            high_ref_db: -20.0,
+            moment: Moment::Calm,
+            cause: Some(Cause::HatsDrop),
+            progress: Progress {
+                riser_bars: 2,
+                level_above_db: Some(1.5),
+                ..Progress::default()
+            },
+        };
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["cause"], "hatsDrop");
+        assert_eq!(v["progress"]["riserBars"], 2);
+        assert_eq!(v["progress"]["levelAboveDb"], 1.5);
+        assert!(v["progress"]["highBarDb"].is_null());
+        let none = DetectorEvent { cause: None, ..e };
+        assert!(serde_json::to_value(&none).unwrap()["cause"].is_null());
     }
 
     #[test]

@@ -144,6 +144,41 @@ export interface DetectorEvent {
   subRefDb: number;
   highRefDb: number;
   moment: MomentName;
+  /** Why the moment last changed; null before any change. */
+  cause: Cause | null;
+  progress: Progress;
+}
+
+export type Cause =
+  | "riser"
+  | "approach"
+  | "level"
+  | "quiet"
+  | "teaser"
+  | "groove"
+  | "kickDrop"
+  | "hatsDrop"
+  | "slowReturn"
+  | "collapse"
+  | "timeout"
+  | "softBreak"
+  | "phraseStart"
+  | "undo";
+
+/** Mirrors `Progress` in `light-core`: how close the Build-up evidence is. */
+export interface Progress {
+  highBarDb: number | null;
+  riserBars: number;
+  riserNeedBars: number;
+  riserRiseDb: number;
+  riserNeedDb: number;
+  approachCalmBars: number;
+  approachNeedBars: number;
+  approachAboveDb: number;
+  approachRiseDb: number;
+  approachNeedRiseDb: number;
+  levelOn: boolean;
+  levelAboveDb: number | null;
 }
 
 /** The editor's only door to Rust; components never import `@tauri-apps/api`. */
