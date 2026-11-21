@@ -575,7 +575,16 @@ impl MomentDetector {
             mono &= self.bars.get(i) >= top - self.p.riser_tol_db;
             top = top.max(self.bars.get(i));
         }
-        mono && last - first >= self.p.riser_db && last >= high_ref_db - self.p.riser_level_db
+        mono && last - first >= self.p.riser_db
+            && self.climbed_before_last(from)
+            && last >= high_ref_db - self.p.riser_level_db
+    }
+
+    /// The bar before the last already rose `riser_db / 3` over the first of the window (from `from`):
+    /// a short fill in the last bar alone is not a climb. Two-bar windows have no such bar.
+    fn climbed_before_last(&self, from: usize) -> bool {
+        let len = self.bars.len();
+        len - from < 3 || self.bars.get(len - 2) - self.bars.get(from) >= self.p.riser_db / 3.0
     }
 
     /// The state after this beat; `self.why` says why it changed. `evidence`: what a riser or an approach
@@ -1669,6 +1678,17 @@ mod tests {
             ..DetectorParams::default()
         };
         let m = moments(&drive_with(&sig, &lens, seven, |_| None));
+        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
+    fn a_short_fill_inside_a_break_is_not_a_buildup_with_the_defaults() {
+        // Beats 50..52 at +10 dB: the bar means are about [0, 0, +5], which is not a climb.
+        let m = moments(&groove(
+            72,
+            |k| k < 32,
+            |k| if (50..52).contains(&k) { 10.0 } else { 0.0 },
+        ));
         assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
     }
 
