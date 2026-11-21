@@ -264,7 +264,7 @@ como sin estas reglas.
   - Calma o Subidón en el 1 de frase: activa (+1 acierto, +1 falsa alarma, más rápida).
   - Compases alineados con el clock: activa tras la escucha del usuario (2026-11-11): el subidón que se retrasaba entra en un punto que el usuario da por bueno.
   - Riser de 3 compases: activa tras la escucha del usuario (2026-11-11): sin efecto medible con los compases alineados.
-  - Subidón más temprano (2026-11-21): approach a 4 compases (`approach_calm_beats` 16, `approach_bars` 4), tolerancia del riser `riser_tol_db`, 3 compases subiendo en cualquier punto de la frase (`riser_any_three`) (la regla de nivel se midió y se descartó). Detalle en `2026-11-21-earlier-buildup-and-debug-view-design.md` §2-§3.
+  - Subidón más temprano (2026-11-21): approach a 8 compases y 2 dB (`approach_calm_beats` 32, `approach_bars` 8, `approach_above_db` 2; valores en §7 de `2026-11-21-earlier-buildup-and-debug-view-design.md`), tolerancia del riser `riser_tol_db`, 3 compases subiendo en cualquier punto de la frase (`riser_any_three`) (la regla de nivel se midió y se descartó). Detalle en `2026-11-21-earlier-buildup-and-debug-view-design.md` §2-§3.
 
 ### 6.3 Modelo
 

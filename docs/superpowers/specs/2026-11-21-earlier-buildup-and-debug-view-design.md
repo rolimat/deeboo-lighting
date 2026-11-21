@@ -25,7 +25,7 @@ El usuario quiere detectar el Build-up antes y poder ver por qué el detector de
    - una media de compás puede quedar hasta **`riser_tol_db`** por debajo del máximo anterior (hoy 0.5 dB fijos; se
      mide 1.0 y 1.5);
    - **3 compases** que suben bastan en cualquier punto de la frase (hoy solo en la segunda mitad);
-   - el knob ya baja a 1 dB.
+   - el knob del riser va de 2 a 15 dB (§8).
 3. Regla de nivel: descartada por el usuario tras la medición (2026-11-21); no se implementa.
 
 ## 3. Medición
@@ -70,6 +70,7 @@ Cambiar otras reglas (Calm, drop), mostrar la vista al usuario final, guardar la
 
 - **Approach:** 8 compases y 2 dB (a 4 compases añadía 3 Build-up falsos y retrasaba uno real 9 s).
 - **Riser de 3 compases en cualquier punto:** activo.
+- **Guarda del riser:** con 3 o más compases, el penúltimo ya debe haber subido `riser_db / 3` sobre el primero (un fill de dos beats en el último compás no es una subida); la subida que muestra el panel de depuración es la menor de la total y 3 veces la del penúltimo.
 - **Tolerancia del riser:** 0.5 dB (1.0 y 1.5 sin efecto).
 - **Umbral del riser:** 5 dB por defecto (el más bajo sin falsas alarmas extra).
 - **Regla de nivel:** medida y descartada (añadía 1 falso en song-2 y no acertaba ninguno); se eliminó del código.
