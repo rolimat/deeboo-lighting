@@ -277,6 +277,12 @@ pub fn load(path: &Path) -> Settings {
     };
     match serde_json::from_str::<Settings>(&text) {
         Ok(mut s) => {
+            // The riser range used to start at 1 dB: raise old values instead of resetting the file.
+            let min = *RISER_DB.start();
+            s.riser_db = s.riser_db.max(min);
+            for c in s.detector_by_input.values_mut() {
+                c.riser_db = c.riser_db.max(min);
+            }
             // Same order as `AppState::persist`: a 7.96 that saves as 8.0 must load as 8.0.
             s.round_thresholds();
             match s.validate() {
@@ -700,6 +706,22 @@ mod tests {
             (u.calm_kick_db, u.calm_high_db, u.riser_db),
             (16.0, 12.0, 7.0)
         );
+    }
+
+    #[test]
+    fn old_riser_below_the_range_loads_clamped_and_keeps_the_rest() {
+        let (_d, p) = tmp();
+        std::fs::write(
+            &p,
+            r#"{"midiSource":"IAC Driver","brightnessPct":40,"riserDb":1.5,
+                "detectorByInput":{"USB":{"sensitivity":5,"calmKickDb":16,"calmHighDb":12,"riserDb":1.0}}}"#,
+        )
+        .unwrap();
+        let s = load(&p);
+        assert_eq!(s.riser_db, 2.0);
+        assert_eq!(s.detector_by_input["USB"].riser_db, 2.0);
+        assert_eq!(s.midi_source.as_deref(), Some("IAC Driver"));
+        assert_eq!(s.brightness_pct, 40);
     }
 
     #[test]
