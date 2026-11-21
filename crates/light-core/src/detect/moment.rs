@@ -63,6 +63,8 @@ pub struct DetectorParams {
     pub riser_db: f32,
     /// ...and the last is at most this far below the highs reference.
     pub riser_level_db: f32,
+    /// A riser bar may sit this far under the highest bar before it.
+    pub riser_tol_db: f32,
     /// Approach: after this many beats of Calm, the 4-beat highs mean is at least `approach_above_db`
     /// over the highs reference and `approach_rise_db` over its value `4 * approach_bars` beats ago.
     pub approach_calm_beats: u32,
@@ -93,9 +95,14 @@ pub struct PositionRules {
     pub phrase_quick: bool,
     pub bar_drop: bool,
     pub late_riser: bool,
+    /// Three rising bars count anywhere in the phrase, not only in its second half.
+    pub riser_any_three: bool,
     pub aligned_bars: bool,
     /// A phrase's first bar with the kick and sub down but the highs up is a Calm (no slow return).
     pub soft_break: bool,
+    /// From Calm, a clock-aligned bar closing in a phrase's second half with its highs mean at least
+    /// `riser_db` over the highs reference is Build-up evidence.
+    pub level_buildup: bool,
 }
 
 impl PositionRules {
@@ -103,15 +110,19 @@ impl PositionRules {
         phrase_quick: true,
         bar_drop: true,
         late_riser: true,
+        riser_any_three: true,
         aligned_bars: true,
         soft_break: true,
+        level_buildup: false,
     };
     pub const NONE: Self = Self {
         phrase_quick: false,
         bar_drop: false,
         late_riser: false,
+        riser_any_three: false,
         aligned_bars: false,
         soft_break: false,
+        level_buildup: false,
     };
 }
 
@@ -141,10 +152,11 @@ impl Default for DetectorParams {
             riser_bars: 4,
             riser_db: 7.0,
             riser_level_db: 6.0,
-            approach_calm_beats: 32,
+            riser_tol_db: 0.5,
+            approach_calm_beats: 16,
             approach_above_db: 2.0,
             approach_rise_db: 2.0,
-            approach_bars: 8,
+            approach_bars: 4,
             collapse_beats: 16,
             refractory_beats: 16,
             buildup_max_beats: 96,
@@ -256,9 +268,6 @@ pub struct LearnedRefs {
     pub sub: Vec<f32>,
     pub high: Vec<f32>,
 }
-/// A riser bar may sit this far under the highest bar before it.
-const MONO_TOL: f32 = 0.5;
-
 /// Pushes `v` into a shifting window (oldest first).
 fn shift<const N: usize>(w: &mut [f32; N], v: f32) {
     w.rotate_left(1);
@@ -453,22 +462,28 @@ impl MomentDetector {
         self.bars.push(self.bar_sum / 4.0);
         self.bar_sum = 0.0;
         self.bar_beats = 0;
-        // Second half of the phrase: the last three bars may also be a riser, besides the four.
-        let late =
-            self.p.rules.late_riser && closed.is_some_and(|c| c.bar_in_phrase > c.phrase_bars / 2);
+        // The last three bars may also be a riser, besides the four: anywhere in the phrase, or in its second half.
+        let second_half = closed.is_some_and(|c| c.bar_in_phrase > c.phrase_bars / 2);
+        let r = self.p.rules;
+        let late = closed.is_some() && r.riser_any_three || r.late_riser && second_half;
         let n = self.bars.cap;
-        (self.bars.is_full() && self.rising(n, high_ref_db))
+        let level = r.level_buildup
+            && clock.is_some()
+            && second_half
+            && self.bars.get(self.bars.len() - 1) >= high_ref_db + self.p.riser_db;
+        level
+            || (self.bars.is_full() && self.rising(n, high_ref_db))
             || (late && n > 1 && self.bars.len() >= n - 1 && self.rising(n - 1, high_ref_db))
     }
 
-    /// The last `n` bar means rise monotonically (within `MONO_TOL`) by `riser_db`, ending near the highs reference.
+    /// The last `n` bar means rise monotonically (within `riser_tol_db`) by `riser_db`, ending near the highs reference.
     fn rising(&self, n: usize, high_ref_db: f32) -> bool {
         let from = self.bars.len() - n;
         let (first, last) = (self.bars.get(from), self.bars.get(self.bars.len() - 1));
         let mut top = first;
         let mut mono = true;
         for i in from + 1..self.bars.len() {
-            mono &= self.bars.get(i) >= top - MONO_TOL;
+            mono &= self.bars.get(i) >= top - self.p.riser_tol_db;
             top = top.max(self.bars.get(i));
         }
         mono && last - first >= self.p.riser_db && last >= high_ref_db - self.p.riser_level_db
@@ -1151,7 +1166,8 @@ mod tests {
         assert_eq!((p.calm_after_quiet, p.rhythm_after_full), (2, 2));
         assert_eq!((p.hats_after_full, p.slow_return_beats), (4, 24));
         assert_eq!((p.teaser_beats, p.riser_bars), (16, 4));
-        assert_eq!((p.approach_calm_beats, p.approach_bars), (32, 8));
+        assert_eq!((p.approach_calm_beats, p.approach_bars), (16, 4));
+        assert!((p.riser_tol_db - 0.5).abs() < f32::EPSILON);
         assert_eq!((p.collapse_beats, p.refractory_beats), (16, 16));
         assert_eq!(p.buildup_max_beats, 96);
         assert_eq!(p.rules, PositionRules::ALL);
@@ -1293,6 +1309,12 @@ mod tests {
         assert!(m[59..].iter().all(|&m| m == Moment::BuildUp), "{m:?}");
     }
 
+    /// The rules before `riser_any_three`: 3 rising bars count only in a phrase's second half.
+    const ONLY_LATE: PositionRules = PositionRules {
+        riser_any_three: false,
+        ..PositionRules::ALL
+    };
+
     /// Break from beat 32; a spoiler bar (beats 76..80) then three rising bars (80..92) ending on a
     /// bar that closes at beat 91. Beat `i` closes at clock beat `i + off`.
     fn three_bar_riser(off: u64, phrase: PhraseBars, rules: PositionRules) -> Vec<Moment> {
@@ -1313,12 +1335,21 @@ mod tests {
         rules: PositionRules,
         hats: impl Fn(usize) -> f32,
     ) -> Vec<Moment> {
-        let lens = beats(128.0, 100);
-        let sig = synth(&lens, |k| k < 32, |_| true, hats);
         let params = DetectorParams {
             rules,
             ..DetectorParams::default()
         };
+        riser_run_with(off, phrase, params, hats)
+    }
+
+    fn riser_run_with(
+        off: u64,
+        phrase: PhraseBars,
+        params: DetectorParams,
+        hats: impl Fn(usize) -> f32,
+    ) -> Vec<Moment> {
+        let lens = beats(128.0, 100);
+        let sig = synth(&lens, |k| k < 32, |_| true, hats);
         let o = drive_with(&sig, &lens, params, |i| {
             Some(Position::at(i as u64 + off, false, phrase))
         });
@@ -1336,15 +1367,22 @@ mod tests {
     #[test]
     fn three_rising_bars_early_are_not() {
         // Shifted by 16 beats: the bar closes as bar 3 of 8.
-        let m = three_bar_riser(16, PhraseBars::Eight, PositionRules::ALL);
+        let m = three_bar_riser(16, PhraseBars::Eight, ONLY_LATE);
         assert_eq!(m[91], Moment::Calm, "{m:?}");
+    }
+
+    #[test]
+    fn three_rising_bars_count_in_the_first_half_with_riser_any_three() {
+        let m = three_bar_riser(16, PhraseBars::Eight, PositionRules::ALL);
+        assert_eq!(m[90], Moment::Calm, "{m:?}");
+        assert_eq!(m[91], Moment::BuildUp, "{m:?}");
     }
 
     #[test]
     fn late_riser_off_needs_four() {
         let rules = PositionRules {
             late_riser: false,
-            ..PositionRules::ALL
+            ..ONLY_LATE
         };
         let m = three_bar_riser(0, PhraseBars::Eight, rules);
         assert_eq!(m[91], Moment::Calm, "{m:?}");
@@ -1355,7 +1393,7 @@ mod tests {
     fn sixteen_bar_phrase_second_half_starts_at_bar_nine() {
         let ninth = three_bar_riser(8, PhraseBars::Sixteen, PositionRules::ALL);
         assert_eq!(ninth[91], Moment::BuildUp, "{ninth:?}");
-        let eighth = three_bar_riser(4, PhraseBars::Sixteen, PositionRules::ALL);
+        let eighth = three_bar_riser(4, PhraseBars::Sixteen, ONLY_LATE);
         assert_eq!(eighth[91], Moment::Calm, "{eighth:?}");
     }
 
@@ -1430,19 +1468,89 @@ mod tests {
     }
 
     #[test]
-    fn the_same_rise_after_16_beats_of_calm_is_not_a_buildup_yet() {
-        // Calm began at 33: until it is 32 beats old (beat 66) the approach rule is silent.
+    fn approach_fires_after_four_bars_of_calm() {
+        // Calm began at 33; the rise starts at 49, when Calm is 16 beats old (it took 32 before).
         let m = moments(&groove(66, |k| k < 32, late_hats(49)));
+        assert!(m[33..49].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        assert_eq!(m[65], Moment::BuildUp, "{m:?}");
+        // Calm only 12 beats old when the rise starts and 16 beats are needed: nothing yet at 48.
+        let m = moments(&groove(60, |k| k < 32, late_hats(45)));
+        assert_eq!(m[47], Moment::Calm, "{m:?}");
+    }
+
+    #[test]
+    fn riser_tolerates_a_one_db_dip_when_tol_is_1_5() {
+        // Bars at -14, -8, -9, -2 dB (beats 56..72): a 12 dB rise with a 1 dB dip, ending near the groove.
+        // Only the four-bar rule applies; the earlier windows rise less than 7 dB.
+        let hats = |k: usize| match k {
+            0..=31 => 0.0,
+            32..=59 => -14.0,
+            60..=63 => -8.0,
+            64..=67 => -9.0,
+            _ => -2.0,
+        };
+        let rules = PositionRules {
+            late_riser: false,
+            ..ONLY_LATE
+        };
+        let tol = |riser_tol_db| DetectorParams {
+            riser_tol_db,
+            rules,
+            ..DetectorParams::default()
+        };
+        let m = riser_run_with(0, PhraseBars::Eight, tol(1.5), hats);
+        assert_eq!(m[70], Moment::Calm, "{m:?}");
+        assert_eq!(m[71], Moment::BuildUp, "{m:?}");
+        let m = riser_run_with(0, PhraseBars::Eight, tol(0.5), hats);
+        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    /// Break from beat 32 with hats 3 dB over the groove, but the bar at beats 80..84 8 dB over it:
+    /// a flat bar at the level, no riser (5 dB rise) and no approach (switched off).
+    fn level_run(off: u64, rules: PositionRules) -> Vec<Moment> {
+        let params = DetectorParams {
+            rules,
+            approach_above_db: 100.0,
+            ..DetectorParams::default()
+        };
+        riser_run_with(off, PhraseBars::Eight, params, |k| match k {
+            0..=31 => 0.0,
+            80..=83 => 8.0,
+            _ => 3.0,
+        })
+    }
+
+    const LEVEL: PositionRules = PositionRules {
+        level_buildup: true,
+        ..PositionRules::ALL
+    };
+
+    #[test]
+    fn level_rule_off_by_default() {
+        let (all, none) = (PositionRules::ALL, PositionRules::NONE);
+        assert!(!all.level_buildup && !none.level_buildup);
+        let m = level_run(36, PositionRules::ALL);
         assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
     }
 
     #[test]
+    fn level_rule_fires_in_second_half_only() {
+        // Beat 83 closes bar 6 of 8 (off 36) or bar 2 of 8 (off 20).
+        let m = level_run(36, LEVEL);
+        assert_eq!(m[82], Moment::Calm, "{m:?}");
+        assert_eq!(m[83], Moment::BuildUp, "{m:?}");
+        let m = level_run(20, LEVEL);
+        assert!(m[33..84].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
     fn a_short_fill_inside_a_break_is_not_a_buildup() {
-        // Two loud beats of hats (a fill) do not make a bar that rises 7 dB.
+        // Two loud beats of hats (a fill) do not make a bar that rises 7 dB. They come before the approach
+        // rule wakes up (16 beats of Calm); after that the 4-beat mean would see them.
         let o = groove(
             72,
             |k| k < 32,
-            |k| if (50..52).contains(&k) { 10.0 } else { 0.0 },
+            |k| if (40..42).contains(&k) { 10.0 } else { 0.0 },
         );
         let m = moments(&o);
         assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");

@@ -16,7 +16,7 @@ mod tracker;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use light_core::clock::PhraseBars;
 use light_core::detect::bands::BandAnalyzer;
-use light_core::detect::moment::{DetectorParams, Moment, PositionRules};
+use light_core::detect::moment::{DetectorParams, Moment};
 use live::{BLOCK, LiveOrder, Transition};
 use std::fmt;
 use std::path::PathBuf;
@@ -24,7 +24,9 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "usage: detect-probe <audio> [--labels file.json] [--min-beats 4] [--timeline] [--bpm 128] [--realtime]
-       [--features [from-to]] [--downbeat <s>]... [--phrase 4|8|16] [--rules all|none|calm,drop,riser,bars] (default: the app's rules)";
+       [--features [from-to]] [--downbeat <s>]... [--phrase 4|8|16] [--rules all|none|calm,drop,riser,bars] (default: the app's rules)
+       [--set key=value]... (approach_calm_beats, approach_bars, approach_rise_db, approach_above_db, riser_db, riser_tol_db,
+       riser_any_three, level_buildup; after --rules)";
 const TOLERANCE_S: f64 = 4.0;
 
 #[derive(Debug)]
@@ -66,7 +68,7 @@ struct Args {
     realtime: bool,
     downbeats: Vec<f64>,
     phrase: PhraseBars,
-    rules: PositionRules,
+    params: DetectorParams,
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, CliError> {
@@ -81,7 +83,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, CliError> {
         realtime: false,
         downbeats: Vec::new(),
         phrase: PhraseBars::Eight,
-        rules: DetectorParams::default().rules,
+        params: DetectorParams::default(),
     };
     let mut audio = None;
     let mut it = args.peekable();
@@ -124,7 +126,11 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, CliError> {
             }
             "--rules" => {
                 let v = it.next().ok_or_else(|| bad("--rules"))?;
-                a.rules = live::parse_rules(&v).map_err(CliError::Usage)?;
+                a.params.rules = live::parse_rules(&v).map_err(CliError::Usage)?;
+            }
+            "--set" => {
+                let v = it.next().ok_or_else(|| bad("--set"))?;
+                live::set_param(&mut a.params, &v).map_err(CliError::Usage)?;
             }
             "--features" => {
                 // The range is optional: only a next argument shaped like from-to is one.
@@ -185,10 +191,7 @@ fn run(args: &Args) -> Result<(), CliError> {
     }
     let positions =
         live::positions(&tracked.beats, &args.downbeats, args.phrase).map_err(CliError::Usage)?;
-    let params = DetectorParams {
-        rules: args.rules,
-        ..DetectorParams::default()
-    };
+    let params = args.params;
     let mut live = LiveOrder::new(rate, tracked.beats.clone(), params, positions.clone());
     let mut found: Vec<Transition> = Vec::new();
     if args.realtime {
@@ -346,5 +349,38 @@ mod tests {
         assert_eq!(a.audio, PathBuf::from("3-song.mp3"));
         let a = parse(&["--features", "160-215", "x.mp3"]).unwrap();
         assert_eq!(a.features_range, Some((160.0, 215.0)));
+    }
+
+    #[test]
+    fn set_parses_known_keys_and_rejects_the_rest() {
+        let a = parse(&[
+            "x.mp3",
+            "--set",
+            "approach_bars=6",
+            "--set",
+            "riser_tol_db=1.5",
+            "--set",
+            "level_buildup=true",
+            "--set",
+            "riser_any_three=false",
+        ])
+        .unwrap();
+        let p = a.params;
+        assert_eq!(p.approach_bars, 6);
+        assert!((p.riser_tol_db - 1.5).abs() < f32::EPSILON);
+        assert!(p.rules.level_buildup && !p.rules.riser_any_three);
+        for bad in [
+            "nope=1",
+            "approach_bars=x",
+            "level_buildup=1",
+            "riser_db",
+            "riser_db=nan",
+        ] {
+            assert!(
+                matches!(parse(&["x.mp3", "--set", bad]), Err(CliError::Usage(_))),
+                "{bad}"
+            );
+        }
+        assert!(parse(&["x.mp3", "--set"]).is_err());
     }
 }

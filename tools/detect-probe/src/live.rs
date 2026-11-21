@@ -88,6 +88,41 @@ pub fn parse_rules(s: &str) -> Result<PositionRules, String> {
     Ok(r)
 }
 
+/// `--set key=value`: one detector parameter (numbers must be finite; flags are `true` or `false`).
+pub fn set_param(p: &mut DetectorParams, kv: &str) -> Result<(), String> {
+    let (k, v) = kv.split_once('=').ok_or("--set needs key=value")?;
+    let num = || {
+        v.parse::<f32>()
+            .ok()
+            .filter(|x| x.is_finite())
+            .ok_or_else(|| format!("bad number for {k}"))
+    };
+    let flag = || {
+        v.parse::<bool>()
+            .map_err(|_| format!("bad flag for {k} (true or false)"))
+    };
+    match k {
+        "approach_calm_beats" => {
+            p.approach_calm_beats = v.parse().map_err(|_| format!("bad integer for {k}"))?;
+        }
+        "approach_bars" => {
+            p.approach_bars = v
+                .parse()
+                .ok()
+                .filter(|&n| n > 0)
+                .ok_or_else(|| format!("bad integer for {k}"))?;
+        }
+        "approach_rise_db" => p.approach_rise_db = num()?,
+        "approach_above_db" => p.approach_above_db = num()?,
+        "riser_db" => p.riser_db = num()?,
+        "riser_tol_db" => p.riser_tol_db = num()?,
+        "riser_any_three" => p.rules.riser_any_three = flag()?,
+        "level_buildup" => p.rules.level_buildup = flag()?,
+        _ => return Err(format!("unknown parameter '{k}'")),
+    }
+    Ok(())
+}
+
 /// A moment change decided at beat `index` (0-based), shown at the beat time `t`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transition {
