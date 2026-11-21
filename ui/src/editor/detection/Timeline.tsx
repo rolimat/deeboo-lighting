@@ -113,16 +113,20 @@ function Lane(props: {
 }) {
   const { def, ring, t } = props;
   const box = useRef<HTMLDivElement>(null);
-  const [level, setLevel] = useState(def.zoom ?? 0);
   const refKey = REF[def.band];
   const last = ring[ring.length - 1];
-  const ref = last ? Number(last[refKey]) : -30;
+  const liveRef = last ? Number(last[refKey]) : -30;
   const shown = (l: Line) => t[l.key] - (l.above ? 0 : props.shift);
-  const lineDb = (l: Line) => ref + (l.above ? shown(l) : -shown(l));
-  // The view is frozen while a line is dragged, so the scale does not slide under the pointer.
-  const held = useRef<number | null>(null);
+  // The view centre and reference are frozen while a line is dragged, so the scale does not slide under the pointer.
+  const held = useRef<[number, number] | null>(null);
   const [, redraw] = useState(0);
-  const centre = held.current ?? centreOf(ref, def.lines.map(lineDb));
+  const ref = held.current?.[1] ?? liveRef;
+  const lineDb = (l: Line) => ref + (l.above ? shown(l) : -shown(l));
+  const centre = held.current?.[0] ?? centreOf(ref, def.lines.map(lineDb));
+  // Opens at the closest zoom (up to `def.zoom`) that holds the reference and every line; decided once.
+  const [level, setLevel] = useState(() =>
+    Math.min(def.zoom ?? 0, fitLevel(centre, [ref, ...def.lines.map(lineDb)])),
+  );
   const v = view(centre, level);
   const span = v[0] - v[1];
   return (
@@ -234,7 +238,7 @@ function Lane(props: {
               }}
               onChange={(n) => props.onChange(l.key, n + sh)}
               onDrag={(on) => {
-                held.current = on ? centre : null;
+                held.current = on ? [centre, ref] : null;
                 redraw((n) => n + 1);
               }}
               onOutside={() => {
