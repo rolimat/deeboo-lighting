@@ -40,6 +40,8 @@ for (const [id] of TABS) {
     const root = await mountTab(id);
     expect(root.querySelectorAll(INTERACTIVE).length).toBeGreaterThan(8);
     expect(missing(root)).toEqual([]);
+    // Unmount so the tab drops its mock subscriptions before jsdom goes away.
+    await act(async () => render(null, root));
     root.remove();
   });
 }

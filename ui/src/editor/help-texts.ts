@@ -129,9 +129,14 @@ export const H = {
   momentChanges: "How readily the show moves to Calm or Build-up: Steady, Balanced or Reactive.",
   resetDefaults: "Put the sensitivity and the three thresholds back to their defaults.",
   changeInSetup: "Open Setup to change the clock input or the audio device.",
-  thresholdKick: "How far the kick must fall below its reference to count as a break.",
-  thresholdRiser: "How far the highs must climb above their reference to count as a riser.",
-  thresholdHigh: "How far the highs must fall below their reference to help Calm.",
+  thresholdKick: (v: string) =>
+    `Kick drop · ${v} dB below. A beat counts as quiet when the kick falls more than ${v} dB below its usual level. Two quiet beats in a row during Rhythm switch to Calm. Lower: Calm comes in more easily.`,
+  thresholdHigh: (v: string) =>
+    `Highs drop · ${v} dB below. A beat also counts as quiet when the hi-hats fall more than ${v} dB below their usual level while the kick is already weaker. It covers breaks where the hats go but some kick remains. Lower: Calm comes in more easily.`,
+  thresholdRiser: (v: string) =>
+    `Highs climb · ${v} dB. From Calm, Build-up comes in when the hi-hats climb at least ${v} dB over 3–4 bars, bar after bar. It is a climb, not a level. Lower: earlier Build-ups, but more false ones.`,
+  sensitivityNote:
+    "The Moment changes slider shifts this value: each step towards Reactive lowers it by 1 dB.",
   thresholdDrag: "Drag to change. Hold Shift for 0.1 dB steps.",
   knob: (def: number) =>
     `Drag up or down, scroll, or use the arrow keys: 1 dB per step. Hold Shift for 0.1 dB steps. Double-click resets it to ${def} dB.`,

@@ -65,8 +65,27 @@ const beat = (over: Partial<DetectorEvent> = {}): DetectorEvent => ({
   subRefDb: -30,
   highRefDb: -25,
   moment: "rhythm",
+  cause: null,
+  progress: {
+    highBarDb: null,
+    riserBars: 0,
+    riserNeedBars: 4,
+    riserRiseDb: 0,
+    riserNeedDb: 6,
+    riserNearRef: true,
+    approachCalmBars: 0,
+    approachNeedBars: 4,
+    approachAboveDb: 0,
+    approachNeedAboveDb: 2,
+    approachRiseDb: 0,
+    approachNeedRiseDb: 2,
+  },
   ...over,
 });
+
+/** Highs bar mean -20, the climb began 4 dB lower: start -24. */
+const climbing = (over: Partial<DetectorEvent> = {}): DetectorEvent =>
+  beat({ progress: { ...beat().progress, highBarDb: -20, riserRiseDb: 4 }, ...over });
 
 let root: HTMLElement;
 let push: (e: DetectorEvent) => void = () => {};
@@ -129,7 +148,7 @@ it("threshold_label_in_words", async () => {
   const text = root.textContent ?? "";
   expect(text).toContain("Calm when 14.0 dB below");
   expect(text).toContain("Calm when 10.0 dB below");
-  expect(text).toContain("Build-up when 6.0 dB above");
+  expect(text).not.toContain("Build-up when");
   expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("14");
 });
 
@@ -142,7 +161,7 @@ it("calm_lines_show_the_sensitivity_the_detector_applies", async () => {
   const text = root.textContent ?? "";
   expect(text).toContain("Calm when 10.0 dB below");
   expect(text).toContain("Calm when 6.0 dB below");
-  expect(text).toContain("Build-up when 6.0 dB above");
+  expect(text).not.toContain("Build-up when");
   expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("10");
   await act(async () => {
     line("Kick drop").dispatchEvent(
@@ -164,7 +183,6 @@ it("threshold_labels_sit_on_their_line_inside_the_lane", async () => {
   await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
   expect(root.querySelector("[data-readouts]")).toBeNull();
   const high = root.querySelector("[data-lane='high']")?.textContent ?? "";
-  expect(high).toContain("Build-up when 6.0 dB above");
   expect(high).toContain("Calm when 10.0 dB below");
 });
 
@@ -174,9 +192,9 @@ const knob = (name: string) => {
   if (!el) throw new Error(`no ${name}`);
   return el;
 };
-const lane = async (n = 1) => {
+const lane = async (n = 1, ev: DetectorEvent = beat()) => {
   await mount();
-  for (let i = 0; i < n; i++) push(beat());
+  for (let i = 0; i < n; i++) push(ev);
   await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
 };
 const click = async (label: string, id: string) => {
@@ -369,9 +387,11 @@ it("drag_threshold_saves_db_in_range", async () => {
 });
 
 it("arrow_keys_move_a_threshold_by_one_db", async () => {
-  await mount();
+  await lane(1, climbing());
   await act(async () => {
-    line("Riser").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    line("Highs climb").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
+    );
     await vi.advanceTimersByTimeAsync(400);
   });
   expect(api.setDetectionThresholds).toHaveBeenCalledWith({
@@ -401,7 +421,7 @@ it("reset_to_defaults_is_one_call", async () => {
   });
   expect(api.saveSettings).toHaveBeenCalledTimes(1);
   expect(api.saveSettings).toHaveBeenCalledWith(
-    settings({ sensitivity: 5, calmKickDb: 16, calmHighDb: 12, riserDb: 7 }),
+    settings({ sensitivity: 5, calmKickDb: 16, calmHighDb: 12, riserDb: 5 }),
   );
   expect(line("Kick drop").getAttribute("aria-valuenow")).toBe("16");
 });
@@ -426,7 +446,7 @@ it("reset_keeps_settings_changed_elsewhere_since_mount", async () => {
       sensitivity: 5,
       calmKickDb: 16,
       calmHighDb: 12,
-      riserDb: 7,
+      riserDb: 5,
     }),
   );
 });
@@ -555,15 +575,85 @@ it("highs_opens_at_x4_with_both_lines_inside_the_view", async () => {
   expect(root.querySelector("[data-lane-row='kick']")?.textContent).toContain("×1");
 });
 
-it("riser_knob_goes_down_to_1", async () => {
-  vi.mocked(api.getSettings).mockResolvedValue(settings({ riserDb: 1 }));
+it("riser_knob_stops_at_2", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(settings({ riserDb: 2 }));
   await lane();
-  await press(knob("Riser knob"), "ArrowDown");
-  expect(knob("Riser knob").getAttribute("aria-valuenow")).toBe("1");
+  await press(knob("Highs climb knob"), "ArrowDown");
+  expect(knob("Highs climb knob").getAttribute("aria-valuenow")).toBe("2");
+});
+
+const high = () => root.querySelector("[data-lane='high']") as HTMLElement;
+const zoomSpan = () =>
+  60 / Number(/×(\d+)/.exec(root.querySelector("[data-lane-row='high']")?.textContent ?? "")?.[1]);
+
+it("the_climb_line_spans_the_last_4_bars_at_start_plus_value", async () => {
+  await lane(1, climbing());
+  const l = line("Highs climb");
+  expect(l.style.left).toBe("50%");
+  const start = high().querySelector<HTMLElement>("[data-climb-start]");
+  expect(start?.style.left).toBe("50%");
+  expect(start?.textContent).toContain("climb start");
+  // Start -24, value 6: the line is 6 dB above the start line.
+  const gap = parseFloat(start?.style.top ?? "0") - parseFloat(l.style.top);
+  expect(gap).toBeCloseTo((6 / zoomSpan()) * 100, 0);
+  expect(high().querySelector("[data-climb-bracket]")).not.toBeNull();
+  expect(high().textContent).toContain("Build-up when the highs climb 6.0 dB in 3–4 bars");
+});
+
+it("no_climb_line_or_label_without_a_closed_bar", async () => {
+  await lane();
+  expect(root.querySelector("[role=slider][aria-label='Highs climb']")).toBeNull();
+  expect(high().querySelector("[data-climb-start]")).toBeNull();
+  expect(high().textContent).not.toContain("Build-up when");
+  expect(knob("Highs climb knob")).toBeTruthy();
+});
+
+it("dragging_the_climb_label_sets_pointer_minus_start", async () => {
+  await lane(1, climbing());
+  highBox();
+  const label = high().querySelector<HTMLElement>("[data-label]") as HTMLElement;
+  expect(label.textContent).toContain("climb");
+  const y = parseFloat(line("Highs climb").style.top);
+  await act(() => {
+    label.dispatchEvent(new MouseEvent("pointerdown", { clientY: y, bubbles: true }));
+  });
+  // 20 px up is span/5 dB higher: the value grows by that.
+  await act(async () => {
+    mouse("pointermove", y - 20);
+    mouse("pointerup", y - 20);
+    await vi.advanceTimersByTimeAsync(400);
+  });
+  expect(api.setDetectionThresholds).toHaveBeenLastCalledWith({
+    calmKickDb: 14,
+    calmHighDb: 10,
+    riserDb: Math.round(6 + zoomSpan() / 5),
+  });
+});
+
+it("knobs_show_only_their_name", async () => {
+  await lane();
+  const text = (id: string) => root.querySelector(`[data-knobs='${id}']`)?.textContent;
+  expect(text("kick")).toBe("Kick drop");
+  expect(text("high")).toBe("Highs climbHighs drop");
+});
+
+it("knobs_and_lines_explain_themselves_with_the_value", async () => {
+  await lane(1, climbing());
+  const help = (el: Element) => el.getAttribute("data-help") ?? "";
+  expect(help(knob("Kick drop knob"))).toContain("Kick drop · 14.0 dB below");
+  expect(help(knob("Kick drop knob"))).toContain("Two quiet beats in a row");
+  expect(help(knob("Kick drop knob"))).toContain("Moment changes slider");
+  expect(help(knob("Highs drop knob"))).toContain("while the kick is already weaker");
+  expect(help(knob("Highs drop knob"))).toContain("Moment changes slider");
+  expect(help(knob("Highs climb knob"))).toContain("Highs climb · 6.0 dB");
+  expect(help(knob("Highs climb knob"))).toContain("It is a climb, not a level");
+  expect(help(knob("Highs climb knob"))).not.toContain("Moment changes slider");
+  expect(help(line("Highs climb"))).toContain("It is a climb, not a level");
+  expect(help(line("Highs climb"))).toContain("Hold Shift for 0.1 dB steps.");
 });
 
 it("the_view_holds_still_while_a_line_is_dragged", async () => {
-  await lane();
+  await lane(1, climbing());
   const box = root.querySelector<HTMLElement>("[data-lane='high']");
   vi.spyOn(box as HTMLElement, "getBoundingClientRect").mockReturnValue({
     top: 0,
@@ -572,7 +662,9 @@ it("the_view_holds_still_while_a_line_is_dragged", async () => {
   const marks = () =>
     [...root.querySelectorAll("[data-lane='high'] [data-scale]")].map((e) => e.textContent);
   await act(() => {
-    line("Riser").dispatchEvent(new MouseEvent("pointerdown", { clientY: 10, bubbles: true }));
+    line("Highs climb").dispatchEvent(
+      new MouseEvent("pointerdown", { clientY: 10, bubbles: true }),
+    );
     mouse("pointermove", 10);
   });
   const during = marks();
@@ -603,16 +695,18 @@ const highBox = () => {
 };
 
 it("pointercancel_ends_the_drag", async () => {
-  await lane();
+  await lane(1, climbing());
   highBox();
   const marks = () =>
     [...root.querySelectorAll("[data-lane='high'] [data-scale]")].map((e) => e.textContent);
   await act(() => {
-    line("Riser").dispatchEvent(new MouseEvent("pointerdown", { clientY: 10, bubbles: true }));
+    line("Highs climb").dispatchEvent(
+      new MouseEvent("pointerdown", { clientY: 10, bubbles: true }),
+    );
     mouse("pointermove", 2);
   });
   const during = marks();
-  const val = line("Riser").getAttribute("aria-valuenow");
+  const val = line("Highs climb").getAttribute("aria-valuenow");
   await act(async () => {
     mouse("pointercancel", 2);
   });
@@ -620,20 +714,22 @@ it("pointercancel_ends_the_drag", async () => {
   await act(async () => {
     mouse("pointermove", 40);
   });
-  expect(line("Riser").getAttribute("aria-valuenow")).toBe(val);
+  expect(line("Highs climb").getAttribute("aria-valuenow")).toBe(val);
 });
 
 it("the_pointer_keeps_meaning_the_same_dB_when_the_reference_moves_mid_drag", async () => {
-  await lane();
+  await lane(1, climbing());
   highBox();
   await act(() => {
-    line("Riser").dispatchEvent(new MouseEvent("pointerdown", { clientY: 20, bubbles: true }));
+    line("Highs climb").dispatchEvent(
+      new MouseEvent("pointerdown", { clientY: 20, bubbles: true }),
+    );
   });
   push(beat({ highDb: -15, highRefDb: -15 }));
   await act(async () => void (await vi.advanceTimersByTimeAsync(100)));
   await act(async () => {
     mouse("pointermove", 30);
   });
-  const top = parseFloat(line("Riser").style.top);
+  const top = parseFloat(line("Highs climb").style.top);
   expect(Math.abs(top - 30)).toBeLessThan(2);
 });

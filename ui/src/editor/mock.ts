@@ -54,6 +54,22 @@ function detectorBeat(b: number): DetectorEvent {
     subRefDb,
     highRefDb,
     moment: calm ? "calm" : rise ? "buildUp" : "rhythm",
+    cause: p === 24 ? "quiet" : p === 40 ? "riser" : p === 56 ? "kickDrop" : null,
+    progress: {
+      // Always mid-climb in the mock: the start sits 3 dB under the reference, the bar mean 4 dB above it.
+      highBarDb: highRefDb - 3 + (rise ? (p - 40) * 0.8 : 4),
+      riserBars: rise ? Math.min(4, Math.floor((p - 40) / 4) + 1) : 0,
+      riserNeedBars: 4,
+      riserRiseDb: rise ? (p - 40) * 0.8 : 4,
+      riserNeedDb: 6,
+      riserNearRef: true,
+      approachCalmBars: calm ? Math.floor((p - 24) / 4) : 0,
+      approachNeedBars: 4,
+      approachAboveDb: 0,
+      approachNeedAboveDb: 2,
+      approachRiseDb: 0,
+      approachNeedRiseDb: 2,
+    },
   };
 }
 

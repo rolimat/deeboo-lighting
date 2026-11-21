@@ -1,12 +1,14 @@
 import { useEffect, useRef } from "preact/hooks";
 import { H } from "../help-texts";
 import { help } from "../shell/Help";
-import { fmtDb } from "./zoom";
 
 interface Props {
+  /** Accessible name. */
   name: string;
-  label: string;
-  above: boolean;
+  /** The name shown under the knob. */
+  title: string;
+  /** The reading in words, for assistive tech. */
+  words: string;
   value: number;
   min: number;
   max: number;
@@ -125,7 +127,7 @@ export function Knob(p: Props) {
       aria-valuemin={p.min}
       aria-valuemax={p.max}
       aria-valuenow={p.value}
-      aria-valuetext={`${p.label} when ${fmtDb(p.value)} dB ${p.above ? "above" : "below"}`}
+      aria-valuetext={p.words}
       onPointerDown={down}
       onKeyDown={key}
       onDblClick={() => set(p.def)}
@@ -159,9 +161,7 @@ export function Knob(p: Props) {
           stroke-linecap="round"
         />
       </svg>
-      <span class="text-dim">{p.label}</span>
-      <span class="text-accent">{fmtDb(p.value)} dB</span>
-      <span class="text-dim">{p.above ? "above" : "below"}</span>
+      <span class="text-dim">{p.title}</span>
     </div>
   );
 }

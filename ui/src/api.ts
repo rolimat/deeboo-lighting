@@ -59,7 +59,7 @@ export interface Settings {
   /** 0 to 500. */
   leadMs: number;
   lightsOn: boolean;
-  /** Detection panel (editor): 8 to 30, 6 to 24, 1 to 15 dB, in steps of 0.1. */
+  /** Detection panel (editor): 8 to 30, 6 to 24, 2 to 15 dB, in steps of 0.1. */
   calmKickDb: number;
   calmHighDb: number;
   riserDb: number;

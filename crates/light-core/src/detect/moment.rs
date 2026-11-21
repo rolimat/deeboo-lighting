@@ -12,6 +12,50 @@ pub enum Moment {
     BuildUp,
 }
 
+/// Why the moment last changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub enum Cause {
+    Riser,
+    Approach,
+    Quiet,
+    Teaser,
+    Groove,
+    KickDrop,
+    HatsDrop,
+    SlowReturn,
+    Collapse,
+    Timeout,
+    SoftBreak,
+    PhraseStart,
+    Undo,
+}
+
+/// How close the Build-up evidence is, as of the last `on_beat`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub struct Progress {
+    /// Mean highs of the last closed bar.
+    pub high_bar_db: Option<f32>,
+    /// Bars at the end of the history that do not fall (within the tolerance), of the `riser_need_bars` needed.
+    pub riser_bars: u8,
+    pub riser_need_bars: u8,
+    /// Rise over those bars, of `riser_need_db` needed.
+    pub riser_rise_db: f32,
+    pub riser_need_db: f32,
+    pub riser_near_ref: bool,
+    /// Bars of Calm so far (0 outside Calm), of `approach_need_bars`.
+    pub approach_calm_bars: u8,
+    pub approach_need_bars: u8,
+    /// 4-beat highs over their reference (needs `approach_need_above_db`: the param) and their rise.
+    pub approach_above_db: f32,
+    pub approach_need_above_db: f32,
+    pub approach_rise_db: f32,
+    pub approach_need_rise_db: f32,
+}
+
 /// Thresholds are dB relative to references (medians of the last `history_beats` groove beats
 /// recorded in Rhythm). Tuned on a labelled session: see `docs/detector-tuning.md`.
 #[derive(Clone, Copy, Debug)]
@@ -63,6 +107,8 @@ pub struct DetectorParams {
     pub riser_db: f32,
     /// ...and the last is at most this far below the highs reference.
     pub riser_level_db: f32,
+    /// A riser bar may sit this far under the highest bar before it.
+    pub riser_tol_db: f32,
     /// Approach: after this many beats of Calm, the 4-beat highs mean is at least `approach_above_db`
     /// over the highs reference and `approach_rise_db` over its value `4 * approach_bars` beats ago.
     pub approach_calm_beats: u32,
@@ -93,6 +139,8 @@ pub struct PositionRules {
     pub phrase_quick: bool,
     pub bar_drop: bool,
     pub late_riser: bool,
+    /// Three rising bars count anywhere in the phrase, not only in its second half.
+    pub riser_any_three: bool,
     pub aligned_bars: bool,
     /// A phrase's first bar with the kick and sub down but the highs up is a Calm (no slow return).
     pub soft_break: bool,
@@ -103,6 +151,7 @@ impl PositionRules {
         phrase_quick: true,
         bar_drop: true,
         late_riser: true,
+        riser_any_three: true,
         aligned_bars: true,
         soft_break: true,
     };
@@ -110,6 +159,7 @@ impl PositionRules {
         phrase_quick: false,
         bar_drop: false,
         late_riser: false,
+        riser_any_three: false,
         aligned_bars: false,
         soft_break: false,
     };
@@ -139,8 +189,9 @@ impl Default for DetectorParams {
             teaser_beats: 16,
             teaser_kick_db: 6.0,
             riser_bars: 4,
-            riser_db: 7.0,
+            riser_db: 5.0,
             riser_level_db: 6.0,
+            riser_tol_db: 0.5,
             approach_calm_beats: 32,
             approach_above_db: 2.0,
             approach_rise_db: 2.0,
@@ -256,9 +307,6 @@ pub struct LearnedRefs {
     pub sub: Vec<f32>,
     pub high: Vec<f32>,
 }
-/// A riser bar may sit this far under the highest bar before it.
-const MONO_TOL: f32 = 0.5;
-
 /// Pushes `v` into a shifting window (oldest first).
 fn shift<const N: usize>(w: &mut [f32; N], v: f32) {
     w.rotate_left(1);
@@ -269,6 +317,10 @@ fn shift<const N: usize>(w: &mut [f32; N], v: f32) {
 pub struct MomentDetector {
     p: DetectorParams,
     moment: Moment,
+    cause: Option<Cause>,
+    progress: Progress,
+    /// The cause `next_moment` gives a change.
+    why: Option<Cause>,
     /// Sums of dB (kick, sub, high) and hop count since the last `on_beat`.
     sum: [f32; 3],
     hops: u32,
@@ -284,6 +336,8 @@ pub struct MomentDetector {
     bar_clocked: bool,
     /// Clock beat of the last beat added to the partial bar.
     bar_last_beat: u64,
+    /// Whether three rising bars count at the last beat (see `riser`).
+    riser_late: bool,
     since_return: u32,
     since_collapse: u32,
     collapse_run: u32,
@@ -328,6 +382,9 @@ impl MomentDetector {
         MomentDetector {
             p: params,
             moment: Moment::Rhythm,
+            cause: None,
+            progress: Progress::default(),
+            why: None,
             sum: [0.0; 3],
             hops: 0,
             kick_hist: Ring::new(cap),
@@ -339,6 +396,7 @@ impl MomentDetector {
             bar_beats: 0,
             bar_clocked: false,
             bar_last_beat: 0,
+            riser_late: false,
             // The start of the track in Rhythm is not a return.
             since_return: u32::MAX,
             since_collapse: u32::MAX,
@@ -377,6 +435,18 @@ impl MomentDetector {
     #[must_use]
     pub fn moment(&self) -> Moment {
         self.moment
+    }
+
+    /// Evidence progress as of the last `on_beat`.
+    #[must_use]
+    pub fn progress(&self) -> Progress {
+        self.progress
+    }
+
+    /// Cause of the last change of moment (`None` before any).
+    #[must_use]
+    pub fn cause(&self) -> Option<Cause> {
+        self.cause
     }
 
     /// Changes the Calm and riser thresholds live; learned references, bar history and state stay.
@@ -426,8 +496,11 @@ impl MomentDetector {
     /// `late_riser` alone (`--rules riser`)
     /// depends on the phase of the 4-beat counter, since bars are then not clock-aligned.
     #[allow(clippy::cast_precision_loss)]
-    fn riser(&mut self, high_db: f32, high_ref_db: f32, closed: Option<Position>) -> bool {
+    fn riser(&mut self, high_db: f32, high_ref_db: f32, closed: Option<Position>) -> Option<Cause> {
         let clock = closed.filter(|_| self.p.rules.aligned_bars);
+        let second_half = closed.is_some_and(|c| c.bar_in_phrase > c.phrase_bars / 2);
+        let r = self.p.rules;
+        self.riser_late = closed.is_some() && r.riser_any_three || r.late_riser && second_half;
         let gap = clock.is_some_and(|c| c.beat != self.bar_last_beat.wrapping_add(1));
         if clock.is_some_and(|c| c.beat_in_bar == 1) || clock.is_some() != self.bar_clocked || gap {
             // A bar that began before the detector (or after a gap) never counts.
@@ -440,51 +513,124 @@ impl MomentDetector {
         if let Some(c) = clock {
             self.bar_last_beat = c.beat;
             if c.beat_in_bar != 4 {
-                return false;
+                return None;
             }
             if self.bar_beats != 4 {
                 self.bar_sum = 0.0;
                 self.bar_beats = 0;
-                return false;
+                return None;
             }
         } else if self.bar_beats < 4 {
-            return false;
+            return None;
         }
         self.bars.push(self.bar_sum / 4.0);
         self.bar_sum = 0.0;
         self.bar_beats = 0;
-        // Second half of the phrase: the last three bars may also be a riser, besides the four.
-        let late =
-            self.p.rules.late_riser && closed.is_some_and(|c| c.bar_in_phrase > c.phrase_bars / 2);
+        // The last three bars may also be a riser, besides the four: anywhere in the phrase, or in its second half.
         let n = self.bars.cap;
-        (self.bars.is_full() && self.rising(n, high_ref_db))
-            || (late && n > 1 && self.bars.len() >= n - 1 && self.rising(n - 1, high_ref_db))
-    }
-
-    /// The last `n` bar means rise monotonically (within `MONO_TOL`) by `riser_db`, ending near the highs reference.
-    fn rising(&self, n: usize, high_ref_db: f32) -> bool {
-        let from = self.bars.len() - n;
-        let (first, last) = (self.bars.get(from), self.bars.get(self.bars.len() - 1));
-        let mut top = first;
-        let mut mono = true;
-        for i in from + 1..self.bars.len() {
-            mono &= self.bars.get(i) >= top - MONO_TOL;
-            top = top.max(self.bars.get(i));
+        if (self.bars.is_full() && self.rising(n, high_ref_db))
+            || (self.riser_late
+                && n > 1
+                && self.bars.len() >= n - 1
+                && self.rising(n - 1, high_ref_db))
+        {
+            Some(Cause::Riser)
+        } else {
+            None
         }
-        mono && last - first >= self.p.riser_db && last >= high_ref_db - self.p.riser_level_db
     }
 
-    /// The state after this beat. `evidence`: a riser or an approach (used only from Calm).
-    fn next_moment(&mut self, evidence: bool, high4: f32, bar_drop: bool) -> Moment {
+    /// Fills `progress` after this beat's evidence rules ran; the rules read it back (`approach`).
+    fn update_progress(&mut self, high4: f32, high_ref_db: f32) {
         let p = self.p;
+        let last = self.bars.len().checked_sub(1);
+        let u8c = |n: usize| u8::try_from(n).unwrap_or(u8::MAX);
+        let cap = self.bars.cap;
+        let need = if self.riser_late && cap > 1 {
+            cap - 1
+        } else {
+            cap
+        };
+        let (riser_bars, riser_rise_db) = self.climb(need);
+        let calm = self.moment == Moment::Calm;
+        let need_beats = p.approach_calm_beats;
+        let need_bars = need_beats.div_ceil(4) as usize;
+        // Rounded so that "calm bars reach the need" is exactly "the beats reach the need".
+        let calm_bars = if self.in_state >= need_beats {
+            need_bars
+        } else {
+            (self.in_state as usize / 4).min(need_bars.saturating_sub(1))
+        };
+        self.progress = Progress {
+            high_bar_db: last.map(|i| self.bars.get(i)),
+            riser_bars: u8c(riser_bars),
+            riser_need_bars: u8c(need),
+            riser_rise_db,
+            riser_need_db: p.riser_db,
+            riser_near_ref: last
+                .is_some_and(|i| self.bars.get(i) >= high_ref_db - p.riser_level_db),
+            approach_calm_bars: if calm { u8c(calm_bars) } else { 0 },
+            approach_need_bars: u8c(need_bars),
+            approach_above_db: high4 - high_ref_db,
+            approach_need_above_db: p.approach_above_db,
+            approach_rise_db: if self.high4_hist.is_full() {
+                high4 - self.high4_hist.get(0)
+            } else {
+                0.0
+            },
+            approach_need_rise_db: p.approach_rise_db,
+        };
+    }
+
+    /// The longest run (at most `n` bars) at the end of the history that never falls more than
+    /// `riser_tol_db` under its running top, and its rise.
+    fn climb(&self, n: usize) -> (usize, f32) {
+        let len = self.bars.len();
+        let mut best = (0, 0.0);
+        for k in 1..=n.min(len) {
+            let from = len - k;
+            let first = self.bars.get(from);
+            let mut top = first;
+            for i in from + 1..len {
+                if self.bars.get(i) < top - self.p.riser_tol_db {
+                    return best;
+                }
+                top = top.max(self.bars.get(i));
+            }
+            best = (k, self.bars.get(len - 1) - first);
+        }
+        best
+    }
+
+    /// The last `n` bar means rise monotonically (within `riser_tol_db`) by `riser_db`, ending near the highs reference.
+    fn rising(&self, n: usize, high_ref_db: f32) -> bool {
+        let (k, rise) = self.climb(n);
+        k == n
+            && rise >= self.p.riser_db
+            && self.bars.get(self.bars.len() - 1) >= high_ref_db - self.p.riser_level_db
+    }
+
+    /// The state after this beat; `self.why` says why it changed. `evidence`: what a riser or an approach
+    /// found (used only from Calm).
+    fn next_moment(&mut self, evidence: Option<Cause>, high4: f32, bar_drop: bool) -> Moment {
+        let p = self.p;
+        self.why = None;
         self.in_state = self.in_state.saturating_add(1);
         self.since_return = self.since_return.saturating_add(1);
         self.since_collapse = self.since_collapse.saturating_add(1);
         let may = self.in_state >= p.min_state_beats;
-        let drop = (self.jump_kick && self.full_run >= p.rhythm_after_full)
-            || (self.jump_high && self.full_run >= p.hats_after_full)
-            || (!self.soft && self.near_run >= p.slow_return_beats)
-            || (self.soft && self.full_run >= p.rhythm_after_full);
+        let drop_cause = if self.jump_kick && self.full_run >= p.rhythm_after_full {
+            Some(Cause::KickDrop)
+        } else if self.jump_high && self.full_run >= p.hats_after_full {
+            Some(Cause::HatsDrop)
+        } else if (!self.soft && self.near_run >= p.slow_return_beats)
+            || (self.soft && self.full_run >= p.rhythm_after_full)
+        {
+            Some(Cause::SlowReturn)
+        } else {
+            None
+        };
+        let drop = drop_cause.is_some();
         match self.moment {
             Moment::Rhythm => {
                 // A one-bar tease: the return does not hold.
@@ -492,20 +638,35 @@ impl MomentDetector {
                     && self.beats >= 4
                     && self.kick_def.iter().sum::<f32>() / 4.0 <= -p.teaser_kick_db;
                 if may && (self.quiet_run >= p.calm_after_quiet || teaser) {
+                    self.why = Some(if self.quiet_run >= p.calm_after_quiet {
+                        Cause::Quiet
+                    } else {
+                        Cause::Teaser
+                    });
                     Moment::Calm
                 } else if may && self.groove_run >= 2 {
+                    self.why = Some(Cause::Groove);
                     Moment::BuildUp
                 } else {
                     Moment::Rhythm
                 }
             }
-            Moment::Calm if may && drop => Moment::Rhythm,
-            Moment::Calm if may && evidence && self.since_collapse >= p.refractory_beats => {
+            Moment::Calm if may && drop => {
+                self.why = drop_cause;
+                Moment::Rhythm
+            }
+            Moment::Calm
+                if may && evidence.is_some() && self.since_collapse >= p.refractory_beats =>
+            {
+                self.why = evidence;
                 Moment::BuildUp
             }
             Moment::Calm => Moment::Calm,
             // The drop is exempt from `min_state_beats`.
-            Moment::BuildUp if drop || (bar_drop && self.jump_kick) => Moment::Rhythm,
+            Moment::BuildUp if drop || (bar_drop && self.jump_kick) => {
+                self.why = drop_cause.or(Some(Cause::KickDrop));
+                Moment::Rhythm
+            }
             Moment::BuildUp => {
                 let low = high4 < self.entry_high - p.collapse_db;
                 self.collapse_run = if low { self.collapse_run + 1 } else { 0 };
@@ -514,6 +675,11 @@ impl MomentDetector {
                     || self.in_state >= p.buildup_max_beats
                 {
                     self.since_collapse = 0;
+                    self.why = Some(if self.in_state >= p.buildup_max_beats {
+                        Cause::Timeout
+                    } else {
+                        Cause::Collapse
+                    });
                     Moment::Calm
                 } else {
                     Moment::BuildUp
@@ -551,6 +717,11 @@ impl MomentDetector {
             return if to == was {
                 (next, false)
             } else {
+                self.why = Some(match to {
+                    Moment::Rhythm => Cause::Undo,
+                    Moment::Calm => Cause::Quiet,
+                    Moment::BuildUp => Cause::Groove,
+                });
                 (to, to == Moment::Rhythm)
             };
         }
@@ -565,6 +736,7 @@ impl MomentDetector {
             } else {
                 return (next, false);
             };
+            self.why = Some(Cause::PhraseStart);
             self.quick = Some((c.beat, to));
             self.quick_in_state = self.in_state;
             return (to, false);
@@ -676,18 +848,24 @@ impl MomentDetector {
         // Build-up evidence (used only from Calm). Bars close on clock beat 4 with positions and
         // `aligned_bars`, else every 4 beats from the first beat.
         let riser = self.riser(high_db, high_ref_db, closed);
+        self.update_progress(high4, high_ref_db);
+        let g = self.progress;
         let approach = self.moment == Moment::Calm
-            && self.in_state >= p.approach_calm_beats
+            && g.approach_calm_bars >= g.approach_need_bars
             && self.high4_hist.is_full()
-            && high4 >= high_ref_db + p.approach_above_db
-            && high4 - self.high4_hist.get(0) >= p.approach_rise_db;
+            && g.approach_above_db >= g.approach_need_above_db
+            && g.approach_rise_db >= g.approach_need_rise_db;
         let groove_up = kd <= -p.groove_buildup_kick_db && hd >= p.groove_buildup_high_db;
         self.groove_run = if groove_up { self.groove_run + 1 } else { 0 };
 
         // A full beat with a kick jump on a bar's beat 1 is already the drop (`full_run >= 1` holds
         // whenever `jump_kick` is set).
         let bar_drop = p.rules.bar_drop && closed.is_some_and(|c| c.beat_in_bar == 1);
-        let mut next = self.next_moment(riser || approach, high4, bar_drop);
+        let mut next = self.next_moment(
+            riser.or(approach.then_some(Cause::Approach)),
+            high4,
+            bar_drop,
+        );
         let mut undo = false;
         if p.rules.phrase_quick {
             (next, undo) = self.quick_move(next, closed, [quiet, full, groove_up]);
@@ -700,6 +878,7 @@ impl MomentDetector {
             && next == Moment::Rhythm;
         if soft {
             next = Moment::Calm;
+            self.why = Some(Cause::SoftBreak);
         }
         // A soft Calm whose texture outlasts two phrases is the new level, not a break: back to Rhythm
         // with fresh references (a real quiet break resets the run and never ends this way).
@@ -711,6 +890,7 @@ impl MomentDetector {
             let limit = closed.map_or(64, |c| 8 * u32::from(c.phrase_bars));
             if self.soft_run >= limit {
                 (next, relearn) = (Moment::Rhythm, true);
+                self.why = Some(Cause::Timeout);
             }
         }
 
@@ -728,6 +908,7 @@ impl MomentDetector {
                 self.since_return = 0;
             }
             self.moment = next;
+            self.cause = self.why;
             self.soft = soft;
             self.soft_run = 0;
             if relearn {
@@ -1152,6 +1333,7 @@ mod tests {
         assert_eq!((p.hats_after_full, p.slow_return_beats), (4, 24));
         assert_eq!((p.teaser_beats, p.riser_bars), (16, 4));
         assert_eq!((p.approach_calm_beats, p.approach_bars), (32, 8));
+        assert!((p.riser_tol_db - 0.5).abs() < f32::EPSILON);
         assert_eq!((p.collapse_beats, p.refractory_beats), (16, 16));
         assert_eq!(p.buildup_max_beats, 96);
         assert_eq!(p.rules, PositionRules::ALL);
@@ -1168,7 +1350,7 @@ mod tests {
             (p.sub_back_db, 10.0),
             (p.jump_db, 10.0),
             (p.teaser_kick_db, 6.0),
-            (p.riser_db, 7.0),
+            (p.riser_db, 5.0),
             (p.riser_level_db, 6.0),
             (p.approach_above_db, 2.0),
             (p.approach_rise_db, 2.0),
@@ -1293,6 +1475,12 @@ mod tests {
         assert!(m[59..].iter().all(|&m| m == Moment::BuildUp), "{m:?}");
     }
 
+    /// The rules before `riser_any_three`: 3 rising bars count only in a phrase's second half.
+    const ONLY_LATE: PositionRules = PositionRules {
+        riser_any_three: false,
+        ..PositionRules::ALL
+    };
+
     /// Break from beat 32; a spoiler bar (beats 76..80) then three rising bars (80..92) ending on a
     /// bar that closes at beat 91. Beat `i` closes at clock beat `i + off`.
     fn three_bar_riser(off: u64, phrase: PhraseBars, rules: PositionRules) -> Vec<Moment> {
@@ -1313,12 +1501,21 @@ mod tests {
         rules: PositionRules,
         hats: impl Fn(usize) -> f32,
     ) -> Vec<Moment> {
-        let lens = beats(128.0, 100);
-        let sig = synth(&lens, |k| k < 32, |_| true, hats);
         let params = DetectorParams {
             rules,
             ..DetectorParams::default()
         };
+        riser_run_with(off, phrase, params, hats)
+    }
+
+    fn riser_run_with(
+        off: u64,
+        phrase: PhraseBars,
+        params: DetectorParams,
+        hats: impl Fn(usize) -> f32,
+    ) -> Vec<Moment> {
+        let lens = beats(128.0, 100);
+        let sig = synth(&lens, |k| k < 32, |_| true, hats);
         let o = drive_with(&sig, &lens, params, |i| {
             Some(Position::at(i as u64 + off, false, phrase))
         });
@@ -1336,15 +1533,22 @@ mod tests {
     #[test]
     fn three_rising_bars_early_are_not() {
         // Shifted by 16 beats: the bar closes as bar 3 of 8.
-        let m = three_bar_riser(16, PhraseBars::Eight, PositionRules::ALL);
+        let m = three_bar_riser(16, PhraseBars::Eight, ONLY_LATE);
         assert_eq!(m[91], Moment::Calm, "{m:?}");
+    }
+
+    #[test]
+    fn three_rising_bars_count_in_the_first_half_with_riser_any_three() {
+        let m = three_bar_riser(16, PhraseBars::Eight, PositionRules::ALL);
+        assert_eq!(m[90], Moment::Calm, "{m:?}");
+        assert_eq!(m[91], Moment::BuildUp, "{m:?}");
     }
 
     #[test]
     fn late_riser_off_needs_four() {
         let rules = PositionRules {
             late_riser: false,
-            ..PositionRules::ALL
+            ..ONLY_LATE
         };
         let m = three_bar_riser(0, PhraseBars::Eight, rules);
         assert_eq!(m[91], Moment::Calm, "{m:?}");
@@ -1355,7 +1559,7 @@ mod tests {
     fn sixteen_bar_phrase_second_half_starts_at_bar_nine() {
         let ninth = three_bar_riser(8, PhraseBars::Sixteen, PositionRules::ALL);
         assert_eq!(ninth[91], Moment::BuildUp, "{ninth:?}");
-        let eighth = three_bar_riser(4, PhraseBars::Sixteen, PositionRules::ALL);
+        let eighth = three_bar_riser(4, PhraseBars::Sixteen, ONLY_LATE);
         assert_eq!(eighth[91], Moment::Calm, "{eighth:?}");
     }
 
@@ -1363,7 +1567,11 @@ mod tests {
     fn late_phrase_keeps_four_bar_risers() {
         // Bars 4..7 of the phrase: -12, -8, -6, -5 dB (bars 3..7 start at -12). The last three rise
         // 3 dB, all four 7 dB, and no earlier four-bar window reaches 7.
-        let m = riser_run(0, PhraseBars::Eight, PositionRules::ALL, |k| match k {
+        let seven = DetectorParams {
+            riser_db: 7.0,
+            ..DetectorParams::default()
+        };
+        let m = riser_run_with(0, PhraseBars::Eight, seven, |k| match k {
             0..=31 => 0.0,
             32..=79 => -12.0,
             80..=83 => -8.0,
@@ -1380,7 +1588,7 @@ mod tests {
         let at = |b: u64| Some(Position::at(b, false, PhraseBars::Eight));
         // Bar 1 beats 1-2, then a capture gap, then bar 2 beats 3-4: four beats, not one bar.
         for b in [0, 1, 6, 7] {
-            d.riser(0.0, 0.0, at(b));
+            let _ = d.riser(0.0, 0.0, at(b));
         }
         assert_eq!(d.bars.len(), 0);
     }
@@ -1394,12 +1602,15 @@ mod tests {
         };
         let mut d = MomentDetector::new(p, 0.0);
         for i in 0..16 {
-            d.riser(-30.0, 0.0, late(i)); // old bars, wiped by the reset
+            let _ = d.riser(-30.0, 0.0, late(i)); // old bars, wiped by the reset
         }
         d.reset();
         // Bars 6, 7, 8 of the phrase at 0, 5, 10 dB: only the third completes a late riser.
         let ends: Vec<bool> = (0..12)
-            .map(|i| d.riser([0.0, 5.0, 10.0][i as usize / 4], 10.0, late(i)))
+            .map(|i| {
+                d.riser([0.0, 5.0, 10.0][i as usize / 4], 10.0, late(i))
+                    .is_some()
+            })
             .collect();
         assert!(ends[..11].iter().all(|&r| !r), "{ends:?}");
         assert!(ends[11], "{ends:?}");
@@ -1430,21 +1641,76 @@ mod tests {
     }
 
     #[test]
-    fn the_same_rise_after_16_beats_of_calm_is_not_a_buildup_yet() {
-        // Calm began at 33: until it is 32 beats old (beat 66) the approach rule is silent.
-        let m = moments(&groove(66, |k| k < 32, late_hats(49)));
-        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    fn approach_fires_after_four_bars_of_calm() {
+        // Calm began at 33; the rise starts at 49, when Calm is 16 beats old.
+        let four_bars = DetectorParams {
+            approach_calm_beats: 16,
+            approach_bars: 4,
+            ..DetectorParams::default()
+        };
+        let lens = beats(128.0, 66);
+        let sig = synth(&lens, |k| k < 32, |_| true, late_hats(49));
+        let m = moments(&drive_with(&sig, &lens, four_bars, |_| None));
+        assert!(m[33..49].iter().all(|&m| m == Moment::Calm), "{m:?}");
+        assert_eq!(m[65], Moment::BuildUp, "{m:?}");
+        // Calm only 12 beats old when the rise starts and 16 beats are needed: nothing yet at 48.
+        let m = moments(&groove(60, |k| k < 32, late_hats(45)));
+        assert_eq!(m[47], Moment::Calm, "{m:?}");
     }
 
     #[test]
+    fn the_same_rise_before_32_beats_of_calm_is_not_a_buildup_by_default() {
+        // Calm began at 33; the rise starts at 49 (16 beats old). Until it is 32 beats old (beat 65)
+        // the approach rule is silent with the default timing.
+        let m = moments(&groove(66, |k| k < 32, late_hats(49)));
+        assert!(m[33..65].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
+    fn riser_tolerates_a_one_db_dip_when_tol_is_1_5() {
+        // Bars at -14, -8, -9, -2 dB (beats 56..72): a 12 dB rise with a 1 dB dip, ending near the groove.
+        // Only the four-bar rule applies; the earlier windows rise less than 7 dB.
+        let hats = |k: usize| match k {
+            0..=31 => 0.0,
+            32..=59 => -14.0,
+            60..=63 => -8.0,
+            64..=67 => -9.0,
+            _ => -2.0,
+        };
+        let rules = PositionRules {
+            late_riser: false,
+            ..ONLY_LATE
+        };
+        let tol = |riser_tol_db| DetectorParams {
+            riser_db: 7.0,
+            riser_tol_db,
+            rules,
+            ..DetectorParams::default()
+        };
+        let m = riser_run_with(0, PhraseBars::Eight, tol(1.5), hats);
+        assert_eq!(m[70], Moment::Calm, "{m:?}");
+        assert_eq!(m[71], Moment::BuildUp, "{m:?}");
+        let m = riser_run_with(0, PhraseBars::Eight, tol(0.5), hats);
+        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    // A 2-beat fill can pass the 3-bar riser at the default 5 dB; on the test songs this did not happen (spec 2026-11-21 §7).
+    #[test]
     fn a_short_fill_inside_a_break_is_not_a_buildup() {
-        // Two loud beats of hats (a fill) do not make a bar that rises 7 dB.
-        let o = groove(
-            72,
+        // Two loud beats of hats (a fill) do not make a bar that rises 7 dB. They come before the approach
+        // rule wakes up (32 beats of Calm); after that the 4-beat mean would see them.
+        let lens = beats(128.0, 72);
+        let sig = synth(
+            &lens,
             |k| k < 32,
-            |k| if (50..52).contains(&k) { 10.0 } else { 0.0 },
+            |_| true,
+            |k| if (40..42).contains(&k) { 10.0 } else { 0.0 },
         );
-        let m = moments(&o);
+        let seven = DetectorParams {
+            riser_db: 7.0,
+            ..DetectorParams::default()
+        };
+        let m = moments(&drive_with(&sig, &lens, seven, |_| None));
         assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
     }
 
@@ -2506,5 +2772,189 @@ mod tests {
         d.moment = Moment::Calm;
         assert_eq!(d.on_beat(None), (Moment::Calm, None));
         assert_eq!(d.moment(), Moment::Calm);
+    }
+
+    /// The cause the detector reports on the first beat that enters `to`.
+    fn cause_into(
+        sig: &[f32],
+        lens: &[usize],
+        params: DetectorParams,
+        closed: impl Fn(usize) -> Option<Position>,
+        to: Moment,
+    ) -> Option<Cause> {
+        let mut a = BandAnalyzer::new(FS);
+        let mut d = MomentDetector::new(params, a.hop_len() as f32 / FS as f32);
+        assert_eq!(d.cause(), None);
+        let (mut pos, mut prev) = (0, d.moment());
+        for (i, &len) in lens.iter().enumerate() {
+            a.process(&sig[pos..pos + len], &mut |f| d.push(f));
+            pos += len;
+            let (m, _) = d.on_beat(closed(i));
+            if m == to && prev != to {
+                return d.cause();
+            }
+            prev = m;
+        }
+        panic!("never entered {to:?}");
+    }
+
+    fn cause_of(
+        n: usize,
+        kick: impl Fn(usize) -> bool,
+        high: impl Fn(usize) -> f32,
+        to: Moment,
+    ) -> Option<Cause> {
+        let lens = beats(128.0, n);
+        let sig = synth(&lens, kick, |_| true, high);
+        cause_into(&sig, &lens, DetectorParams::default(), |_| None, to)
+    }
+
+    #[test]
+    fn cause_of_a_quiet_break_is_quiet() {
+        let c = cause_of(48, |k| k < 32, |_| 0.0, Moment::Calm);
+        assert_eq!(c, Some(Cause::Quiet));
+    }
+
+    #[test]
+    fn cause_of_a_slow_or_kick_return() {
+        let c = cause_of(48, |k| !(32..36).contains(&k), |_| 0.0, Moment::Rhythm);
+        assert!(
+            matches!(c, Some(Cause::KickDrop | Cause::SlowReturn)),
+            "{c:?}"
+        );
+    }
+
+    #[test]
+    fn cause_of_a_riser_buildup_is_riser() {
+        let c = cause_of(72, |k| k < 32, riser_hats(0.0), Moment::BuildUp);
+        assert_eq!(c, Some(Cause::Riser));
+    }
+
+    #[test]
+    fn cause_of_an_approach_buildup_is_approach() {
+        let c = cause_of(90, |k| k < 32, late_hats(70), Moment::BuildUp);
+        assert_eq!(c, Some(Cause::Approach));
+    }
+
+    #[test]
+    fn cause_of_a_kick_jump_is_kick_drop() {
+        let c = cause_of(
+            64,
+            |k| !(32..55).contains(&k),
+            |k| if k < 55 { ramp(k.min(51)) } else { 0.0 },
+            Moment::Rhythm,
+        );
+        assert_eq!(c, Some(Cause::KickDrop));
+    }
+
+    #[test]
+    fn cause_of_a_collapse_and_of_a_timeout() {
+        let lens = beats(128.0, 160);
+        let sig = synth_gain(
+            &lens,
+            |k| if k < 40 { 1.0 } else { 0.3 },
+            |_| true,
+            |k| if (40..50).contains(&k) { 20.0 } else { 0.0 },
+        );
+        let c = cause_into(
+            &sig,
+            &lens,
+            DetectorParams::default(),
+            |_| None,
+            Moment::Calm,
+        );
+        assert_eq!(c, Some(Cause::Collapse));
+        let sig = synth_gain(
+            &lens,
+            |k| if k < 40 { 1.0 } else { 0.4 },
+            |_| true,
+            |k| {
+                if k < 40 { 0.0 } else { 10.0 }
+            },
+        );
+        let c = cause_into(
+            &sig,
+            &lens,
+            DetectorParams::default(),
+            |_| None,
+            Moment::Calm,
+        );
+        assert_eq!(c, Some(Cause::Timeout));
+    }
+
+    #[test]
+    fn progress_counts_the_bars_and_db_of_a_rising_riser() {
+        let lens = beats(128.0, 60);
+        let sig = synth(&lens, |k| k < 32, |_| true, riser_hats(0.0));
+        let mut a = BandAnalyzer::new(FS);
+        let mut d = MomentDetector::new(DetectorParams::default(), a.hop_len() as f32 / FS as f32);
+        let mut pos = 0;
+        let mut at = Vec::new();
+        for &len in &lens {
+            a.process(&sig[pos..pos + len], &mut |f| d.push(f));
+            pos += len;
+            d.on_beat(None);
+            at.push(d.progress());
+        }
+        assert_eq!(at[0].high_bar_db, None);
+        let flat = at[31];
+        assert!(flat.riser_rise_db.abs() < 1.0, "{flat:?}");
+        let p = at[59];
+        assert_eq!(p.riser_bars, p.riser_need_bars, "{p:?}");
+        assert!(p.riser_rise_db >= p.riser_need_db, "{p:?}");
+        assert!(p.high_bar_db.is_some(), "{p:?}");
+    }
+
+    /// Moment and progress after every beat, with clock positions (`off` shifts the beat counter).
+    fn progress_run(
+        sig: &[f32],
+        lens: &[usize],
+        params: DetectorParams,
+        off: u64,
+    ) -> Vec<(Moment, Progress)> {
+        let mut a = BandAnalyzer::new(FS);
+        let mut d = MomentDetector::new(params, a.hop_len() as f32 / FS as f32);
+        let mut pos = 0;
+        let mut out = Vec::new();
+        for (i, &len) in lens.iter().enumerate() {
+            a.process(&sig[pos..pos + len], &mut |f| d.push(f));
+            pos += len;
+            let (m, _) = d.on_beat(Some(Position::at(i as u64 + off, false, PhraseBars::Eight)));
+            out.push((m, d.progress()));
+        }
+        out
+    }
+
+    #[test]
+    fn progress_shows_every_riser_condition_met_when_a_three_bar_riser_fires() {
+        let hats = |k: usize| match k {
+            0..=31 => 0.0,
+            32..=75 => -20.0,
+            76..=79 => -10.0,
+            80..=83 => -16.0,
+            84..=87 => -9.0,
+            _ => -2.0,
+        };
+        let lens = beats(128.0, 100);
+        let sig = synth(&lens, |k| k < 32, |_| true, hats);
+        let run = progress_run(&sig, &lens, DetectorParams::default(), 0);
+        let fired = run.iter().position(|(m, _)| *m == Moment::BuildUp).unwrap();
+        let p = run[fired].1;
+        assert_eq!(p.riser_need_bars, 3, "{p:?}");
+        assert!(p.riser_bars >= p.riser_need_bars, "{p:?}");
+        assert!(p.riser_rise_db >= p.riser_need_db, "{p:?}");
+        assert!(p.riser_near_ref, "{p:?}");
+    }
+
+    #[test]
+    fn progress_shows_every_approach_condition_met_when_the_approach_fires() {
+        let lens = beats(128.0, 90);
+        let sig = synth(&lens, |k| k < 32, |_| true, late_hats(70));
+        let run = progress_run(&sig, &lens, DetectorParams::default(), 0);
+        let fired = run.iter().position(|(m, _)| *m == Moment::BuildUp).unwrap();
+        let p = run[fired].1;
+        assert!(p.approach_calm_bars >= p.approach_need_bars, "{p:?}");
+        assert!(p.approach_above_db >= p.approach_need_above_db, "{p:?}");
+        assert!(p.approach_rise_db >= p.approach_need_rise_db, "{p:?}");
     }
 }

@@ -63,7 +63,7 @@ pub fn looks_like_range(s: &str) -> bool {
     s.split_once('-').is_some_and(|(a, b)| num(a) && num(b))
 }
 
-/// `all`, `none` or a comma list of `calm,drop,riser,bars,soft`.
+/// `all`, `none` or a comma list of `calm,drop,riser,three,bars,soft`.
 pub fn parse_rules(s: &str) -> Result<PositionRules, String> {
     match s {
         "all" => return Ok(PositionRules::ALL),
@@ -76,16 +76,51 @@ pub fn parse_rules(s: &str) -> Result<PositionRules, String> {
             "calm" => r.phrase_quick = true,
             "drop" => r.bar_drop = true,
             "riser" => r.late_riser = true,
+            "three" => r.riser_any_three = true,
             "bars" => r.aligned_bars = true,
             "soft" => r.soft_break = true,
             _ => {
                 return Err(format!(
-                    "unknown rule '{w}' (all, none, calm, drop, riser, bars, soft)"
+                    "unknown rule '{w}' (all, none, calm, drop, riser, three, bars, soft)"
                 ));
             }
         }
     }
     Ok(r)
+}
+
+/// `--set key=value`: one detector parameter (numbers must be finite; flags are `true` or `false`).
+pub fn set_param(p: &mut DetectorParams, kv: &str) -> Result<(), String> {
+    let (k, v) = kv.split_once('=').ok_or("--set needs key=value")?;
+    let num = || {
+        v.parse::<f32>()
+            .ok()
+            .filter(|x| x.is_finite())
+            .ok_or_else(|| format!("bad number for {k}"))
+    };
+    let flag = || {
+        v.parse::<bool>()
+            .map_err(|_| format!("bad flag for {k} (true or false)"))
+    };
+    match k {
+        "approach_calm_beats" => {
+            p.approach_calm_beats = v.parse().map_err(|_| format!("bad integer for {k}"))?;
+        }
+        "approach_bars" => {
+            p.approach_bars = v
+                .parse()
+                .ok()
+                .filter(|&n| n > 0)
+                .ok_or_else(|| format!("bad integer for {k}"))?;
+        }
+        "approach_rise_db" => p.approach_rise_db = num()?,
+        "approach_above_db" => p.approach_above_db = num()?,
+        "riser_db" => p.riser_db = num()?,
+        "riser_tol_db" => p.riser_tol_db = num()?,
+        "riser_any_three" => p.rules.riser_any_three = flag()?,
+        _ => return Err(format!("unknown parameter '{k}'")),
+    }
+    Ok(())
 }
 
 /// A moment change decided at beat `index` (0-based), shown at the beat time `t`.
@@ -369,6 +404,10 @@ mod tests {
     fn rules_flag_parses() {
         assert_eq!(parse_rules("all"), Ok(PositionRules::ALL));
         assert_eq!(parse_rules("none"), Ok(PositionRules::NONE));
+        assert_eq!(
+            parse_rules("calm,drop,riser,three,bars,soft"),
+            Ok(PositionRules::ALL)
+        );
         let r = parse_rules("calm,riser").unwrap();
         assert!(r.phrase_quick && r.late_riser && !r.bar_drop && !r.aligned_bars);
         assert!(parse_rules("soft").unwrap().soft_break);

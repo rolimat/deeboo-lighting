@@ -10,3 +10,4 @@ recordings/
 
 # the app's debug session log
 session.log
+ui/.env

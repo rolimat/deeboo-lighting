@@ -65,7 +65,7 @@ impl Default for DetectorConfig {
             sensitivity: 5,
             calm_kick_db: 16.0,
             calm_high_db: 12.0,
-            riser_db: 7.0,
+            riser_db: 5.0,
         }
     }
 }
@@ -82,7 +82,7 @@ impl DetectorConfig {
             return Err("highs threshold must be 6 to 24 dB".into());
         }
         if !RISER_DB.contains(&self.riser_db) {
-            return Err("riser threshold must be 1 to 15 dB".into());
+            return Err("riser threshold must be 2 to 15 dB".into());
         }
         Ok(())
     }
@@ -106,7 +106,7 @@ pub struct Settings {
     pub calm_kick_db: f32,
     /// 6..=24.
     pub calm_high_db: f32,
-    /// Rise of the bar means of highs that makes a riser. 1..=15.
+    /// Rise of the bar means of highs that makes a riser. 2..=15.
     pub riser_db: f32,
     /// Show the `?` help tooltips in the editor.
     pub help_tooltips: bool,
@@ -124,7 +124,7 @@ pub fn round_db(x: f32) -> f32 {
 
 pub const CALM_KICK_DB: RangeInclusive<f32> = 8.0..=30.0;
 pub const CALM_HIGH_DB: RangeInclusive<f32> = 6.0..=24.0;
-pub const RISER_DB: RangeInclusive<f32> = 1.0..=15.0;
+pub const RISER_DB: RangeInclusive<f32> = 2.0..=15.0;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -138,7 +138,7 @@ impl Default for Settings {
             lights_on: true,
             calm_kick_db: 16.0,
             calm_high_db: 12.0,
-            riser_db: 7.0,
+            riser_db: 5.0,
             help_tooltips: true,
             show_in_dock: ShowInDock::Editor,
             detector_by_input: BTreeMap::new(),
@@ -277,6 +277,12 @@ pub fn load(path: &Path) -> Settings {
     };
     match serde_json::from_str::<Settings>(&text) {
         Ok(mut s) => {
+            // The riser range used to start at 1 dB: raise old values instead of resetting the file.
+            let min = *RISER_DB.start();
+            s.riser_db = s.riser_db.max(min);
+            for c in s.detector_by_input.values_mut() {
+                c.riser_db = c.riser_db.max(min);
+            }
             // Same order as `AppState::persist`: a 7.96 that saves as 8.0 must load as 8.0.
             s.round_thresholds();
             match s.validate() {
@@ -667,9 +673,9 @@ mod tests {
         );
         assert!(bad(|s| s.calm_high_db = 5.0) && bad(|s| s.calm_high_db = 25.0));
         assert!(
-            bad(|s| s.riser_db = 0.9) && bad(|s| s.riser_db = 16.0) && bad(|s| s.riser_db = 15.1)
+            bad(|s| s.riser_db = 1.9) && bad(|s| s.riser_db = 16.0) && bad(|s| s.riser_db = 15.1)
         );
-        assert!(!bad(|s| s.riser_db = 15.0) && !bad(|s| s.riser_db = 1.0));
+        assert!(!bad(|s| s.riser_db = 15.0) && !bad(|s| s.riser_db = 2.0));
         assert!(bad(|s| s.riser_db = f32::INFINITY));
     }
 
@@ -700,6 +706,22 @@ mod tests {
             (u.calm_kick_db, u.calm_high_db, u.riser_db),
             (16.0, 12.0, 7.0)
         );
+    }
+
+    #[test]
+    fn old_riser_below_the_range_loads_clamped_and_keeps_the_rest() {
+        let (_d, p) = tmp();
+        std::fs::write(
+            &p,
+            r#"{"midiSource":"IAC Driver","brightnessPct":40,"riserDb":1.5,
+                "detectorByInput":{"USB":{"sensitivity":5,"calmKickDb":16,"calmHighDb":12,"riserDb":1.0}}}"#,
+        )
+        .unwrap();
+        let s = load(&p);
+        assert_eq!(s.riser_db, 2.0);
+        assert_eq!(s.detector_by_input["USB"].riser_db, 2.0);
+        assert_eq!(s.midi_source.as_deref(), Some("IAC Driver"));
+        assert_eq!(s.brightness_pct, 40);
     }
 
     #[test]

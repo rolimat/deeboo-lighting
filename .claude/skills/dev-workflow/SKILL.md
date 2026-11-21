@@ -41,6 +41,7 @@ Spec §10: [docs/superpowers/specs/2026-11-06-deeboo-lighting-design.md](../../.
 
 ## Details
 - Image, compose, volumes, macOS steps: [references/docker-and-macos.md](references/docker-and-macos.md) (read when env or Docker issues arise).
+- Detection debug view: a local `ui/.env` with `VITE_DETECTION_DEBUG=true` shows the detector causes, the "Next moment" panel and bar steps in the editor; `ui/.env` is git-ignored and CI builds never have it.
 
 ## Checklist
 - [ ] `just precommit` green before commit.
