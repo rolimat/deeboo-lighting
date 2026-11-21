@@ -73,3 +73,30 @@ Cambiar otras reglas (Calm, drop), mostrar la vista al usuario final, guardar la
 - **Tolerancia del riser:** 0.5 dB (1.0 y 1.5 sin efecto).
 - **Umbral del riser:** 5 dB por defecto (el más bajo sin falsas alarmas extra).
 - **Regla de nivel:** medida y descartada (añadía 1 falso en song-2 y no acertaba ninguno); se eliminó del código.
+
+## 8. La línea de Build-up mide una subida; knobs con solo su nombre (maqueta aprobada 2026-11-21)
+
+Maqueta: `.superpowers/brainstorm/detection-proposals-4.html`.
+
+- **Línea de Build-up (Highs):** ya no es «referencia + X dB». Se dibuja solo sobre los **últimos 4 compases**, a
+  **inicio de la subida + X dB**. El inicio de la subida es el primer compás de la racha que no baja (lo que el
+  detector ya envía: `highBarDb − riserRiseDb`); se marca con una línea punteada «climb start» y una pequeña línea
+  vertical a la derecha une ambas. Si los agudos llegan a la línea discontinua mientras suben, entra Build-up. Se
+  mueve con la música y se arrastra para cambiar X (el valor es la distancia al inicio de la subida). Sin compás
+  cerrado todavía, la línea y su etiqueta no se dibujan (el knob sigue funcionando).
+- **Etiqueta:** «Build-up when the highs climb 5.0 dB in 3–4 bars».
+- **Knob «Highs climb»:** rango **2–15 dB** (antes 1–15), por defecto 5. Validación en Rust igual.
+- **Knobs:** bajo cada knob solo su nombre: «Kick drop», «Highs climb», «Highs drop». El valor va en la etiqueta de su
+  línea y en el tooltip.
+- **Tooltips** (en el knob y en su línea/etiqueta), con el valor actual en la primera línea:
+  - Kick drop: «A beat counts as quiet when the kick falls more than X dB below its usual level. Two quiet beats in a
+    row during Rhythm switch to Calm. Lower: Calm comes in more easily.»
+  - Highs drop: «A beat also counts as quiet when the hi-hats fall more than X dB below their usual level while the
+    kick is already weaker. It covers breaks where the hats go but some kick remains. Lower: Calm comes in more
+    easily.»
+  - Highs climb: «From Calm, Build-up comes in when the hi-hats climb at least X dB over 3–4 bars, bar after bar. It
+    is a climb, not a level. Lower: earlier Build-ups, but more false ones.»
+  - Los dos de Calm añaden: «The Moment changes slider shifts this value: each step towards Reactive lowers it by
+    1 dB.»
+  - En el knob, al final, cómo se usa (arrastrar, rueda, flechas, Shift 0.1 dB, doble clic al valor por defecto); en
+    la línea, «Drag to change. Hold Shift for 0.1 dB steps.»
