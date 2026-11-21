@@ -274,9 +274,9 @@ function Lane(props: {
                   <div
                     data-climb-start
                     style={{ top: `${startTop}%`, left: `${CLIMB_LEFT}%` }}
-                    class="pointer-events-none absolute right-0 z-[5] border-t-2 border-dotted border-accent/50"
+                    class="pointer-events-none absolute right-0 z-[5] border-t border-dotted border-dim"
                   >
-                    <span class="absolute -top-4 right-1 text-small leading-none text-dim">
+                    <span class="pointer-events-none absolute left-1 top-1 z-[15] rounded bg-bg px-0.5 text-small leading-none text-dim">
                       climb start
                     </span>
                   </div>
@@ -287,7 +287,7 @@ function Lane(props: {
                       top: `${Math.min(lineTop, startTop)}%`,
                       height: `${Math.abs(startTop - lineTop)}%`,
                     }}
-                    class="pointer-events-none absolute z-[5] border-l-2 border-accent/70"
+                    class="pointer-events-none absolute z-[5] border-l border-accent/70"
                   />
                 </>
               )}
