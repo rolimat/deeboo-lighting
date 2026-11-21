@@ -24,7 +24,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "usage: detect-probe <audio> [--labels file.json] [--min-beats 4] [--timeline] [--bpm 128] [--realtime]
-       [--features [from-to]] [--downbeat <s>]... [--phrase 4|8|16] [--rules all|none|calm,drop,riser,bars] (default: the app's rules)
+       [--features [from-to]] [--downbeat <s>]... [--phrase 4|8|16] [--rules all|none|calm,drop,riser,three,bars,soft] (default: the app's rules)
        [--set key=value]... (approach_calm_beats, approach_bars, approach_rise_db, approach_above_db, riser_db, riser_tol_db,
        riser_any_three; after --rules)";
 const TOLERANCE_S: f64 = 4.0;

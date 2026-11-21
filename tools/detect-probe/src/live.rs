@@ -63,7 +63,7 @@ pub fn looks_like_range(s: &str) -> bool {
     s.split_once('-').is_some_and(|(a, b)| num(a) && num(b))
 }
 
-/// `all`, `none` or a comma list of `calm,drop,riser,bars,soft`.
+/// `all`, `none` or a comma list of `calm,drop,riser,three,bars,soft`.
 pub fn parse_rules(s: &str) -> Result<PositionRules, String> {
     match s {
         "all" => return Ok(PositionRules::ALL),
@@ -76,11 +76,12 @@ pub fn parse_rules(s: &str) -> Result<PositionRules, String> {
             "calm" => r.phrase_quick = true,
             "drop" => r.bar_drop = true,
             "riser" => r.late_riser = true,
+            "three" => r.riser_any_three = true,
             "bars" => r.aligned_bars = true,
             "soft" => r.soft_break = true,
             _ => {
                 return Err(format!(
-                    "unknown rule '{w}' (all, none, calm, drop, riser, bars, soft)"
+                    "unknown rule '{w}' (all, none, calm, drop, riser, three, bars, soft)"
                 ));
             }
         }
@@ -403,6 +404,10 @@ mod tests {
     fn rules_flag_parses() {
         assert_eq!(parse_rules("all"), Ok(PositionRules::ALL));
         assert_eq!(parse_rules("none"), Ok(PositionRules::NONE));
+        assert_eq!(
+            parse_rules("calm,drop,riser,three,bars,soft"),
+            Ok(PositionRules::ALL)
+        );
         let r = parse_rules("calm,riser").unwrap();
         assert!(r.phrase_quick && r.late_riser && !r.bar_drop && !r.aligned_bars);
         assert!(parse_rules("soft").unwrap().soft_break);
