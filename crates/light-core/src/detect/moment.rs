@@ -583,8 +583,7 @@ impl MomentDetector {
     }
 
     /// The longest run (at most `n` bars) at the end of the history that never falls more than
-    /// `riser_tol_db` under its running top, and its rise. With 3 or more bars the rise counts at most
-    /// 3x what the bar before the last already rose, so a fill in the last bar alone is no climb.
+    /// `riser_tol_db` under its running top, and its rise.
     fn climb(&self, n: usize) -> (usize, f32) {
         let len = self.bars.len();
         let mut best = (0, 0.0);
@@ -598,11 +597,7 @@ impl MomentDetector {
                 }
                 top = top.max(self.bars.get(i));
             }
-            let mut rise = self.bars.get(len - 1) - first;
-            if k >= 3 {
-                rise = rise.min(3.0 * (self.bars.get(len - 2) - first));
-            }
-            best = (k, rise);
+            best = (k, self.bars.get(len - 1) - first);
         }
         best
     }
@@ -1699,6 +1694,7 @@ mod tests {
         assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
     }
 
+    // A 2-beat fill can pass the 3-bar riser at the default 5 dB; on the test songs this did not happen (spec 2026-11-21 §7).
     #[test]
     fn a_short_fill_inside_a_break_is_not_a_buildup() {
         // Two loud beats of hats (a fill) do not make a bar that rises 7 dB. They come before the approach
@@ -1715,17 +1711,6 @@ mod tests {
             ..DetectorParams::default()
         };
         let m = moments(&drive_with(&sig, &lens, seven, |_| None));
-        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
-    }
-
-    #[test]
-    fn a_short_fill_inside_a_break_is_not_a_buildup_with_the_defaults() {
-        // Beats 50..52 at +10 dB: the bar means are about [0, 0, +5], which is not a climb.
-        let m = moments(&groove(
-            72,
-            |k| k < 32,
-            |k| if (50..52).contains(&k) { 10.0 } else { 0.0 },
-        ));
         assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
     }
 

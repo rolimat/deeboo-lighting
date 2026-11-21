@@ -70,7 +70,7 @@ Cambiar otras reglas (Calm, drop), mostrar la vista al usuario final, guardar la
 
 - **Approach:** 8 compases y 2 dB (a 4 compases añadía 3 Build-up falsos y retrasaba uno real 9 s).
 - **Riser de 3 compases en cualquier punto:** activo.
-- **Guarda del riser:** con 3 o más compases, el penúltimo ya debe haber subido `riser_db / 3` sobre el primero (un fill de dos beats en el último compás no es una subida); la subida que muestra el panel de depuración es la menor de la total y 3 veces la del penúltimo.
+- **Guarda del riser (descartada):** Se probó exigir que la subida no venga solo del último compás: en las canciones de prueba empeora (song-5 vuelve a +20.6 s y aparece un falso), así que no se aplica. Riesgo conocido: un redoble de 2 beats en un break puede pasar el riser de 3 compases a 5 dB.
 - **Tolerancia del riser:** 0.5 dB (1.0 y 1.5 sin efecto).
 - **Umbral del riser:** 5 dB por defecto (el más bajo sin falsas alarmas extra).
 - **Regla de nivel:** medida y descartada (añadía 1 falso en song-2 y no acertaba ninguno); se eliminó del código.
