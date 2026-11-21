@@ -287,7 +287,7 @@ como sin estas reglas.
   - Por defecto *(mi decisión)*: Ritmo cada 1 frase; Calma, una secuencia por break; Subidón cada 2 compases.
   - **Paleta nueva en cada drop** *(mi decisión)*.
 - **Set de serie "Auto":** todo Generated y todas las paletas.
-- La app trae **9 paletas** de serie y ninguna secuencia sembrada (las secuencias son las 35 fijas de §6.4)
+- La app trae **9 paletas** de serie y ninguna secuencia sembrada (las secuencias son las 33 fijas de §6.4; 35 antes de 2026-11-20)
   *(2026-11-14)*. Las paletas tienen que combinar, y para Calma, Suave es un color claro. «Nueva paleta» crea una
   paleta análoga en pastel.
 - Los cambios de secuencia o paleta caen siempre en un **límite de compás** (de frase, si el intervalo es en frases).
@@ -297,7 +297,7 @@ como sin estas reglas.
 Decisión del usuario 2026-11-14 (detalle y tablas en `2026-11-14-generated-sequences-palettes-fades-design.md`, que
 manda sobre esta sección):
 
-- Los 11 patrones parametrizados se sustituyen por **35 secuencias fijas**: 15 Ritmo, 10 Calma y 10 Subidón.
+- Los 11 patrones parametrizados se sustituyen por **33 secuencias fijas**: 15 Ritmo, 10 Calma y 8 Subidón (eran 35 y 10; ver `2026-11-20-e2e-feedback-buildup-zoom-sidebar-design.md`).
 - Se definen sobre una **partición a lo largo de la tira** (orden de segmentos 1..N, no la forma dibujada; `parts.rs`)
   en 4 partes: iguales si N es múltiplo de 4; si es múltiplo de 3 pero no de 4, 3 secciones iguales en las que la
   central hace de partes 2 y 4; en otro caso simétricas, con el segmento central compartido si N es impar.

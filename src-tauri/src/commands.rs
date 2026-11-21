@@ -1457,7 +1457,7 @@ mod tests {
             t(31.0, 12.0, 7.0),
             t(16.0, 5.0, 7.0),
             t(16.0, 25.0, 7.0),
-            t(16.0, 12.0, 2.0),
+            t(16.0, 12.0, 0.9),
             t(16.0, 12.0, 16.0),
             t(7.9, 12.0, 7.0),
             t(16.0, 12.0, 15.1),
@@ -2053,7 +2053,7 @@ mod tests {
     fn pattern_sequence_rejects_unknown_pattern() {
         use light_core::patterns::Pattern;
         assert!(serde_json::from_str::<Pattern>(r#""nope""#).is_err());
-        assert!(serde_json::from_str::<Pattern>(r#""halves""#).is_err());
+        assert!(serde_json::from_str::<Pattern>(r#""halvesBlinkX""#).is_err());
         assert!(serde_json::from_str::<Pattern>(r#""crossPairs""#).is_ok());
     }
 

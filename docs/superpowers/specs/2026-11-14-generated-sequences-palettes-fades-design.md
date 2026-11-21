@@ -1,5 +1,7 @@
 # Secuencias autogeneradas, paletas, fundidos en Calma y niveles aprendidos persistentes
 
+> Actualización 2026-11-20: los patrones son 33 (15 Ritmo, 10 Calma, 8 Subidón), no 35; ver `2026-11-20-e2e-feedback-buildup-zoom-sidebar-design.md`. Donde este texto dice 35, léase 33.
+
 Fecha: 2026-11-14. Complementa la spec principal (`2026-11-06-deeboo-lighting-design.md`, §6.4 patrones y §6.2 detector).
 Las decisiones salen de la sesión de diseño con páginas de propuestas (`.superpowers/brainstorm/generated-proposals-3.html`,
 `palette-final.html`). El texto de la app sigue en inglés.
@@ -91,6 +93,8 @@ Pasos de más de 4 beats se representan como pasos de 4 beats repetidos (`StepLe
 | B15 | Strobe, accelerating | (todo W 1, – 1) ×2, luego (todo W ½, – ½) ×4 |
 | B16 | Converge, accelerating | (E W, Cn P, todo C, –) a 1 beat, luego lo mismo a ½ dos veces |
 | B19 | Four-part chase, accelerating | p1, p2, p3, p4 en P a 1 beat, luego p1..p4 dos veces en W a ½ |
+
+Sustituida por la tabla de `2026-11-20-e2e-feedback-buildup-zoom-sidebar-design.md` §1.
 
 Nota: B15 se define según su descripción. En la página de propuestas su animación tenía un fallo y se veía igual que B1.
 

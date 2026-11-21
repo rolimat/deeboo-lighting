@@ -50,7 +50,8 @@ Las tres cambian el mismo valor:
 - **Knob:** arrastrar arriba/abajo, rueda del ratón o flechas: **1 dB por paso**; **con Shift, 0.1 dB por paso**. Al
   pulsar o soltar Shift a mitad de arrastre, el knob sigue desde donde está, sin saltar. Doble clic vuelve al valor por
   defecto. Arrastrando, unos 6 px por paso. El arco del knob muestra el valor dentro de su rango.
-- Los rangos no cambian: kick 8–30, highs 6–24, riser 3–15 dB (antes del desplazamiento por sensibilidad, como hoy:
+(Actualización: riser 1–15 y centrado/zoom inicial, ver `2026-11-20-e2e-feedback-buildup-zoom-sidebar-design.md` §2.)
+- Rangos: kick 8–30, highs 6–24, riser 1–15 dB (antes 3–15) (antes del desplazamiento por sensibilidad, como hoy:
   lo que se ve y se ajusta es el valor ya desplazado).
 - Accesibilidad: el knob es un `role="slider"` con nombre, valor y texto en palabras; las líneas, igual que hoy.
 - **Ayuda (globos «?»):** el knob dice «Drag up or down, scroll, or use the arrow keys: 1 dB per step. Hold Shift for

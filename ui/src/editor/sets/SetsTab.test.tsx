@@ -161,18 +161,18 @@ it("drop_appends_clip", async () => {
   expect(refs("rhythm")?.at(-1)).toEqual({ pattern: "crossPairs" });
 });
 
-it("pattern_browser_lists_35_grouped", async () => {
+it("pattern_browser_lists_33_grouped", async () => {
   const all = [...document.querySelectorAll("[data-drag-pattern]")]
     .filter((e) => e.getAttribute("data-drag-pattern") !== "any")
     .map((e) => e.textContent?.trim());
   const names = (m: string) =>
     m === "rhythm" ? all.slice(0, 15) : m === "calm" ? all.slice(15, 25) : all.slice(25);
-  expect(all).toHaveLength(35);
+  expect(all).toHaveLength(33);
   expect(names("rhythm")).toHaveLength(15);
   expect(names("rhythm")[0]).toBe("Cross pairs");
   expect(names("rhythm")[14]).toBe("Ends, centre, all, dark");
   expect(names("calm")).toHaveLength(10);
-  expect(names("buildUp")).toHaveLength(10);
+  expect(names("buildUp")).toHaveLength(8);
   await dragDrop(
     q("[data-drag-pattern='convergeThenStrobe']"),
     q("[data-track='buildup'] [data-zone]"),
@@ -431,4 +431,15 @@ it("a_new_set_stays_open_after_its_id_is_renumbered_and_edits_it_not_the_live_se
   expect(store.lib?.sets.map((s) => s.name)).toEqual(["Main", "Club", "Renamed"]);
   expect(store.lib?.sets.map((s) => s.id)).toEqual([1, 2, 3]);
   expect(store.lib?.activeSet).toBe(1);
+});
+
+it("sidebar_scrolls_on_its_own", async () => {
+  await mount();
+  const nav = q("nav") as HTMLElement;
+  expect(nav.className).toContain("overflow-y-auto");
+  expect(nav.className).toContain("min-h-0");
+  const wrap = nav.parentElement as HTMLElement;
+  expect(wrap.className).toContain("h-[calc(100%+3rem)]");
+  expect(wrap.className).not.toContain("min-h-[");
+  expect(nav.nextElementSibling?.className).toContain("min-h-0");
 });

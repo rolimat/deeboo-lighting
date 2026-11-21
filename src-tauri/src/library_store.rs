@@ -395,6 +395,27 @@ mod tests {
     }
 
     #[test]
+    fn patterns_folded_together_by_aliases_are_listed_once_on_load() {
+        use light_core::patterns::Pattern;
+        let (_dir, p) = tmp();
+        let mut v = serde_json::to_value(seeded_builtin(10)).unwrap();
+        v["sets"][0]["buildup"]["sequences"] = json!([
+            {"pattern": "strobe"},
+            {"pattern": "strobeAccelerating"},
+            {"pattern": "converge"}
+        ]);
+        std::fs::write(&p, v.to_string()).unwrap();
+        let lib = load(&p, 10, 8);
+        assert_eq!(
+            lib.sets[0].buildup.sequences,
+            [
+                SeqRef::Pattern(Pattern::Strobe),
+                SeqRef::Pattern(Pattern::Converge)
+            ]
+        );
+    }
+
+    #[test]
     fn a_reference_to_another_moments_sequence_is_dropped_on_load() {
         let (dir, p) = tmp();
         let text = with(|v| {

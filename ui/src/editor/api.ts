@@ -62,11 +62,9 @@ export type PatternName =
   | "colourStrobe"
   | "oddEvenStrobe"
   | "convergeThenStrobe"
-  | "halvesAccelerating"
-  | "oddEvenAccelerating"
-  | "strobeAccelerating"
-  | "convergeAccelerating"
-  | "fourPartChaseAccelerating";
+  | "halves"
+  | "oddEvenThenStrobe"
+  | "fourPartChase";
 export type Interval = { bars: number } | "oncePerBreak";
 export type SeqRef = { id: number } | "generated" | { pattern: PatternName };
 export type PaletteChange = "atDrop" | { bars: number };

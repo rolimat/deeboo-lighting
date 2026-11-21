@@ -279,3 +279,14 @@ it("a_duplicate_stays_selected_after_renumbering_and_recolour_edits_it", async (
   expect(pal(4)?.principal).toEqual({ h: 120, s: 1000, v: 1000 });
   expect(pal(1)?.principal).toEqual({ h: 300, s: 1000, v: 1000 });
 });
+
+it("sidebar_scrolls_on_its_own", async () => {
+  await mount();
+  const nav = q("nav") as HTMLElement;
+  expect(nav.className).toContain("overflow-y-auto");
+  expect(nav.className).toContain("min-h-0");
+  const wrap = nav.parentElement as HTMLElement;
+  expect(wrap.className).toContain("h-[calc(100%+3rem)]");
+  expect(wrap.className).not.toContain("min-h-[");
+  expect(nav.nextElementSibling?.className).toContain("overflow-y-auto");
+});

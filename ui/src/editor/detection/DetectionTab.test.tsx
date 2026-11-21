@@ -225,20 +225,20 @@ it("knob_arrow_changes_threshold_and_saves", async () => {
 
 it("zoom_in_shows_finer_scale", async () => {
   await lane();
-  expect(scale("high").length).toBeGreaterThan(0);
-  expect(scale("high").every((n) => n % 10 === 0)).toBe(true);
+  expect(scale("sub").length).toBeGreaterThan(0);
+  expect(scale("sub").every((n) => n % 10 === 0)).toBe(true);
   // Numbers are centred on their mark.
   expect(root.querySelector("[data-lane='high'] [data-scale-num]")?.className).toContain(
     "-translate-y-1/2",
   );
-  await click("Zoom in", "high");
-  await click("Zoom in", "high");
-  const fine = scale("high");
+  await click("Zoom in", "sub");
+  await click("Zoom in", "sub");
+  const fine = scale("sub");
   expect(fine.length).toBeGreaterThan(2);
   expect(fine.every((n) => n % 2 === 0)).toBe(true);
   expect(fine.some((n) => n % 10 !== 0)).toBe(true);
-  await click("Zoom in", "high");
-  expect((await click("Zoom in", "high")).disabled).toBe(true);
+  await click("Zoom in", "sub");
+  expect((await click("Zoom in", "sub")).disabled).toBe(true);
 });
 
 it("threshold_outside_view_pins_its_label_and_click_zooms_out", async () => {
@@ -534,10 +534,9 @@ it("a_focused_line_that_leaves_the_view_keeps_focus_and_keys", async () => {
   await click("Zoom in", "kick");
   const el = line("Kick drop");
   await act(async () => el.focus());
-  // Ref -20, x2 view -35..-5: 14 dB below is inside, 16 is out.
-  await press(el, "ArrowUp");
-  await press(el, "ArrowUp");
-  await press(el, "ArrowUp");
+  await click("Zoom in", "kick");
+  // x4 spans 15 dB, centred between ref and line: 14 dB below is inside, 17 is out.
+  for (let i = 0; i < 3; i++) await press(el, "ArrowUp");
   const pinned = root.querySelector("[data-lane='kick'] button");
   expect(pinned?.textContent).toContain("▼");
   expect(line("Kick drop")).toBe(el);
@@ -545,4 +544,96 @@ it("a_focused_line_that_leaves_the_view_keeps_focus_and_keys", async () => {
   expect(el.style.top).toBe("100%");
   await press(el, "ArrowUp");
   expect(el.getAttribute("aria-valuenow")).toBe("18");
+});
+
+it("highs_opens_at_x4_with_both_lines_inside_the_view", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(settings({ riserDb: 3, calmHighDb: 10 }));
+  await lane();
+  expect(root.querySelector("[data-lane-row='high']")?.textContent).toContain("×4");
+  expect(scale("high").every((n) => n % 2 === 0)).toBe(true);
+  expect(root.querySelector("[data-lane='high'] button")).toBeNull();
+  expect(root.querySelector("[data-lane-row='kick']")?.textContent).toContain("×1");
+});
+
+it("riser_knob_goes_down_to_1", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(settings({ riserDb: 1 }));
+  await lane();
+  await press(knob("Riser knob"), "ArrowDown");
+  expect(knob("Riser knob").getAttribute("aria-valuenow")).toBe("1");
+});
+
+it("the_view_holds_still_while_a_line_is_dragged", async () => {
+  await lane();
+  const box = root.querySelector<HTMLElement>("[data-lane='high']");
+  vi.spyOn(box as HTMLElement, "getBoundingClientRect").mockReturnValue({
+    top: 0,
+    height: 100,
+  } as DOMRect);
+  const marks = () =>
+    [...root.querySelectorAll("[data-lane='high'] [data-scale]")].map((e) => e.textContent);
+  await act(() => {
+    line("Riser").dispatchEvent(new MouseEvent("pointerdown", { clientY: 10, bubbles: true }));
+    mouse("pointermove", 10);
+  });
+  const during = marks();
+  await act(async () => {
+    mouse("pointermove", 30);
+  });
+  expect(marks()).toEqual(during);
+  await act(async () => {
+    mouse("pointerup", 30);
+  });
+  expect(marks().length).toBeGreaterThan(0);
+});
+
+it("highs_opens_at_the_highest_level_where_both_lines_fit", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(settings({ riserDb: 7, calmHighDb: 12 }));
+  await lane();
+  // 19 dB apart: x4 (15 dB) cannot hold both, x2 can.
+  expect(root.querySelector("[data-lane-row='high']")?.textContent).toContain("×2");
+  expect(root.querySelector("[data-lane='high'] button")).toBeNull();
+});
+
+const highBox = () => {
+  const box = root.querySelector<HTMLElement>("[data-lane='high']");
+  vi.spyOn(box as HTMLElement, "getBoundingClientRect").mockReturnValue({
+    top: 0,
+    height: 100,
+  } as DOMRect);
+};
+
+it("pointercancel_ends_the_drag", async () => {
+  await lane();
+  highBox();
+  const marks = () =>
+    [...root.querySelectorAll("[data-lane='high'] [data-scale]")].map((e) => e.textContent);
+  await act(() => {
+    line("Riser").dispatchEvent(new MouseEvent("pointerdown", { clientY: 10, bubbles: true }));
+    mouse("pointermove", 2);
+  });
+  const during = marks();
+  const val = line("Riser").getAttribute("aria-valuenow");
+  await act(async () => {
+    mouse("pointercancel", 2);
+  });
+  expect(marks()).not.toEqual(during);
+  await act(async () => {
+    mouse("pointermove", 40);
+  });
+  expect(line("Riser").getAttribute("aria-valuenow")).toBe(val);
+});
+
+it("the_pointer_keeps_meaning_the_same_dB_when_the_reference_moves_mid_drag", async () => {
+  await lane();
+  highBox();
+  await act(() => {
+    line("Riser").dispatchEvent(new MouseEvent("pointerdown", { clientY: 20, bubbles: true }));
+  });
+  push(beat({ highDb: -15, highRefDb: -15 }));
+  await act(async () => void (await vi.advanceTimersByTimeAsync(100)));
+  await act(async () => {
+    mouse("pointermove", 30);
+  });
+  const top = parseFloat(line("Riser").style.top);
+  expect(Math.abs(top - 30)).toBeLessThan(2);
 });

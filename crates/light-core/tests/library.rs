@@ -412,9 +412,9 @@ fn pattern_labels_are_english_and_distinct() {
         .iter()
         .flat_map(|m| light_core::patterns::for_moment(*m))
         .collect();
-    assert_eq!(all.len(), 35);
+    assert_eq!(all.len(), 33);
     let names: std::collections::HashSet<_> = all.iter().map(|p| p.label()).collect();
-    assert_eq!(names.len(), 35);
+    assert_eq!(names.len(), 33);
     assert_eq!(Pattern::OddEvenStrobe.label(), "Odd / even strobe");
 }
 
