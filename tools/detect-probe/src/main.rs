@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 const USAGE: &str = "usage: detect-probe <audio> [--labels file.json] [--min-beats 4] [--timeline] [--bpm 128] [--realtime]
        [--features [from-to]] [--downbeat <s>]... [--phrase 4|8|16] [--rules all|none|calm,drop,riser,bars] (default: the app's rules)
        [--set key=value]... (approach_calm_beats, approach_bars, approach_rise_db, approach_above_db, riser_db, riser_tol_db,
-       riser_any_three, level_buildup; after --rules)";
+       riser_any_three; after --rules)";
 const TOLERANCE_S: f64 = 4.0;
 
 #[derive(Debug)]
@@ -360,19 +360,17 @@ mod tests {
             "--set",
             "riser_tol_db=1.5",
             "--set",
-            "level_buildup=true",
-            "--set",
             "riser_any_three=false",
         ])
         .unwrap();
         let p = a.params;
         assert_eq!(p.approach_bars, 6);
         assert!((p.riser_tol_db - 1.5).abs() < f32::EPSILON);
-        assert!(p.rules.level_buildup && !p.rules.riser_any_three);
+        assert!(!p.rules.riser_any_three);
         for bad in [
             "nope=1",
             "approach_bars=x",
-            "level_buildup=1",
+            "riser_any_three=1",
             "riser_db",
             "riser_db=nan",
         ] {

@@ -31,8 +31,6 @@ const beat = (over: Partial<DetectorEvent> = {}): DetectorEvent => ({
     approachAboveDb: 0,
     approachRiseDb: 0,
     approachNeedRiseDb: 2,
-    levelOn: false,
-    levelAboveDb: null,
   },
   ...over,
 });
@@ -73,7 +71,6 @@ it("flag_on_shows_cause_panel_and_bar_steps", () => {
   const panel = root.querySelector("[data-debug=panel]")?.textContent ?? "";
   expect(panel).toContain("Riser 2/4 bars, +1.2 of 6.0 dB");
   expect(panel).toContain("✗");
-  expect(panel).not.toContain("Level");
   expect(root.querySelector("[data-bar-steps]")).not.toBeNull();
 });
 
@@ -81,7 +78,6 @@ it("every_cause_has_plain_english_words", () => {
   expect(CAUSE_WORDS).toEqual({
     riser: "highs climbed",
     approach: "slow build",
-    level: "highs held high",
     quiet: "kick gone",
     teaser: "short tease",
     groove: "groove build-up",

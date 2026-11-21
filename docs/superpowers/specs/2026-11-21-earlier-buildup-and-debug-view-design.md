@@ -26,17 +26,14 @@ El usuario quiere detectar el Build-up antes y poder ver por qué el detector de
      mide 1.0 y 1.5);
    - **3 compases** que suben bastan en cualquier punto de la frase (hoy solo en la segunda mitad);
    - el knob ya baja a 1 dB.
-3. **Regla de nivel (experimental):** en la segunda mitad de la frase, un compás entero con la media de los agudos al
-   menos `riser_db` sobre la referencia → Build-up. Riesgo conocido: falsos Build-up en breaks con hi-hats
-   constantes. Va detrás de un interruptor (`PositionRules.level_buildup`) y **solo se activa por defecto si la
-   medición no empeora las falsas alarmas**.
+3. Regla de nivel: descartada por el usuario tras la medición (2026-11-21); no se implementa.
 
 ## 3. Medición
 
 Con `just detect-probe` sobre `recordings/songs/song-1..5` (git-ignored, con etiquetas), igual que en
 `.superpowers/plan9-measure.md`. Para medir sin recompilar, `detect-probe` acepta `--set clave=valor` para los
-parámetros nuevos (`approach_bars`, `approach_calm_beats`, `approach_rise_db`, `riser_tol_db`, `riser_bars_any`,
-`level_buildup`). Se comparan: la línea base, cada regla sola y combinaciones; aciertos, fallos, falsas alarmas y
+parámetros nuevos (`approach_bars`, `approach_calm_beats`, `approach_rise_db`, `riser_tol_db`, `riser_any_three`).
+Se comparan: la línea base, cada regla sola y combinaciones; aciertos, fallos, falsas alarmas y
 retraso medio del Build-up. Los valores por defecto se eligen con el usuario a la vista de la tabla; la tabla se guarda
 en `.superpowers/plan16-measure.md`.
 
@@ -50,13 +47,12 @@ en `.superpowers/plan16-measure.md`.
   - la última media de compás de los agudos;
   - progreso del riser: compases que suben de los necesarios, subida actual y necesaria;
   - progreso del approach: compases en Calm de los necesarios, agudos sobre la referencia, subida y necesaria;
-  - progreso de la regla de nivel (si está activa);
-  - la **causa** del último cambio de momento (riser, approach, nivel, silencio, teaser, groove, drop por bombo,
+  - la **causa** del último cambio de momento (riser, approach, silencio, teaser, groove, drop por bombo,
     drop por hats, vuelta lenta, colapso, tiempo máximo, break suave, inicio de frase, deshacer).
 - **En pantalla (solo con el interruptor):**
   - en el carril Moment, cada tramo dice su causa («Build-up · riser 3.4 dB / 4 bars»);
   - un panel «Next moment» bajo la línea de tiempo con el progreso de cada regla hacia el siguiente momento, en vivo
-    («Riser 2/4 bars, +1.2 of 3.0 dB · Approach 3/4 bars, +5.1 dB over ref ✓, rise 0.4 of 2.0 ✗ · Level …»);
+    («Riser 2/4 bars, +1.2 of 3.0 dB · Approach 3/4 bars, +5.1 dB over ref ✓, rise 0.4 of 2.0 ✗»);
   - en Highs, las medias por compás dibujadas como escalones.
 
 ## 5. Fuera de alcance
@@ -65,8 +61,7 @@ Cambiar otras reglas (Calm, drop), mostrar la vista al usuario final, guardar la
 
 ## 6. Comprobaciones
 
-- light-core: tests de cada regla (approach a 4 compases, tolerancia, 3 compases en cualquier punto, regla de nivel
-  con y sin interruptor, solo en la segunda mitad de la frase), progreso y causa expuestos.
+- light-core: tests de cada regla (approach a 4 compases, tolerancia, 3 compases en cualquier punto), progreso y causa expuestos.
 - detect-probe: `--set` acepta las claves y rechaza las desconocidas.
 - UI: sin la variable no aparece nada; con ella (en test se fuerza), panel, causas y escalones.
 - Medición (§3) y e2e del usuario con música real.
@@ -77,5 +72,4 @@ Cambiar otras reglas (Calm, drop), mostrar la vista al usuario final, guardar la
 - **Riser de 3 compases en cualquier punto:** activo.
 - **Tolerancia del riser:** 0.5 dB (1.0 y 1.5 sin efecto).
 - **Umbral del riser:** 5 dB por defecto (el más bajo sin falsas alarmas extra).
-- **Regla de nivel:** desactivada por defecto (añade 1 falso en song-2, no acierta ninguno; pendiente medir con la
-  canción del usuario).
+- **Regla de nivel:** medida y descartada (añadía 1 falso en song-2 y no acertaba ninguno); se eliminó del código.

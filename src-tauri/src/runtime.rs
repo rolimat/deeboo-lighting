@@ -1962,14 +1962,12 @@ mod tests {
             cause: Some(Cause::HatsDrop),
             progress: Progress {
                 riser_bars: 2,
-                level_above_db: Some(1.5),
                 ..Progress::default()
             },
         };
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!(v["cause"], "hatsDrop");
         assert_eq!(v["progress"]["riserBars"], 2);
-        assert_eq!(v["progress"]["levelAboveDb"], 1.5);
         assert!(v["progress"]["highBarDb"].is_null());
         let none = DetectorEvent { cause: None, ..e };
         assert!(serde_json::to_value(&none).unwrap()["cause"].is_null());

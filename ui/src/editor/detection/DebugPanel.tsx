@@ -4,13 +4,7 @@ const f = (n: number) => n.toFixed(1);
 const sg = (n: number) => `${n >= 0 ? "+" : ""}${f(n)}`;
 
 /** "Next moment": how close the Build-up evidence is, from the newest beat (debug build only). */
-export function DebugPanel({
-  last,
-  riserDb,
-}: {
-  last: DetectorEvent | undefined;
-  riserDb: number;
-}) {
+export function DebugPanel({ last }: { last: DetectorEvent | undefined }) {
   const p = last?.progress;
   if (!p) return null;
   const rows: [boolean, string][] = [
@@ -23,8 +17,6 @@ export function DebugPanel({
       `Approach ${p.approachCalmBars}/${p.approachNeedBars} bars in Calm, ${sg(p.approachAboveDb)} dB over ref, rise ${f(p.approachRiseDb)} of ${f(p.approachNeedRiseDb)}`,
     ],
   ];
-  if (p.levelOn && p.levelAboveDb !== null)
-    rows.push([p.levelAboveDb >= riserDb, `Level ${sg(p.levelAboveDb)} of ${f(riserDb)} dB`]);
   return (
     <div data-debug="panel" class="rounded-card border border-border bg-card p-2 text-small">
       <b class="t-head">Next moment</b>

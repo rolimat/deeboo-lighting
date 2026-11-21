@@ -66,8 +66,6 @@ function detectorBeat(b: number): DetectorEvent {
       approachAboveDb: 0,
       approachRiseDb: 0,
       approachNeedRiseDb: 2,
-      levelOn: false,
-      levelAboveDb: null,
     },
   };
 }

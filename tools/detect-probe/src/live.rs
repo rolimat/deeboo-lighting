@@ -117,7 +117,6 @@ pub fn set_param(p: &mut DetectorParams, kv: &str) -> Result<(), String> {
         "riser_db" => p.riser_db = num()?,
         "riser_tol_db" => p.riser_tol_db = num()?,
         "riser_any_three" => p.rules.riser_any_three = flag()?,
-        "level_buildup" => p.rules.level_buildup = flag()?,
         _ => return Err(format!("unknown parameter '{k}'")),
     }
     Ok(())

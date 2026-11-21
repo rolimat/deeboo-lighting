@@ -386,7 +386,7 @@ export function Timeline(props: {
           />
         ))}
       </div>
-      {DEBUG && <DebugPanel last={props.ring[props.ring.length - 1]} riserDb={props.t.riserDb} />}
+      {DEBUG && <DebugPanel last={props.ring[props.ring.length - 1]} />}
     </>
   );
 }

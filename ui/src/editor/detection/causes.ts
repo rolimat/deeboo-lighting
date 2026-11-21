@@ -4,7 +4,6 @@ import type { Cause } from "../api";
 export const CAUSE_WORDS: Record<Cause, string> = {
   riser: "highs climbed",
   approach: "slow build",
-  level: "highs held high",
   quiet: "kick gone",
   teaser: "short tease",
   groove: "groove build-up",

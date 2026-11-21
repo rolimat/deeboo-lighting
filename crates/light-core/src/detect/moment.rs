@@ -19,7 +19,6 @@ pub enum Moment {
 pub enum Cause {
     Riser,
     Approach,
-    Level,
     Quiet,
     Teaser,
     Groove,
@@ -53,9 +52,6 @@ pub struct Progress {
     pub approach_above_db: f32,
     pub approach_rise_db: f32,
     pub approach_need_rise_db: f32,
-    pub level_on: bool,
-    /// Last bar over the highs reference (the level rule needs `riser_db`).
-    pub level_above_db: Option<f32>,
 }
 
 /// Thresholds are dB relative to references (medians of the last `history_beats` groove beats
@@ -146,9 +142,6 @@ pub struct PositionRules {
     pub aligned_bars: bool,
     /// A phrase's first bar with the kick and sub down but the highs up is a Calm (no slow return).
     pub soft_break: bool,
-    /// From Calm, a clock-aligned bar closing in a phrase's second half with its highs mean at least
-    /// `riser_db` over the highs reference is Build-up evidence.
-    pub level_buildup: bool,
 }
 
 impl PositionRules {
@@ -159,7 +152,6 @@ impl PositionRules {
         riser_any_three: true,
         aligned_bars: true,
         soft_break: true,
-        level_buildup: false,
     };
     pub const NONE: Self = Self {
         phrase_quick: false,
@@ -168,7 +160,6 @@ impl PositionRules {
         riser_any_three: false,
         aligned_bars: false,
         soft_break: false,
-        level_buildup: false,
     };
 }
 
@@ -532,13 +523,7 @@ impl MomentDetector {
         let r = self.p.rules;
         let late = closed.is_some() && r.riser_any_three || r.late_riser && second_half;
         let n = self.bars.cap;
-        let level = r.level_buildup
-            && clock.is_some()
-            && second_half
-            && self.bars.get(self.bars.len() - 1) >= high_ref_db + self.p.riser_db;
-        if level {
-            Some(Cause::Level)
-        } else if (self.bars.is_full() && self.rising(n, high_ref_db))
+        if (self.bars.is_full() && self.rising(n, high_ref_db))
             || (late && n > 1 && self.bars.len() >= n - 1 && self.rising(n - 1, high_ref_db))
         {
             Some(Cause::Riser)
@@ -577,8 +562,6 @@ impl MomentDetector {
                 0.0
             },
             approach_need_rise_db: p.approach_rise_db,
-            level_on: p.rules.level_buildup,
-            level_above_db: last.map(|i| self.bars.get(i) - high_ref_db),
         };
     }
 
@@ -1668,45 +1651,6 @@ mod tests {
         assert_eq!(m[71], Moment::BuildUp, "{m:?}");
         let m = riser_run_with(0, PhraseBars::Eight, tol(0.5), hats);
         assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
-    }
-
-    /// Break from beat 32 with hats 3 dB over the groove, but the bar at beats 80..84 8 dB over it:
-    /// a flat bar at the level, no riser (5 dB rise) and no approach (switched off).
-    fn level_run(off: u64, rules: PositionRules) -> Vec<Moment> {
-        let params = DetectorParams {
-            rules,
-            riser_db: 7.0,
-            approach_above_db: 100.0,
-            ..DetectorParams::default()
-        };
-        riser_run_with(off, PhraseBars::Eight, params, |k| match k {
-            0..=31 => 0.0,
-            80..=83 => 8.0,
-            _ => 3.0,
-        })
-    }
-
-    const LEVEL: PositionRules = PositionRules {
-        level_buildup: true,
-        ..PositionRules::ALL
-    };
-
-    #[test]
-    fn level_rule_off_by_default() {
-        let (all, none) = (PositionRules::ALL, PositionRules::NONE);
-        assert!(!all.level_buildup && !none.level_buildup);
-        let m = level_run(36, PositionRules::ALL);
-        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
-    }
-
-    #[test]
-    fn level_rule_fires_in_second_half_only() {
-        // Beat 83 closes bar 6 of 8 (off 36) or bar 2 of 8 (off 20).
-        let m = level_run(36, LEVEL);
-        assert_eq!(m[82], Moment::Calm, "{m:?}");
-        assert_eq!(m[83], Moment::BuildUp, "{m:?}");
-        let m = level_run(20, LEVEL);
-        assert!(m[33..84].iter().all(|&m| m == Moment::Calm), "{m:?}");
     }
 
     #[test]
@@ -2851,25 +2795,6 @@ mod tests {
     }
 
     #[test]
-    fn cause_of_the_level_rule_is_level() {
-        let params = DetectorParams {
-            rules: LEVEL,
-            approach_above_db: 100.0,
-            ..DetectorParams::default()
-        };
-        let lens = beats(128.0, 100);
-        let hats = |k: usize| match k {
-            0..=31 => 0.0,
-            80..=83 => 8.0,
-            _ => 3.0,
-        };
-        let sig = synth(&lens, |k| k < 32, |_| true, hats);
-        let at = |i: usize| Some(Position::at(i as u64 + 36, false, PhraseBars::Eight));
-        let c = cause_into(&sig, &lens, params, at, Moment::BuildUp);
-        assert_eq!(c, Some(Cause::Level));
-    }
-
-    #[test]
     fn cause_of_a_kick_jump_is_kick_drop() {
         let c = cause_of(
             64,
@@ -2935,6 +2860,6 @@ mod tests {
         let p = at[59];
         assert_eq!(p.riser_bars, p.riser_need_bars, "{p:?}");
         assert!(p.riser_rise_db >= p.riser_need_db, "{p:?}");
-        assert!(p.high_bar_db.is_some() && !p.level_on, "{p:?}");
+        assert!(p.high_bar_db.is_some(), "{p:?}");
     }
 }

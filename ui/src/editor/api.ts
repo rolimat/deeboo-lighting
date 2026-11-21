@@ -152,7 +152,6 @@ export interface DetectorEvent {
 export type Cause =
   | "riser"
   | "approach"
-  | "level"
   | "quiet"
   | "teaser"
   | "groove"
@@ -177,8 +176,6 @@ export interface Progress {
   approachAboveDb: number;
   approachRiseDb: number;
   approachNeedRiseDb: number;
-  levelOn: boolean;
-  levelAboveDb: number | null;
 }
 
 /** The editor's only door to Rust; components never import `@tauri-apps/api`. */
