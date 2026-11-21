@@ -171,9 +171,12 @@ export interface Progress {
   riserNeedBars: number;
   riserRiseDb: number;
   riserNeedDb: number;
+  /** The last bar is within `riser_level_db` of the highs reference. */
+  riserNearRef: boolean;
   approachCalmBars: number;
   approachNeedBars: number;
   approachAboveDb: number;
+  approachNeedAboveDb: number;
   approachRiseDb: number;
   approachNeedRiseDb: number;
 }
