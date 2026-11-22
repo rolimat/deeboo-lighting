@@ -132,6 +132,7 @@ fn mid_rules_on_beat_does_not_allocate() {
         ..DetectorParams::default()
     };
     let mut d = MomentDetector::new(params, 0.0058);
+    let mut hits = 0_u32;
     assert_no_alloc(|| {
         for beat in 0..200_u32 {
             // Attacks that grow every bar, over a calm kick, so the bars and rings all run.
@@ -151,7 +152,8 @@ fn mid_rules_on_beat_does_not_allocate() {
                 false,
                 PhraseBars::Eight,
             )));
-            let _ = d.mid_beat();
+            hits += d.mid_beat().hits.iter().map(|&h| u32::from(h)).sum::<u32>();
         }
     });
+    assert!(hits > 0, "the hit rule must run in this test");
 }

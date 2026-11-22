@@ -378,8 +378,20 @@ pub struct MomentDetector {
     /// Sum of mid attacks since the last `on_beat`.
     mid_sum: [f32; 3],
     mid_last: MidBeat,
-    /// Highs dB then the three attack dB, summed over the partial bar.
-    bar_sum: [f32; 4],
+    /// Highs dB, the three attack dB and the three hit counts, summed over the partial bar.
+    bar_sum: [f32; 7],
+    /// Bar means of hits per beat per mid band, closed together with `bars`.
+    hit_bars: [Ring; 3],
+    hop_seconds: f32,
+    /// Moving average of each band's attack (time constant 1 s), its blend per hop.
+    hit_avg: [f32; 3],
+    hit_alpha: f32,
+    /// Hops since each band's last hit, the minimum between hits, and the hits since the last `on_beat`.
+    hit_since: [u32; 3],
+    hit_gap_hops: u32,
+    hit_count: [u16; 3],
+    /// Whether each band's attack reference has `REF_MIN_BEATS` learned beats.
+    att_warm: [bool; 3],
     /// Whether the last `close_bar` closed a bar.
     bar_closed: bool,
     bar_beats: u32,
@@ -425,11 +437,18 @@ pub struct MomentDetector {
 }
 
 impl MomentDetector {
-    /// `hop_seconds` is unused: features are running means per beat, so the hop
-    /// duration does not matter (and a beat of any length is covered).
+    /// `hop_seconds` only matters to the hit rule (`mid_hits`); the other features are running means
+    /// per beat, so a beat of any length is covered.
     #[must_use]
-    pub fn new(params: DetectorParams, _hop_seconds: f32) -> MomentDetector {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // a gap of a few hops
+    pub fn new(params: DetectorParams, hop_seconds: f32) -> MomentDetector {
         let cap = params.history_beats.max(1);
+        let hop_ok = hop_seconds.is_finite() && hop_seconds > 0.0;
+        let hit_gap_hops = if hop_ok {
+            (params.hit_gap_ms.max(0.0) / 1000.0 / hop_seconds).ceil() as u32
+        } else {
+            0
+        };
         MomentDetector {
             p: params,
             moment: Moment::Rhythm,
@@ -443,7 +462,19 @@ impl MomentDetector {
             high_hist: Ring::new(cap),
             high4_hist: Ring::new(4 * params.approach_bars.max(1) + 1),
             bars: Ring::new(params.riser_bars),
-            bar_sum: [0.0; 4],
+            bar_sum: [0.0; 7],
+            hit_bars: std::array::from_fn(|_| Ring::new(params.hit_bars.clamp(4, 16))),
+            hop_seconds,
+            hit_avg: [0.0; 3],
+            hit_alpha: if hop_ok {
+                1.0 - (-hop_seconds).exp()
+            } else {
+                0.0
+            },
+            hit_since: [u32::MAX; 3],
+            hit_gap_hops,
+            hit_count: [0; 3],
+            att_warm: [false; 3],
             bar_closed: false,
             mid_bars: std::array::from_fn(|_| Ring::new(params.riser_bars)),
             att_hist: std::array::from_fn(|_| Ring::new(cap)),
@@ -488,6 +519,19 @@ impl MomentDetector {
         for (s, a) in self.mid_sum.iter_mut().zip(frame.mid_attack) {
             *s += a;
         }
+        for b in 0..3 {
+            let a = frame.mid_attack[b];
+            self.hit_since[b] = self.hit_since[b].saturating_add(1);
+            // -60 dBFS: a quieter band is noise, whatever its attack.
+            let hit = a > (self.p.hit_k * self.hit_avg[b]).max(0.05)
+                && frame.mids[b] >= 1e-3
+                && self.hit_since[b] >= self.hit_gap_hops;
+            if hit {
+                self.hit_count[b] = self.hit_count[b].saturating_add(1);
+                self.hit_since[b] = 0;
+            }
+            self.hit_avg[b] += self.hit_alpha * (a - self.hit_avg[b]);
+        }
         self.hops = self.hops.saturating_add(1);
     }
 
@@ -522,7 +566,7 @@ impl MomentDetector {
     }
 
     pub fn reset(&mut self) {
-        *self = MomentDetector::new(self.p, 0.0);
+        *self = MomentDetector::new(self.p, self.hop_seconds);
     }
 
     /// The three reference rings, oldest value first.
@@ -566,12 +610,15 @@ impl MomentDetector {
         self.bar_closed = false;
         let gap = clock.is_some_and(|c| c.beat != self.bar_last_beat.wrapping_add(1));
         if clock.is_some_and(|c| c.beat_in_bar == 1) || clock.is_some() != self.bar_clocked || gap {
-            self.bar_sum = [0.0; 4];
+            self.bar_sum = [0.0; 7];
             self.bar_beats = 0;
             self.bar_clocked = clock.is_some();
         }
-        let [a, b, c] = self.mid_last.attack_db;
-        for (s, v) in self.bar_sum.iter_mut().zip([high_db, a, b, c]) {
+        let m = self.mid_last;
+        let vals = std::iter::once(high_db)
+            .chain(m.attack_db)
+            .chain(m.hits.map(f32::from));
+        for (s, v) in self.bar_sum.iter_mut().zip(vals) {
             *s += v;
         }
         self.bar_beats += 1;
@@ -581,7 +628,7 @@ impl MomentDetector {
                 return false;
             }
             if self.bar_beats != 4 {
-                self.bar_sum = [0.0; 4];
+                self.bar_sum = [0.0; 7];
                 self.bar_beats = 0;
                 return false;
             }
@@ -589,10 +636,13 @@ impl MomentDetector {
             return false;
         }
         self.bars.push(self.bar_sum[0] / 4.0);
-        for (ring, s) in self.mid_bars.iter_mut().zip(&self.bar_sum[1..]) {
+        for (ring, s) in self.mid_bars.iter_mut().zip(&self.bar_sum[1..4]) {
             ring.push(s / 4.0);
         }
-        self.bar_sum = [0.0; 4];
+        for (ring, s) in self.hit_bars.iter_mut().zip(&self.bar_sum[4..]) {
+            ring.push(s / 4.0);
+        }
+        self.bar_sum = [0.0; 7];
         self.bar_beats = 0;
         self.bar_closed = true;
         true
@@ -624,13 +674,34 @@ impl MomentDetector {
         self.bar_closed
             && p.rules.mid_flux
             && (0..3).any(|b| {
-                self.rising_any(
-                    &self.mid_bars[b],
-                    refs[b],
-                    p.flux_rise_db,
-                    p.flux_tol_db,
-                    p.flux_level_db,
-                )
+                self.att_warm[b]
+                    && self.rising_any(
+                        &self.mid_bars[b],
+                        refs[b],
+                        p.flux_rise_db,
+                        p.flux_tol_db,
+                        p.flux_level_db,
+                    )
+            })
+    }
+
+    /// The hits per beat of some mid band rose over the last `hit_bars` bars (`mid_hits`): no bar-to-bar
+    /// drop beyond `hit_tol`, the last bar at least `hit_ratio` times the first and `hit_min_per_beat`.
+    fn hits(&self) -> bool {
+        let p = &self.p;
+        let n = p.hit_bars.clamp(2, self.hit_bars[0].cap);
+        self.bar_closed
+            && p.rules.mid_hits
+            && (0..3).any(|b| {
+                let r = &self.hit_bars[b];
+                if !self.att_warm[b] || r.len() < n {
+                    return false;
+                }
+                let v = |i: usize| r.get(r.len() - n + i);
+                let (first, last) = (v(0), v(n - 1));
+                (1..n).all(|i| v(i) >= v(i - 1) - p.hit_tol)
+                    && last >= p.hit_ratio * first
+                    && last >= p.hit_min_per_beat
             })
     }
 
@@ -893,17 +964,18 @@ impl MomentDetector {
                 self.high_hist.median(&mut self.scratch),
             )
         };
+        self.att_warm = std::array::from_fn(|b| self.att_hist[b].len() >= REF_MIN_BEATS);
         let attack_ref_db = std::array::from_fn(|b| {
-            if self.att_hist[b].len() < REF_MIN_BEATS {
-                attack_db[b]
-            } else {
+            if self.att_warm[b] {
                 self.att_hist[b].median(&mut self.scratch)
+            } else {
+                attack_db[b]
             }
         });
         self.mid_last = MidBeat {
             attack_db,
             attack_ref_db,
-            hits: [0; 3],
+            hits: std::mem::take(&mut self.hit_count),
         };
         let p = self.p;
         let (kd, sd, hd) = (
@@ -956,6 +1028,7 @@ impl MomentDetector {
         // `aligned_bars`, else every 4 beats from the first beat.
         let riser = self.riser(high_db, high_ref_db, closed);
         let attacks = self.attacks(attack_ref_db).then_some(Cause::Attacks);
+        let hits = self.hits().then_some(Cause::Hits);
         self.update_progress(high4, high_ref_db);
         let g = self.progress;
         let approach = self.moment == Moment::Calm
@@ -970,7 +1043,10 @@ impl MomentDetector {
         // whenever `jump_kick` is set).
         let bar_drop = p.rules.bar_drop && closed.is_some_and(|c| c.beat_in_bar == 1);
         let mut next = self.next_moment(
-            riser.or(approach.then_some(Cause::Approach)).or(attacks),
+            riser
+                .or(approach.then_some(Cause::Approach))
+                .or(attacks)
+                .or(hits),
             high4,
             bar_drop,
         );
@@ -3193,5 +3269,168 @@ mod tests {
         let with = moments(&drive_with(&sig, &lens, flux_params(true), gap));
         assert!(with[33..=44].iter().all(|&m| m == Moment::Calm), "{with:?}");
         assert_eq!(with[45], Moment::BuildUp, "{with:?}");
+    }
+    fn hit_params(on: bool) -> DetectorParams {
+        DetectorParams {
+            rules: PositionRules {
+                mid_hits: on,
+                ..PositionRules::ALL
+            },
+            ..DetectorParams::default()
+        }
+    }
+
+    /// Bursts per beat: 1 in the groove, then 2, 4, 8 per bar from the Calm's first bar.
+    fn hit_doubling(k: usize) -> usize {
+        if k < 32 {
+            1
+        } else {
+            2 << ((k - 32) / 4).min(2)
+        }
+    }
+
+    #[test]
+    fn doubling_hits_in_calm_are_buildup() {
+        let lens = beats(128.0, 56);
+        let sig = roll(&lens, hit_doubling);
+        let on = moments(&drive_with(&sig, &lens, hit_params(true), at_clock));
+        assert!(on[33..35].iter().all(|&m| m == Moment::Calm), "{on:?}");
+        assert!(on[35..].contains(&Moment::BuildUp), "{on:?}");
+        let mut a = BandAnalyzer::new(FS);
+        let mut d = MomentDetector::new(hit_params(true), a.hop_len() as f32 / FS as f32);
+        let mut pos = 0;
+        for (i, &len) in lens.iter().enumerate() {
+            a.process(&sig[pos..pos + len], &mut |f| d.push(f));
+            pos += len;
+            d.on_beat(at_clock(i));
+            if d.moment() == Moment::BuildUp {
+                break;
+            }
+        }
+        assert_eq!(d.cause(), Some(Cause::Hits));
+        let off = drive_with(&sig, &lens, hit_params(false), at_clock);
+        assert!(moments(&off)[33..].iter().all(|&m| m == Moment::Calm));
+    }
+
+    #[test]
+    fn steady_hits_stay_calm() {
+        let lens = beats(128.0, 56);
+        let sig = roll(&lens, |_| 4);
+        let m = moments(&drive_with(&sig, &lens, hit_params(true), at_clock));
+        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    #[test]
+    fn sparse_hits_stay_calm() {
+        // 1 then 1.5 per beat: below `hit_min_per_beat` even though it rises.
+        let lens = beats(128.0, 56);
+        let sig = roll(&lens, |k| if k < 36 || k % 2 == 0 { 1 } else { 2 });
+        let m = moments(&drive_with(&sig, &lens, hit_params(true), at_clock));
+        assert!(m[33..].iter().all(|&m| m == Moment::Calm), "{m:?}");
+    }
+
+    /// Hits counted over one beat of `sig` with a gap of `gap_ms`.
+    fn hits_in(sig: &[f32], gap_ms: f32) -> [u16; 3] {
+        let params = DetectorParams {
+            hit_gap_ms: gap_ms,
+            ..hit_params(true)
+        };
+        let mut a = BandAnalyzer::new(FS);
+        let mut d = MomentDetector::new(params, a.hop_len() as f32 / FS as f32);
+        a.process(sig, &mut |f| d.push(f));
+        d.on_beat(None);
+        d.mid_beat().hits
+    }
+
+    #[test]
+    fn hits_closer_than_the_gap_count_once() {
+        let mut sig = vec![0.0; 20_000];
+        add_burst(&mut sig, 4000);
+        add_burst(&mut sig, 4960);
+        assert_eq!(hits_in(&sig, 40.0)[1], 1);
+        // Control: bursts 100 ms apart are two hits.
+        let mut sig = vec![0.0; 20_000];
+        add_burst(&mut sig, 4000);
+        add_burst(&mut sig, 8800);
+        assert_eq!(hits_in(&sig, 40.0)[1], 2);
+    }
+
+    fn frame(mid: f32, attack: f32) -> HopFrame {
+        HopFrame {
+            kick: 0.0,
+            sub: 0.0,
+            high: 0.0,
+            onset: 0.0,
+            mids: [mid; 3],
+            mid_attack: [attack; 3],
+        }
+    }
+
+    #[test]
+    fn a_silent_band_counts_no_hits() {
+        let mut d = MomentDetector::new(hit_params(true), 0.0058);
+        for _ in 0..200 {
+            d.push(frame(3e-4, 1.0)); // -70 dBFS
+        }
+        d.on_beat(None);
+        let m = d.mid_beat();
+        assert_eq!(m.hits, [0; 3]);
+        assert!(
+            m.attack_db
+                .iter()
+                .chain(&m.attack_ref_db)
+                .all(|v| v.is_finite())
+        );
+    }
+
+    #[test]
+    fn reset_keeps_the_hop_and_clears_the_average() {
+        let mut d = MomentDetector::new(hit_params(true), 0.0058);
+        // A long run of loud attacks lifts the moving average far above 1.
+        for _ in 0..600 {
+            d.push(frame(0.01, 1.0));
+        }
+        d.reset();
+        d.push(frame(0.01, 1.0));
+        for _ in 0..2 {
+            d.push(frame(0.01, 0.0));
+        }
+        d.push(frame(0.01, 1.0)); // 3 hops later: inside the 40 ms gap
+        d.on_beat(None);
+        assert_eq!(d.mid_beat().hits, [1; 3]);
+    }
+
+    #[test]
+    fn a_roll_right_after_import_refs_has_no_mid_reference_yet() {
+        let lens = beats(128.0, 56);
+        // Calm from the first beat, bursts doubling every bar: the imported refs carry no mid history.
+        let mut sig = synth(&lens, |_| false, |_| true, |_| 0.0);
+        let mut start = 0;
+        for (k, &len) in lens.iter().enumerate() {
+            let n = 1 << (k / 4).min(3);
+            for j in 0..n {
+                add_burst(&mut sig, start + 1000 + j * ((len - 2000) / n));
+            }
+            start += len;
+        }
+        let mut a = BandAnalyzer::new(FS);
+        let mut d = MomentDetector::new(flux_params(true), a.hop_len() as f32 / FS as f32);
+        d.import_refs(&LearnedRefs {
+            kick: vec![-20.0; 64],
+            sub: vec![-20.0; 64],
+            high: vec![-30.0; 64],
+        });
+        let mut pos = 0;
+        let mut calm = false;
+        for (i, &len) in lens.iter().enumerate() {
+            a.process(&sig[pos..pos + len], &mut |f| d.push(f));
+            pos += len;
+            calm |= d.on_beat(at_clock(i)).0 == Moment::Calm;
+            assert_ne!(d.cause(), Some(Cause::Attacks), "beat {i}");
+        }
+        assert!(
+            calm,
+            "the roll must reach a Calm for the check to mean anything"
+        );
     }
 }
