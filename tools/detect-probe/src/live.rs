@@ -112,8 +112,8 @@ pub fn set_param(p: &mut DetectorParams, kv: &str) -> Result<(), String> {
             p.approach_bars = v
                 .parse()
                 .ok()
-                .filter(|&n| n > 0)
-                .ok_or_else(|| format!("bad integer for {k}"))?;
+                .filter(|n| (2..=16).contains(n))
+                .ok_or_else(|| "hit_bars must be 2-16".to_string())?;
         }
         "approach_rise_db" => p.approach_rise_db = num()?,
         "approach_above_db" => p.approach_above_db = num()?,
@@ -134,8 +134,8 @@ pub fn set_param(p: &mut DetectorParams, kv: &str) -> Result<(), String> {
             p.hit_bars = v
                 .parse()
                 .ok()
-                .filter(|&n| n > 0)
-                .ok_or_else(|| format!("bad integer for {k}"))?;
+                .filter(|n| (2..=16).contains(n))
+                .ok_or_else(|| "hit_bars must be 2-16".to_string())?;
         }
         _ => return Err(format!("unknown parameter '{k}'")),
     }
@@ -475,6 +475,10 @@ mod tests {
         assert!(set_param(&mut p, "hit_nope=1").is_err());
         assert!(set_param(&mut p, "flux_rise_db=x").is_err());
         assert!(set_param(&mut p, "hit_bars=0").is_err());
+        assert!(set_param(&mut p, "hit_bars=1").is_err());
+        assert!(set_param(&mut p, "hit_bars=17").is_err());
+        assert!(set_param(&mut p, "hit_bars=2").is_ok());
+        assert!(set_param(&mut p, "hit_bars=16").is_ok());
         assert!(set_param(&mut p, "mid_flux=maybe").is_err());
     }
 
