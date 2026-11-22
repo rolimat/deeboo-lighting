@@ -112,8 +112,8 @@ pub fn set_param(p: &mut DetectorParams, kv: &str) -> Result<(), String> {
             p.approach_bars = v
                 .parse()
                 .ok()
-                .filter(|n| (2..=16).contains(n))
-                .ok_or_else(|| "hit_bars must be 2-16".to_string())?;
+                .filter(|&n| n > 0)
+                .ok_or_else(|| format!("bad integer for {k}"))?;
         }
         "approach_rise_db" => p.approach_rise_db = num()?,
         "approach_above_db" => p.approach_above_db = num()?,
@@ -479,6 +479,8 @@ mod tests {
         assert!(set_param(&mut p, "hit_bars=17").is_err());
         assert!(set_param(&mut p, "hit_bars=2").is_ok());
         assert!(set_param(&mut p, "hit_bars=16").is_ok());
+        assert!(set_param(&mut p, "approach_bars=1").is_ok());
+        assert!(set_param(&mut p, "approach_bars=0").is_err());
         assert!(set_param(&mut p, "mid_flux=maybe").is_err());
     }
 
