@@ -93,6 +93,31 @@ pub fn high_band(fs: f32) -> Cascade<2> {
     ])
 }
 
+/// 4th-order Butterworth band-pass: two high-pass then two low-pass sections.
+fn band_pass(lo: f32, hi: f32, fs: f32) -> Cascade<4> {
+    Cascade([
+        Biquad::highpass(lo, Q4[0], fs),
+        Biquad::highpass(lo, Q4[1], fs),
+        Biquad::lowpass(hi, Q4[0], fs),
+        Biquad::lowpass(hi, Q4[1], fs),
+    ])
+}
+
+#[must_use]
+pub fn low_mid_band(fs: f32) -> Cascade<4> {
+    band_pass(150.0, 400.0, fs)
+}
+
+#[must_use]
+pub fn mid_band(fs: f32) -> Cascade<4> {
+    band_pass(400.0, 1500.0, fs)
+}
+
+#[must_use]
+pub fn high_mid_band(fs: f32) -> Cascade<4> {
+    band_pass(1500.0, 4000.0, fs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +181,37 @@ mod tests {
     fn filters_hold_at_common_sample_rates() {
         for fs in [44_100.0, 48_000.0, 96_000.0] {
             check_kick(fs);
+        }
+    }
+
+    /// (low edge, high edge, band) for the three mid bands.
+    fn mids(fs: f32) -> [(f32, f32, Cascade<4>); 3] {
+        [
+            (150.0, 400.0, low_mid_band(fs)),
+            (400.0, 1500.0, mid_band(fs)),
+            (1500.0, 4000.0, high_mid_band(fs)),
+        ]
+    }
+
+    #[test]
+    fn mid_bands_pass_their_centre() {
+        let fs = 48_000.0;
+        for (lo, hi, band) in mids(fs) {
+            let g = gain_db(band, (lo * hi).sqrt(), fs);
+            assert!(g >= -3.0, "{lo}-{hi} Hz centre {g}");
+        }
+    }
+
+    #[test]
+    fn mid_bands_reject_two_octaves_out() {
+        let fs = 48_000.0;
+        for i in 0..3 {
+            for below in [true, false] {
+                let (lo, hi, band) = mids(fs).into_iter().nth(i).unwrap();
+                let f = if below { lo / 4.0 } else { hi * 4.0 };
+                let g = gain_db(band, f, fs);
+                assert!(g <= -20.0, "{lo}-{hi} Hz band at {f} Hz: {g}");
+            }
         }
     }
 }

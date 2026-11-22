@@ -152,6 +152,8 @@ export interface DetectorEvent {
 export type Cause =
   | "riser"
   | "approach"
+  | "attacks"
+  | "hits"
   | "quiet"
   | "teaser"
   | "groove"

@@ -149,3 +149,12 @@ With a clock position (spec §6.2.1) the rules above change in five places:
 - A Build-up drops to Rhythm on a full beat 1 of a bar with a kick jump.
 - Soft break: a phrase's bar 1 (four clocked beats) whose mean kick is 5 dB or more down, sub 3 dB or more down and highs within 2 dB of their reference is Calm from Rhythm (`soft_kick_db`, `soft_sub_db`, `soft_high_db`); that Calm has no slow return and Rhythm comes back with the kick jump or 2 full beats. A soft Calm whose texture lasts more than 2 phrases (64 beats without a position) returns to Rhythm and the references restart from the new level.
 - In a phrase's second half 3 rising bars are enough. Measured alone (`--rules riser`) this depends on the phase of the 4-beat counter, because without `aligned_bars` the bars are not clock-aligned.
+
+## Mid bands and hit density (plan 17, 2026-11-22)
+
+Three IIR mid bands (150–400 Hz, 400–1500 Hz, 1500–4000 Hz) feed two Calm → Build-up evidence rules: `mid_flux`
+(per-beat attack energy climbing over 3–4 bars) and `mid_hits` (hits per beat doubling over `hit_bars` bars).
+Measured on songs 1–5 they fix no miss and add 1–5 false alarms, so both stay in the code **switched off** (user
+decision). These songs build up with the highs, not snare rolls. Try them on a new song with `--set mid_flux=true` or
+`--set mid_hits=true` (`--rules ...,flux,hits` too); `--features` prints `atk` and `hits` per band. Results and
+commands: §7 of `docs/superpowers/specs/2026-11-22-mid-bands-hit-density-design.md`.

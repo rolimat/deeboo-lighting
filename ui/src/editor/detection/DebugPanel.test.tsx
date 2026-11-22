@@ -121,6 +121,8 @@ it("every_cause_has_plain_english_words", () => {
   expect(CAUSE_WORDS).toEqual({
     riser: "highs climbed",
     approach: "slow build",
+    attacks: "attacks rose",
+    hits: "hits doubled",
     quiet: "kick gone",
     teaser: "short tease",
     groove: "groove build-up",

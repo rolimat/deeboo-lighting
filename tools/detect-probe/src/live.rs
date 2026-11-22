@@ -4,7 +4,7 @@
 use light_core::clock::{PhraseBars, Position};
 use light_core::detect::BeatFeatures;
 use light_core::detect::bands::BandAnalyzer;
-use light_core::detect::moment::{DetectorParams, Moment, MomentDetector, PositionRules};
+use light_core::detect::moment::{DetectorParams, MidBeat, Moment, MomentDetector, PositionRules};
 
 pub const BLOCK: usize = 512;
 
@@ -63,7 +63,7 @@ pub fn looks_like_range(s: &str) -> bool {
     s.split_once('-').is_some_and(|(a, b)| num(a) && num(b))
 }
 
-/// `all`, `none` or a comma list of `calm,drop,riser,three,bars,soft`.
+/// `all`, `none` or a comma list of `calm,drop,riser,three,bars,soft,flux,hits` (the last two are off in `all`).
 pub fn parse_rules(s: &str) -> Result<PositionRules, String> {
     match s {
         "all" => return Ok(PositionRules::ALL),
@@ -79,9 +79,11 @@ pub fn parse_rules(s: &str) -> Result<PositionRules, String> {
             "three" => r.riser_any_three = true,
             "bars" => r.aligned_bars = true,
             "soft" => r.soft_break = true,
+            "flux" => r.mid_flux = true,
+            "hits" => r.mid_hits = true,
             _ => {
                 return Err(format!(
-                    "unknown rule '{w}' (all, none, calm, drop, riser, three, bars, soft)"
+                    "unknown rule '{w}' (all, none, calm, drop, riser, three, bars, soft, flux, hits)"
                 ));
             }
         }
@@ -118,6 +120,23 @@ pub fn set_param(p: &mut DetectorParams, kv: &str) -> Result<(), String> {
         "riser_db" => p.riser_db = num()?,
         "riser_tol_db" => p.riser_tol_db = num()?,
         "riser_any_three" => p.rules.riser_any_three = flag()?,
+        "mid_flux" => p.rules.mid_flux = flag()?,
+        "mid_hits" => p.rules.mid_hits = flag()?,
+        "flux_rise_db" => p.flux_rise_db = num()?,
+        "flux_tol_db" => p.flux_tol_db = num()?,
+        "flux_level_db" => p.flux_level_db = num()?,
+        "hit_k" => p.hit_k = num()?,
+        "hit_gap_ms" => p.hit_gap_ms = num()?,
+        "hit_ratio" => p.hit_ratio = num()?,
+        "hit_min_per_beat" => p.hit_min_per_beat = num()?,
+        "hit_tol" => p.hit_tol = num()?,
+        "hit_bars" => {
+            p.hit_bars = v
+                .parse()
+                .ok()
+                .filter(|n| (2..=16).contains(n))
+                .ok_or_else(|| "hit_bars must be 2-16".to_string())?;
+        }
         _ => return Err(format!("unknown parameter '{k}'")),
     }
     Ok(())
@@ -140,7 +159,7 @@ impl Transition {
 }
 
 /// One closed beat: its time, clock position, features and the moment after it.
-pub type FeatureRow = (f64, Option<Position>, BeatFeatures, Moment);
+pub type FeatureRow = (f64, Option<Position>, BeatFeatures, Moment, MidBeat);
 
 pub struct LiveOrder {
     analyzer: BandAnalyzer,
@@ -206,7 +225,8 @@ impl LiveOrder {
             let closed_t = index.checked_sub(1).map(|i| self.beats[i]);
             let (m, feat) = self.detector.on_beat(closed);
             if let (Some(f), Some(t)) = (feat, closed_t) {
-                self.features.push((t, closed, f, m));
+                self.features
+                    .push((t, closed, f, m, self.detector.mid_beat()));
             }
             if let Some(f) = feat {
                 self.beats_seen += 1;
@@ -264,17 +284,32 @@ fn phrase_label(p: Position) -> String {
     )
 }
 
-/// `mm:ss.s  P1.2.3|-  kick dB (vs ref)  sub ..  high ..  MOMENT`.
+/// `mm:ss.s  P1.2.3|-  kick dB (vs ref)  sub ..  high ..  atk low/mid/high (ref ..)  hits ..  MOMENT`.
 #[must_use]
-pub fn feature_line(t: f64, pos: Option<Position>, f: &BeatFeatures, m: Moment) -> String {
+pub fn feature_line(
+    t: f64,
+    pos: Option<Position>,
+    f: &BeatFeatures,
+    m: Moment,
+    mid: &MidBeat,
+) -> String {
     let band = |n: &str, db: f32, r: f32| format!("{n} {db:.1} ({:+.1})", db - r);
     format!(
-        "{}  {}  {}  {}  {}  {}",
+        "{}  {}  {}  {}  {}  atk {:.1}/{:.1}/{:.1} (ref {:.1}/{:.1}/{:.1})  hits {}/{}/{}  {}",
         mmss(t),
         pos.map_or("-".to_string(), phrase_label),
         band("kick", f.kick_db, f.kick_ref_db),
         band("sub", f.sub_db, f.sub_ref_db),
         band("high", f.high_db, f.high_ref_db),
+        mid.attack_db[0],
+        mid.attack_db[1],
+        mid.attack_db[2],
+        mid.attack_ref_db[0],
+        mid.attack_ref_db[1],
+        mid.attack_ref_db[2],
+        mid.hits[0],
+        mid.hits[1],
+        mid.hits[2],
         name(m)
     )
 }
@@ -413,6 +448,40 @@ mod tests {
         assert!(parse_rules("soft").unwrap().soft_break);
         assert!(!r.soft_break);
         assert!(parse_rules("calm,nope").is_err());
+        let r = parse_rules("flux,hits").unwrap();
+        assert!(r.mid_flux && r.mid_hits && !r.phrase_quick);
+    }
+
+    #[test]
+    fn set_param_takes_the_mid_keys() {
+        let mut p = DetectorParams::default();
+        for kv in [
+            "flux_rise_db=5",
+            "flux_tol_db=0.5",
+            "flux_level_db=7",
+            "hit_k=3",
+            "hit_gap_ms=50",
+            "hit_ratio=1.5",
+            "hit_min_per_beat=3",
+            "hit_tol=0.25",
+            "hit_bars=3",
+            "mid_flux=true",
+            "mid_hits=true",
+        ] {
+            set_param(&mut p, kv).unwrap_or_else(|e| panic!("{kv}: {e}"));
+        }
+        assert_eq!((p.flux_rise_db, p.hit_bars), (5.0, 3));
+        assert!(p.rules.mid_flux && p.rules.mid_hits && (p.hit_gap_ms - 50.0).abs() < 1e-6);
+        assert!(set_param(&mut p, "hit_nope=1").is_err());
+        assert!(set_param(&mut p, "flux_rise_db=x").is_err());
+        assert!(set_param(&mut p, "hit_bars=0").is_err());
+        assert!(set_param(&mut p, "hit_bars=1").is_err());
+        assert!(set_param(&mut p, "hit_bars=17").is_err());
+        assert!(set_param(&mut p, "hit_bars=2").is_ok());
+        assert!(set_param(&mut p, "hit_bars=16").is_ok());
+        assert!(set_param(&mut p, "approach_bars=1").is_ok());
+        assert!(set_param(&mut p, "approach_bars=0").is_err());
+        assert!(set_param(&mut p, "mid_flux=maybe").is_err());
     }
 
     #[test]
@@ -558,7 +627,7 @@ mod tests {
         let mut live = LiveOrder::new(fs, beats.clone(), DetectorParams::default(), pos.clone());
         live.feed(&vec![0.1f32; fs as usize * 8], &mut |_| {});
         assert!(live.features.len() > 4);
-        for (t, p, _, _) in &live.features {
+        for (t, p, ..) in &live.features {
             let i = beats.iter().position(|b| (b - t).abs() < 1e-9).unwrap();
             assert_eq!(*p, pos[i]);
         }
@@ -574,13 +643,18 @@ mod tests {
             sub_ref_db: -20.0,
             high_ref_db: -30.0,
         };
+        let mid = MidBeat {
+            attack_db: [-50.0, -40.5, -60.0],
+            attack_ref_db: [-55.0, -45.0, -60.0],
+            hits: [0, 3, 0],
+        };
         let beats: Vec<f64> = (0..40).map(|k| f64::from(k) * 0.5).collect();
         let pos = positions(&beats, &[2.0], PhraseBars::Four).unwrap();
         assert_eq!(
-            feature_line(75.25, pos[6], &f, Moment::BuildUp),
-            "01:15.3  P1.1.3  kick -12.3 (-2.3)  sub -20.0 (+0.0)  high -31.3 (-1.3)  BUILD-UP"
+            feature_line(75.25, pos[6], &f, Moment::BuildUp, &mid),
+            "01:15.3  P1.1.3  kick -12.3 (-2.3)  sub -20.0 (+0.0)  high -31.3 (-1.3)  atk -50.0/-40.5/-60.0 (ref -55.0/-45.0/-60.0)  hits 0/3/0  BUILD-UP"
         );
-        assert!(feature_line(0.0, None, &f, Moment::Rhythm).contains("  -  kick"));
+        assert!(feature_line(0.0, None, &f, Moment::Rhythm, &mid).contains("  -  kick"));
     }
 
     #[test]

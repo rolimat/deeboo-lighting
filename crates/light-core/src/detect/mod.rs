@@ -4,8 +4,8 @@ pub mod filter;
 pub mod moment;
 pub use bands::BandAnalyzer;
 pub use moment::{
-    BeatFeatures, Cause, DetectorParams, LearnedRefs, Moment, MomentDetector, PositionRules,
-    Progress, REF_DB_RANGE,
+    BeatFeatures, Cause, DetectorParams, LearnedRefs, MidBeat, Moment, MomentDetector,
+    PositionRules, Progress, REF_DB_RANGE,
 };
 
 #[cfg(test)]

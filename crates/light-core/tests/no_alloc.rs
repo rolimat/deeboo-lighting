@@ -52,6 +52,8 @@ fn on_beat_does_not_allocate() {
                     sub: kick,
                     high,
                     onset: 0.0,
+                    mids: [0.0; 3],
+                    mid_attack: [0.0; 3],
                 });
             }
             let _ = d.on_beat(None);
@@ -68,6 +70,8 @@ fn on_beat_does_not_allocate() {
                     sub: kick,
                     high,
                     onset: 0.0,
+                    mids: [0.0; 3],
+                    mid_attack: [0.0; 3],
                 });
             }
             let (m, _) = d.on_beat(Some(Position::at(
@@ -104,9 +108,52 @@ fn on_beat_after_import_does_not_allocate() {
                     sub: 0.5,
                     high: 0.3,
                     onset: 0.0,
+                    mids: [0.0; 3],
+                    mid_attack: [0.0; 3],
                 });
             }
             let _ = d.on_beat(None);
         }
     });
+}
+
+#[test]
+fn mid_rules_on_beat_does_not_allocate() {
+    use light_core::clock::{PhraseBars, Position};
+    use light_core::detect::PositionRules;
+    use light_core::detect::bands::HopFrame;
+    use light_core::detect::moment::{DetectorParams, MomentDetector};
+    let params = DetectorParams {
+        rules: PositionRules {
+            mid_flux: true,
+            mid_hits: true,
+            ..PositionRules::ALL
+        },
+        ..DetectorParams::default()
+    };
+    let mut d = MomentDetector::new(params, 0.0058);
+    let mut hits = 0_u32;
+    assert_no_alloc(|| {
+        for beat in 0..200_u32 {
+            // Attacks that grow every bar, over a calm kick, so the bars and rings all run.
+            let atk = 0.01 * f32::from(1 + (beat % 16) as u8);
+            for hop in 0..90 {
+                d.push(HopFrame {
+                    kick: if beat < 40 { 0.5 } else { 0.0005 },
+                    sub: 0.0005,
+                    high: 0.01,
+                    onset: 0.0,
+                    mids: [0.01; 3],
+                    mid_attack: if hop % 7 == 0 { [atk; 3] } else { [0.0; 3] },
+                });
+            }
+            let _ = d.on_beat(Some(Position::at(
+                u64::from(beat),
+                false,
+                PhraseBars::Eight,
+            )));
+            hits += d.mid_beat().hits.iter().map(|&h| u32::from(h)).sum::<u32>();
+        }
+    });
+    assert!(hits > 0, "the hit rule must run in this test");
 }
