@@ -52,6 +52,8 @@ fn on_beat_does_not_allocate() {
                     sub: kick,
                     high,
                     onset: 0.0,
+                    mids: [0.0; 3],
+                    mid_attack: [0.0; 3],
                 });
             }
             let _ = d.on_beat(None);
@@ -68,6 +70,8 @@ fn on_beat_does_not_allocate() {
                     sub: kick,
                     high,
                     onset: 0.0,
+                    mids: [0.0; 3],
+                    mid_attack: [0.0; 3],
                 });
             }
             let (m, _) = d.on_beat(Some(Position::at(
@@ -104,6 +108,8 @@ fn on_beat_after_import_does_not_allocate() {
                     sub: 0.5,
                     high: 0.3,
                     onset: 0.0,
+                    mids: [0.0; 3],
+                    mid_attack: [0.0; 3],
                 });
             }
             let _ = d.on_beat(None);

@@ -1,6 +1,8 @@
 //! Per-hop band envelopes (RMS) and kick onset.
 
-use super::filter::{Cascade, high_band, kick_band, sub_band};
+use super::filter::{
+    Cascade, high_band, high_mid_band, kick_band, low_mid_band, mid_band, sub_band,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HopFrame {
@@ -8,17 +10,24 @@ pub struct HopFrame {
     pub sub: f32,
     pub high: f32,
     pub onset: f32,
+    /// RMS of the 150-400, 400-1500 and 1500-4000 Hz bands.
+    pub mids: [f32; 3],
+    /// Per-hop log-RMS rise of each mid band, same formula as `onset`.
+    pub mid_attack: [f32; 3],
 }
 
 pub struct BandAnalyzer {
     kick: Cascade<4>,
     sub: Cascade<2>,
     high: Cascade<2>,
+    mid: [Cascade<4>; 3],
     hop: usize,
     filled: usize,
     /// Running sums of squares: kick, sub, high.
     acc: [f32; 3],
+    mid_acc: [f32; 3],
     prev_kick_log: f32,
+    prev_mid_log: [f32; 3],
 }
 
 impl BandAnalyzer {
@@ -35,10 +44,13 @@ impl BandAnalyzer {
             kick: kick_band(fs),
             sub: sub_band(fs),
             high: high_band(fs),
+            mid: [low_mid_band(fs), mid_band(fs), high_mid_band(fs)],
             hop: ((fs / 172.0).round() as usize).max(1),
             filled: 0,
             acc: [0.0; 3],
+            mid_acc: [0.0; 3],
             prev_kick_log: 0.0,
+            prev_mid_log: [0.0; 3],
         }
     }
 
@@ -64,19 +76,33 @@ impl BandAnalyzer {
             self.acc[0] += k * k;
             self.acc[1] += s * s;
             self.acc[2] += h * h;
+            for (acc, band) in self.mid_acc.iter_mut().zip(&mut self.mid) {
+                let m = band.process(clean);
+                *acc += m * m;
+            }
             self.filled += 1;
             if self.filled == self.hop {
                 let n = self.hop as f32;
                 let [kick, sub, high] = self.acc.map(|a| (a / n).sqrt());
+                let mids = self.mid_acc.map(|a| (a / n).sqrt());
+                let mid_log = mids.map(|m| (100.0 * m).ln_1p());
+                let mut mid_attack = [0.0; 3];
+                for i in 0..3 {
+                    mid_attack[i] = (mid_log[i] - self.prev_mid_log[i]).max(0.0);
+                }
                 let kick_log = (100.0 * kick).ln_1p();
                 out(HopFrame {
                     kick,
                     sub,
                     high,
                     onset: (kick_log - self.prev_kick_log).max(0.0),
+                    mids,
+                    mid_attack,
                 });
                 self.prev_kick_log = kick_log;
+                self.prev_mid_log = mid_log;
                 self.acc = [0.0; 3];
+                self.mid_acc = [0.0; 3];
                 self.filled = 0;
             }
         }
@@ -161,6 +187,47 @@ mod tests {
                 assert!((x - y).abs() <= 1e-3 * x.abs(), "hop {i}: {c:?} vs {d:?}");
             }
             assert!((c.onset - d.onset).abs() <= 1e-3, "hop {i}: {c:?} vs {d:?}");
+        }
+    }
+
+    #[test]
+    fn mid_attacks_follow_bursts_in_their_band() {
+        let fs = 48_000_u32;
+        let mut sig = vec![0.0_f32; fs as usize * 2];
+        for burst in 0..8 {
+            for i in 0..960 {
+                // Hann envelope: a hard edge would splatter into the neighbour bands.
+                let env = (std::f32::consts::PI * i as f32 / 960.0).sin().powi(2);
+                sig[burst * 12_000 + 2_000 + i] =
+                    env * (std::f32::consts::TAU * 775.0 * i as f32 / fs as f32).sin();
+            }
+        }
+        let frames = run(&[4096], &sig, fs);
+        let peak = |b: usize| frames.iter().map(|f| f.mid_attack[b]).fold(0.0, f32::max);
+        assert!(peak(1) > 1.0, "mid {}", peak(1));
+        assert!(
+            peak(0) < 0.5 * peak(1) && peak(2) < 0.5 * peak(1),
+            "{} {} {}",
+            peak(0),
+            peak(1),
+            peak(2)
+        );
+        // One clear peak per burst: count rising crossings of half the peak.
+        let half = peak(1) / 2.0;
+        let hits = frames
+            .windows(2)
+            .filter(|w| w[0].mid_attack[1] < half && w[1].mid_attack[1] >= half)
+            .count();
+        assert_eq!(hits, 8);
+        let mut dirty = sig.clone();
+        for i in (0..dirty.len()).step_by(997) {
+            dirty[i] = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY][i % 3];
+        }
+        for f in run(&[4096], &dirty, fs) {
+            for b in 0..3 {
+                assert!(f.mids[b].is_finite() && f.mid_attack[b].is_finite());
+                assert!(f.mid_attack[b] >= 0.0);
+            }
         }
     }
 }
