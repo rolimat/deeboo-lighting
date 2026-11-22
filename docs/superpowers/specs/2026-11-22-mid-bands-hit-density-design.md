@@ -147,3 +147,36 @@ para recomendar: menos fallos o menos retraso, sin más falsas alarmas.
 - La estructura interna (dónde viven los anillos y los contadores nuevos), siempre sin asignar memoria en `push`.
 - Los nombres de los tests.
 - Cómo se ve la tabla de medición.
+
+## 7. Resultado de la medición y decisión (2026-11-22)
+
+Con `detect-probe` sobre songs 1–5 (`--phrase 8 --downbeat 0`). Fallo = ningún Build-up a menos de 20 s de la
+etiqueta; falsa alarma = un Build-up a más de 20 s de toda etiqueta de Build-up.
+
+| Variante | Fallos | Falsas alarmas | Retraso medio |
+| --- | --- | --- | --- |
+| Hoy (reglas apagadas) | 1 | 2 | +2.2 s |
+| Ataques, subida 2 dB | 1 | 7 | −2.3 s |
+| Ataques, subida 3–4 dB | 1 | 5 | +3.1 a +5.1 s |
+| Ataques, subida 6 dB | 1 | 3 | +2.2 s |
+| Golpes, cualquier ajuste medido | 1 | 3 | +2.2 s |
+| Ataques 6 dB + golpes | 1 | 3 | +2.2 s |
+
+- Con las dos reglas apagadas, el detector da exactamente lo mismo que al final del plan 16.
+- Ninguna regla arregla el fallo ni los retrasos. En el Build-up que falta (song-1 01:32) y en los dos tardíos
+  (song-1 05:08, song-2 04:58), los ataques y los golpes de los medios se quedan planos: estas canciones construyen el
+  Build-up con los agudos, no con redobles de caja. Además, el de song-1 01:32 empieza desde Rhythm, y estas reglas
+  solo actúan desde Calm.
+- La regla de golpes añade siempre una falsa alarma en el final de song-1 (08:10).
+
+**Decisión del usuario:** las dos reglas se quedan en el código, **apagadas** (`mid_flux` y `mid_hits` en `false` en
+`PositionRules::ALL`). Las tres bandas se siguen calculando en el audio. Se volverán a medir con canciones cuyo
+Build-up sea un redoble de caja (por ejemplo, la canción de la captura del usuario cuando esté etiquetada):
+
+```sh
+just detect-probe <canción> --labels <etiquetas> --phrase 8 --downbeat 0 --set mid_flux=true --set flux_rise_db=6
+just detect-probe <canción> --labels <etiquetas> --phrase 8 --downbeat 0 --set mid_hits=true
+```
+
+`--features` muestra por beat los ataques de cada banda (`atk`), su referencia y los golpes (`hits`). Las referencias
+de los medios no se guardan entre sesiones mientras las reglas estén apagadas (§4.6).
